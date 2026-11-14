@@ -5,6 +5,44 @@
 
 ---
 
+## [0.4.0] - 2026-11-15
+
+**主题：接入本机 Obsidian，自动沉淀开发流程、自测结果与后续优化依据。**
+
+### Added
+
+- 新增 `app/obsidian.py` 同步引擎：只读探测 `%APPDATA%\obsidian\obsidian.json` 中的 vault，
+  在 vault 内独立命名空间（默认 `Magic Video/`）生成 6 篇结构化笔记 + 按天开发日志：
+  `00 项目总览` / `01 版本记录` / `02 优化路线图` / `03 自测报告` / `04 功能缺口与决策` / `05 使用速查`。
+  - 笔记带 YAML frontmatter、`managed-by` 标记、`[[wikilink]]` 互链，可直接用 Obsidian 图谱与标签。
+  - `02 优化路线图` 直接解析 `docs/OPTIMIZATION.md` 的 P0–P3 表格，文档为单一真源，改建议不用两边维护。
+  - `03 自测报告` 读取 `data/test_last.json` 与 `data/obsidian_history.json`，含最近结果、模块分布与结果时间线。
+  - `04 功能缺口与决策` 记录真实待补齐项与 ADR 轻量决策，供后续版本直接取用。
+- `run_tests.py` 每次运行写出 `data/test_last.json`（用例数、通过/失败/错误/跳过、耗时、各模块用例数）。
+- 新增 CLI `python cli.py obsidian status|sync|vaults|path|folder|auto|open`；
+  `cli.py test` 在 `obsidian_auto_sync=1` 且测试全绿时自动追加一次结果留痕（默认关闭）。
+- 「设置」页新增 **Obsidian 知识沉淀** 卡片：vault 列表与路径、笔记文件夹、自动同步开关、
+  「同步到 Obsidian」「打开笔记目录」按钮；`Api` 新增 4 个桥接方法。
+- 新增 `docs/OBSIDIAN.md`（集成契约、笔记结构、安全边界、故障排查）与 `tests/test_obsidian.py`（26 个用例）。
+
+### Changed
+
+- 版本号由 0.3.0 提升至 **0.4.0**；`config.DEFAULTS` 新增 `obsidian_vault` / `obsidian_folder` / `obsidian_auto_sync`。
+- 多个 vault 时**不自动猜**：仅当候选恰好 1 个时自动采用，否则要求显式指定，避免误写错库。
+
+### Safety
+
+- 只写 vault 内独立文件夹；`safe_folder()` 拒绝 `..`、绝对路径、盘符，`resolve_vault()` 二次校验解析后仍在 vault 内。
+- 遇到同名但没有 `managed-by` 标记的用户笔记一律跳过；自动内容只替换 `BEGIN AUTO / END AUTO` 区块，
+  区块外「我的批注」与用户自定义的 frontmatter 字段永久保留；原子写；模块内不删除任何用户文件。
+- 笔记只含聚合统计与项目文档，不含视频路径、文件名或观看明细；不安装插件、不启动 Obsidian、不做定时同步。
+
+### Docs
+
+- README / AGENTS / FEATURES / TESTING / OPTIMIZATION 同步 0.4.0；AGENTS 需求基线新增第 10 条与输出/禁止规则。
+
+---
+
 ## [0.3.0] - 2026-11-15
 
 **主题：完整自测、单元测试体系、稳定性修复与交付文档/版本管理。**

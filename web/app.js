@@ -292,6 +292,7 @@ function isOn(v) { return v === true || v === 1 || v === '1' || v === 'true' || 
 async function renderSettings() {
   const s = await call('get_settings');
   const d = s.dictionary || {};
+  const o = s.obsidian || {};
   setContent(`<div class="grid-2">
     <div class="card"><h3>播放器与记录</h3>
       <div class="field"><label>PotPlayer 可执行文件路径</label>
@@ -327,9 +328,29 @@ async function renderSettings() {
           <input class="input" type="number" id="set-window_height" value="${esc(s.window_height)}">
         </div><div class="tip">下次启动生效</div></div>
     </div></div>
+    <div class="card"><h3>Obsidian 知识沉淀</h3>
+      <div class="notice">把<b>开发流程、自测结果、优化路线图、功能缺口</b>自动写进 vault 下独立的
+        <span class="mono">${esc(o.folder || 'Magic Video')}</span> 文件夹。只读你已有的笔记、只写这个文件夹；
+        每篇笔记的「我的批注」区在同步时<b>原样保留</b>，可以直接在 Obsidian 里记想法。</div>
+      <p class="hint" style="margin:0 0 12px">状态：${o.resolvable ? '<span class="badge green">可同步</span>' : '<span class="badge amber">需指定 vault</span>'}
+        · 已生成 ${num(o.note_count)} 篇笔记 · 上次同步 ${esc(o.last_sync || '尚未同步')}
+        ${o.last_test ? ` · 最近测试 <b>${num(o.last_test.total)}</b> 个用例${o.last_test.success ? '（全绿）' : '（未全绿）'}` : ''}</p>
+      <div class="grid-2">
+        <div class="field"><label>Obsidian vault 路径</label>
+          <input class="input" id="set-obsidian_vault" value="${esc(o.configured_vault || o.auto_detected_vault || '')}" placeholder="例如 C:\\Users\\...\\Obsidian Vault">
+          <div class="tip">检测到 ${num((o.vaults || []).length)} 个 vault；多个时不会自动猜，请在此明确指定。
+            ${(o.vaults || []).map(v => `<br>· ${esc(v.path)}${v.open ? '（当前打开）' : ''}${v.exists ? '' : '（不存在）'}`).join('')}</div></div>
+        <div class="field"><label>笔记文件夹（vault 内相对路径）</label>
+          <input class="input" id="set-obsidian_folder" value="${esc(o.folder || 'Magic Video')}">
+          <div class="tip">只会写这个文件夹，不会碰你已有的任何笔记。</div></div>
+      </div>
+      ${switchHtml('obsidian_auto_sync', isOn(o.auto_sync), '跑完单元测试自动同步', '命令行执行 cli.py test 通过后自动写入一次结果')}
+    </div>
     <div class="card"><div class="btn-row">
       <button class="btn btn-primary" data-action="save-settings">保存设置</button>
       <button class="btn" data-action="rematch">重新匹配未识别标题</button>
+      <button class="btn" data-action="obsidian-sync">同步到 Obsidian</button>
+      <button class="btn" data-action="obsidian-open">打开笔记目录</button>
       <button class="btn" data-action="open-data">打开数据目录</button>
     </div><p class="hint" style="margin:14px 0 0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
 }
@@ -461,7 +482,8 @@ async function handleAction(action, btn) {
     }
     case 'save-settings': {
       const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent', 'http_proxy',
-        'metadata_source', 'bangumi_base', 'window_width', 'window_height'];
+        'metadata_source', 'bangumi_base', 'window_width', 'window_height',
+        'obsidian_vault', 'obsidian_folder'];
       const data = {};
       keys.forEach(k => { const el = document.getElementById('set-' + k); if (el) data[k] = el.value; });
       document.querySelectorAll('[data-setting]').forEach(el => { data[el.dataset.setting] = el.dataset.value; });
@@ -485,6 +507,22 @@ async function handleAction(action, btn) {
       break;
     }
     case 'open-data': await call('open_data_folder'); return;
+    case 'obsidian-sync': {
+      btn.disabled = true; btn.textContent = '正在同步…';
+      try {
+        const r = await call('obsidian_sync');
+        if (r.ok) toast(`已同步 ${r.created + r.updated + r.unchanged} 篇笔记 · 路线图 ${r.roadmap_items} 条`, true);
+        else toast(r.error || '同步失败', false);
+      } finally {
+        btn.disabled = false; btn.textContent = '同步到 Obsidian';
+      }
+      break;
+    }
+    case 'obsidian-open': {
+      const r = await call('obsidian_open_folder');
+      if (!r.ok) toast(r.error || '打开失败', false);
+      return;
+    }
     case 'start-daemon': {
       const r = await call('start_daemon');
       toast(r.ok ? '后台记录已启动' : r.error, r.ok);

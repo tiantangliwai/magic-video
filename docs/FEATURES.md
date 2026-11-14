@@ -1,4 +1,4 @@
-# 功能规格说明书 · Magic Video v0.3.0
+# 功能规格说明书 · Magic Video v0.4.0
 
 > 本文件定义「做完了」的判定标准。每条需求都给出可验证的验收条件，供开发、测试与后续 Agent 对照。
 > 需求基线见 `AGENTS.md` 第 1 节；变更历史见 `CHANGELOG.md`。
@@ -203,10 +203,51 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | `bangumi_base` | `https://api.bgm.tv` | 在线源地址 |
 | `window_width` / `window_height` | 1180 / 780 | 主窗口尺寸 |
 | `minimize_to_tray` | 1 | 关闭时最小化到托盘 |
+| `obsidian_vault` | 空 | Obsidian vault 绝对路径；空且仅检测到 1 个 vault 时自动采用 |
+| `obsidian_folder` | `Magic Video` | vault 内笔记文件夹（相对路径，禁止 `..` / 绝对路径） |
+| `obsidian_auto_sync` | 0 | `cli.py test` 全绿后是否自动同步一次（默认关闭） |
 
 ---
 
-## 8. 尚未实现（明确边界，避免误判为缺陷）
+## 8. Obsidian 知识沉淀（v0.4.0）
+
+### 需求与验收标准
+
+| 需求 | 验收标准 |
+|---|---|
+| 自动记录流程与结果 | 一次同步生成 6 篇笔记 + 当天日志；总览含版本/提交/媒体数/会话数/词典量/测试结论 |
+| 结果可追溯 | `run_tests.py` 写 `data/test_last.json`；`03 自测报告` 显示最近结果与最近 15 次时间线 |
+| 优化与补齐有依据 | `02 优化路线图` 从 `docs/OPTIMIZATION.md` 解析 P0–P3 全部建议；`04` 列出真实缺口与 ADR |
+| 不破坏用户笔记 | 命名空间外的文件零改动；无 `managed-by` 标记的同名文件跳过；AUTO 区块外批注保留 |
+| 可控 | 默认不自动同步；界面按钮 / CLI 命令显式触发；多 vault 时必须用户指定 |
+
+### 数据流
+
+```
+run_tests.py ──> data/test_last.json ──┐
+git / CHANGELOG / OPTIMIZATION / db ──┼──> app/obsidian.py::collect_snapshot()
+                                      │            │
+                          render_* / append_log     │
+                                      v            v
+   Obsidian vault/Magic Video/  <── 原子写 ──  data/obsidian_history.json
+   （6 篇笔记 + 06 开发日志/）
+```
+
+### 关键接口
+
+| 接口 | 说明 |
+|---|---|
+| `obsidian.detect_vaults()` | 只读解析 Obsidian 主配置，返回所有 vault 及存在/打开状态 |
+| `obsidian.resolve_vault()` | 校验路径与目录边界，返回安全的 `notes_root` |
+| `obsidian.sync()` | 生成/更新全部笔记，返回 `created/updated/skipped/log/roadmap_items` 报告 |
+| `obsidian.status()` / `set_options()` / `open_notes_folder()` | 状态查询、配置写入、打开目录 |
+| `Api.obsidian_*` | 界面桥接：`obsidian_status` / `obsidian_sync` / `obsidian_set_vault` / `obsidian_open_folder` |
+
+> 详细契约、frontmatter 字段、事件指纹与故障排查见 `docs/OBSIDIAN.md`。
+
+---
+
+## 9. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、按季海报墙、看片时长统计、外部追番站点同步。
 - 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。

@@ -1,4 +1,4 @@
-# 自测与单元测试报告 · v0.3.0
+# 自测与单元测试报告 · v0.4.0
 
 > 执行时间：2026-11-15；环境：Windows 10 专业版 / Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157。
 > 本报告只记录**实际跑过的命令与真实输出**，未实测的能力不会写成「通过」。
@@ -9,12 +9,13 @@
 
 | 项目 | 结果 |
 |---|---|
-| 单元测试 | **116 个用例全部通过**（0 失败 / 0 错误 / 0 跳过） |
+| 单元测试 | **144 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，耗时 14.94 秒） |
 | Python 语法 | `compileall` 全通过 |
 | JavaScript 语法 | `node --check web/app.js` 通过 |
-| 原生窗口 | 8 个页面全部渲染成功，`js_api` 暴露 31 个方法 |
-| CLI | `init / status / dict / progress / player / mark / test` 全部可用 |
+| 原生窗口 | 8 个页面全部渲染成功，`js_api` 暴露 35 个方法；设置页 Obsidian 卡片/按钮/开关齐全 |
+| CLI | `init / status / dict / progress / player / mark / test / obsidian` 全部可用 |
 | 真实数据 | 旧播放记录、会话、断点进度、词典完整保留，未被本轮改动破坏 |
+| Obsidian 真实 vault | 首次同步生成 6 篇笔记 + 当天日志；用户原有 2 篇笔记 md5 前后完全一致；二次同步批注保留、日志去重通过 |
 | 远程推送 | 未执行（无 GitHub 凭证，等待用户授权） |
 
 ---
@@ -31,8 +32,9 @@
 | `tests/test_watcher.py` | 10 | 首次轮询即写进度、进度推进、完成阈值、已看完不回退、切集结算、播放器关闭、外部文件登记、时长回填、回调异常隔离 |
 | `tests/test_api.py` | 15 | 版本信息、统计、导入往返、设置白名单、代理重置、续播参数、已看完列表、标记已看/未看/重置进度、目录扫描桥接、守护探测 |
 | `tests/test_smoke.py` | 2 | 端到端串联（导入 → 扫描 → 播放记录 → 续播 → 纠错 → 历史）、测试库隔离验证 |
-| `tests/test_docs.py` | 8 | 版本语义化、交付文档齐备、README/AGENTS/CHANGELOG 版本一致、gitignore 不误伤内置词典、依赖格式、前端、无定时任务残留 |
-| **合计** | **116** | |
+| `tests/test_docs.py` | 10 | 版本语义化、交付文档齐备（含 `docs/OBSIDIAN.md`）、版本一致、gitignore、依赖格式、前端、无定时任务残留、Obsidian 接线与文档版本 |
+| `tests/test_obsidian.py` | 26 | vault 探测与多选不猜、路径穿越防护、首次生成 6 篇笔记、同名用户笔记不覆盖、AUTO 区块外批注保留、frontmatter 用户字段保留、日志事件去重、历史快照去重、命名空间外零改动、路线图解析、结果渲染、状态查询、API 桥接与设置白名单 |
+| **合计** | **144** | v0.4.0 新增 28 项（26 项 Obsidian + 2 项文档守护） |
 
 ### 隔离机制
 
@@ -47,13 +49,13 @@
 
 ---
 
-## 3. TDD 过程与发现的缺陷
+## 3. TDD 过程与发现的缺陷（v0.3.0 历史记录）
 
 按「先写测试看红 → 修实现到绿」执行，共三轮：
 
 | 轮次 | 结果 |
 |---|---|
-| 第 1 轮 | 116 用例，15 失败 + 10 错误（25 项红） |
+| 第 1 轮（v0.3.0） | 116 用例，15 失败 + 10 错误（25 项红） |
 | 第 2 轮 | 1 失败 + 3 错误（其中 3 项为文档尚未产出） |
 | 第 3 轮 | 1 失败（仅缺 `docs/TESTING.md`） |
 | 最终 | **全绿** |
@@ -171,9 +173,10 @@ python run_tests.py            :: 或 python cli.py test
 
 - [ ] `compileall` 通过
 - [ ] `node --check web/app.js` 通过
-- [ ] `python run_tests.py` 116 个用例全绿
+- [ ] `python run_tests.py` 144 个用例全绿
 - [ ] 旧数据保留已确认
-- [ ] README / AGENTS / CHANGELOG / docs/TESTING.md 版本一致（`tests/test_docs.py` 守护）
+- [ ] README / AGENTS / CHANGELOG / docs/TESTING.md / docs/OBSIDIAN.md 版本一致（`tests/test_docs.py` 守护）
+- [ ] 真实 vault 同步通过，且用户原有笔记未被改动
 - [ ] `git status` 干净，无 `data/` 产物被暂存
 
 ---
@@ -188,3 +191,68 @@ python run_tests.py            :: 或 python cli.py test
 | 托盘常驻与开机自启 | 需真实桌面会话与重启验证 | 双击 `start_daemon.bat`，检查托盘菜单 |
 | GitHub 远程推送 | 无 gh CLI / 无凭证 | 用户提供 PAT 或启用连接器后执行 |
 | 多进程并发写压力 | 单元测试只验证 WAL 与短事务 | 守护 + 主窗口同时开着扫描一次大目录 |
+
+---
+
+## 8. v0.4.0 增量自测（Obsidian 集成）
+
+### 8.1 TDD 增量
+
+| 轮次 | 结果 |
+|---|---|
+| 第 1 轮 | 新增 26 个用例，1 项红：`open_notes_folder` 不支持自定义文件夹参数，导致打开默认目录 |
+| 修复 | 给 `open_notes_folder(vault, folder)` 增加 `folder` 参数并透传 `resolve_vault()` |
+| 最终 | 全量 **144 / 144 全绿**，0 失败 / 0 错误 / 0 跳过，耗时 14.94 秒 |
+
+### 8.2 真实命令与输出
+
+```bat
+python -m compileall -q app tests cli.py run.py daemon.py run_tests.py   :: PY_OK
+node --check web/app.js                                                 :: JS_OK
+python run_tests.py                                                     :: 144 个用例全绿，写 data/test_last.json
+python cli.py obsidian vaults                                           :: 探测到 2 个 vault
+python cli.py obsidian path "C:\Users\Administrator\Documents\Obsidian Vault"
+python cli.py obsidian status                                           :: resolvable=true, folder=Magic Video
+python cli.py obsidian sync                                             :: 首次同步
+```
+
+首次同步真实返回（摘要）：
+
+```json
+{"ok": true, "created": 6, "updated": 0, "skipped": {}, "log": "created",
+ "roadmap_items": 17, "test": {"total": 144, "passed": 144, "failures": 0, "errors": 0},
+ "commit": "2d87892", "version": "0.4.0"}
+```
+
+生成文件 7 个（约 40 KB）：6 篇笔记 + `06 开发日志/2026-11-15.md`，含 frontmatter、`managed-by` 标记、
+AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0–P3 建议，与 `docs/OPTIMIZATION.md` 一致。
+
+### 8.3 安全边界实测
+
+| 验证项 | 方法 | 结果 |
+|---|---|---|
+| 原有笔记零改动 | 同步前后 `md5sum` 对比 `设计方案模板.md` / `详细设计方案.md` | 两个 md5 完全一致（`e25a15a…` / `40c0d8f…`） |
+| 命名空间外零写入 | 检查 vault 顶层是否出现新笔记 | 仅 `Magic Video/` 文件夹，顶层无新文件 |
+| 手写批注保留 | 在 `00 项目总览.md` 批注区写一行，再同步 | 二次同步 `updated: 6`，批注行仍在；验证后已清理该自测行 |
+| frontmatter 用户字段保留 | 单测插入 `aliases` / `cssclasses` 后再同步 | 两个字段均保留 |
+| 日志去重 | 同状态连续同步两次 | 第二次 `log: duplicate`，`<!-- event:` 仍为 1 条 |
+| 结果历史去重 | 检查 `data/obsidian_history.json` | 同状态只留 1 条事件 |
+| 路径穿越 | 单测传入 `../outside`、`C:\Windows`、`/etc` | 全部 `ValueError`，`sync` 返回 `ok=false` 不抛异常 |
+| 同名用户笔记 | 单测预置无标记的同名文件 | `skipped_unmanaged`，内容不变 |
+
+### 8.4 窗口冒烟
+
+`webview.create_window(..., hidden=True)` + 线程内 `evaluate_js`：
+
+- 8 个页面全部渲染成功，`len(innerHTML)` 385–4104，无「页面加载失败」；
+- `js_api` 暴露 **35 个方法**（v0.3.0 为 31），新增 4 个 Obsidian 桥接方法就绪；
+- 设置页：`Obsidian 知识沉淀` 卡片 ✅、`obsidian-sync` 按钮 ✅、`obsidian_auto_sync` 开关 ✅；
+- `typeof window.pywebview.api.obsidian_sync` → `function`。
+
+### 8.5 本版未覆盖 / 待人工验证
+
+| 项 | 原因 | 建议 |
+|---|---|---|
+| Obsidian GUI 里实际打开与图谱效果 | 本机 Obsidian 进程未运行，笔记是标准 Markdown 无插件依赖 | 启动 Obsidian 选主库，打开 `Magic Video/00 项目总览` |
+| `cli.py test` 自动同步触发 | `obsidian_auto_sync` 默认关闭（设计如此） | 设置页打开开关后跑一次 `python cli.py test` |
+| 手写批注长期保留 | 单测 + 一次真实二次同步已验证 | 日常使用中随时可再验 |

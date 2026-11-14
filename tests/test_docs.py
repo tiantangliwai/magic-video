@@ -14,8 +14,8 @@ from app import __version__
 ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_DOCS = (
     "README.md", "AGENTS.md", "CHANGELOG.md",
-    "docs/FEATURES.md", "docs/OPTIMIZATION.md", "docs/TESTING.md",
-    "run_tests.py", "requirements.txt", ".gitignore",
+    "docs/FEATURES.md", "docs/OPTIMIZATION.md", "docs/TESTING.md", "docs/OBSIDIAN.md",
+    "app/obsidian.py", "run_tests.py", "requirements.txt", ".gitignore",
 )
 
 
@@ -60,6 +60,26 @@ class VersionConsistencyTests(unittest.TestCase):
             text = (ROOT / relative).read_text(encoding="utf-8")
             self.assertNotIn("metadata_queue", text, relative)
             self.assertNotIn("pending_titles", text, relative)
+
+    def test_obsidian_integration_is_documented_and_wired(self):
+        """Obsidian 是交付功能：文档、配置、CLI、前端入口缺一不可。"""
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        agents = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("Obsidian", readme)
+        self.assertIn("docs/OBSIDIAN.md", readme)
+        self.assertIn("Obsidian", agents)
+        cfg = (ROOT / "app/config.py").read_text(encoding="utf-8")
+        for key in ("obsidian_vault", "obsidian_folder", "obsidian_auto_sync"):
+            self.assertIn(key, cfg)
+        cli = (ROOT / "cli.py").read_text(encoding="utf-8")
+        self.assertIn('"obsidian"', cli)
+        js = (ROOT / "web/app.js").read_text(encoding="utf-8")
+        self.assertIn("obsidian-sync", js)
+
+    def test_obsidian_doc_declares_current_version(self):
+        text = (ROOT / "docs/OBSIDIAN.md").read_text(encoding="utf-8")
+        self.assertIn(__version__, text)
+        self.assertIn("managed-by", text)
 
 
 if __name__ == "__main__":

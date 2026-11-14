@@ -10,7 +10,7 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, config, db, importer, metadata, potplayer, scanner,
+    __version__, autostart, config, db, importer, metadata, obsidian, potplayer, scanner,
 )
 
 
@@ -156,17 +156,24 @@ class Api:
         settings["autostart_command"] = autostart.command()
         settings["potplayer_exists"] = Path(potplayer.potplayer_exe()).exists()
         settings["dictionary"] = metadata.stats()
+        settings["obsidian"] = obsidian.status()
         return settings
 
     def save_settings(self, data: dict) -> dict:
         allowed = {
             "potplayer_path", "poll_interval_sec", "complete_percent", "recording_enabled",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
-            "minimize_to_tray",
+            "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
         }
         for key, value in (data or {}).items():
-            if key in allowed:
-                db.set_setting(key, value)
+            if key not in allowed:
+                continue
+            if key == "obsidian_folder":
+                try:
+                    value = obsidian.safe_folder(str(value))
+                except ValueError:
+                    continue  # 非法路径直接忽略，sync 时也会二次拦截
+            db.set_setting(key, value)
         if any(k in (data or {}) for k in ("http_proxy", "bangumi_base", "metadata_source")):
             metadata.reset_online()  # 代理或策略变了，下次导入重新探测在线源
         if "autostart" in (data or {}):
@@ -174,6 +181,8 @@ class Api:
                 autostart.enable()
             else:
                 autostart.disable()
+        if "obsidian_vault" in (data or {}):
+            obsidian.set_options(vault=str(data["obsidian_vault"]).strip())
         return self.get_settings()
 
     def get_directories(self) -> list[dict]:
@@ -279,3 +288,17 @@ class Api:
     def import_alias_file(self) -> dict:
         """可选：手动批量补充 data/alias_import.json 后导入。"""
         return metadata.import_alias_file()
+
+    # ---- Obsidian 知识沉淀 -------------------------------------------------
+    def obsidian_status(self) -> dict:
+        return obsidian.status()
+
+    def obsidian_sync(self, note: str = "") -> dict:
+        """手动同步：把开发流程、自测结果、路线图写进 vault 的独立命名空间。"""
+        return obsidian.sync(reason="界面手动同步", kind="manual", note=note or "")
+
+    def obsidian_set_vault(self, path: str) -> dict:
+        return obsidian.set_options(vault=path)
+
+    def obsidian_open_folder(self) -> dict:
+        return obsidian.open_notes_folder()

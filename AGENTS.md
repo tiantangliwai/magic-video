@@ -1,7 +1,7 @@
 # AGENTS.md · 给 AI Agent 的项目协作约定
 
 > 本文件是 **AI Agent 在本仓库工作时的第一优先级约定**。与直觉冲突时，以本文件为准。
-> 当前版本：**v0.3.0**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
+> 当前版本：**v0.4.0**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
 > 适用环境：Windows 10/11、Python 3.13、项目根目录 `D:\project\magic video`
 
 ---
@@ -27,8 +27,10 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 7 | 后台记录 = 托盘常驻 + 可选开机自启 | 用户选择 |
 | 8 | 优先离线可用；在线检索作为补充，失败必须快速降级 | 本机直连 Bangumi 超时 |
 | 9 | 版本进度用 git 跟踪，交付文档与单元测试齐备 | 用户要求 |
+| 10 | 结合本机 Obsidian 自动记录**流程与结果**，供后续优化和补齐功能；只写 vault 内独立命名空间，绝不覆盖用户已有笔记，保留手写批注；不做定时同步 | 用户要求（v0.4.0） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
+**Obsidian 同步是纯本地文件写入，不是定时任务、不是云同步、不引入账号或插件。**
 
 ---
 
@@ -75,6 +77,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | `README.md` | 顶部当前版本 + 「版本输出一览」新增一行 |
 | `AGENTS.md` | 顶部当前版本声明 |
 | `docs/TESTING.md` | 追加该版本的自测结论与测试数量 |
+| `docs/OBSIDIAN.md` | Obsidian 契约有变化时同步更新；`docs/OPTIMIZATION.md` 是路线图笔记的单一真源 |
 | git tag | `git tag vX.Y.Z` |
 
 `tests/test_docs.py::VersionConsistencyTests` 会校验 README / AGENTS / CHANGELOG 是否都声明了当前版本，**任一漂移会导致测试失败**。
@@ -102,15 +105,19 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 功能规格 | `docs/FEATURES.md` | 需求 → 验收标准 → 数据流 | ✅ |
 | 调研与优化建议 | `docs/OPTIMIZATION.md` | 对比表 + P0–P3 建议 + 来源 | ✅ |
 | 自测与测试报告 | `docs/TESTING.md` | 命令 + 实测结果 + 覆盖矩阵 | ✅ |
+| Obsidian 集成契约 | `docs/OBSIDIAN.md` | 笔记结构 + 安全边界 + 同步入口 | ✅ |
 | 单元测试 | `tests/test_*.py` | `unittest`，继承 `tests.base.IsolatedDbTestCase` | ✅ |
-| 测试入口 | `run_tests.py` | 零第三方依赖 | ✅ |
+| 测试入口 | `run_tests.py` | 零第三方依赖；写 `data/test_last.json` | ✅ |
 | 内置离线词典 | `app/data/aliases_builtin.json` | `{"items":[{"cn","orig","aliases","bgm","season"}]}` | ✅ |
 | 运行数据库 / 封面 / 日志 | `data/` | `library.db`（WAL） | ❌ `.gitignore: /data/` |
+| 测试结果快照 / 同步历史 | `data/` | `test_last.json` / `obsidian_history.json` | ❌ |
+| Obsidian 同步笔记 | vault 内 `Magic Video/` | `00 项目总览.md` 等 6 篇 + `06 开发日志/YYYY-MM-DD.md` | ❌ 仓库外 |
 | 手动补充词典 | `data/alias_import.json` | 可选，用户自行放置 | ❌ |
 | 项目工作日志 | `.workbuddy/memory/YYYY-MM-DD.md` | **追加式**，不覆写 | ❌ |
 | 项目长期笔记 | `.workbuddy/memory/MEMORY.md` | 原地更新，≤3000 字 | ❌ |
 
-**禁止**：在仓库根目录散落临时 `.txt` / `.json` 报告；把 `data/` 整目录加入版本库；把 `.gitignore` 写成裸 `data/`（会连带忽略 `app/data/aliases_builtin.json`）；删除 `.workbuddy/` 目录；在文档里编造未实测的数据或功能。
+**禁止**：在仓库根目录散落临时 `.txt` / `.json` 报告；把 `data/` 整目录加入版本库；把 `.gitignore` 写成裸 `data/`（会连带忽略 `app/data/aliases_builtin.json`）；删除 `.workbuddy/` 目录；在文档里编造未实测的数据或功能；
+在 Obsidian 命名空间之外写任何文件；覆盖没有 `managed-by` 标记的用户笔记；把观看明细 / 视频路径写进笔记；为 Obsidian 引入定时任务或云同步。
 
 ---
 
@@ -160,6 +167,8 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | WebView2 | Edge WebView2 157 已安装，pywebview `gui="edgechromium"` |
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
 | git | 本地仓库已初始化，无 gh CLI、无 GitHub 凭证；远程仓库待用户授权 |
+| Obsidian | `%APPDATA%\obsidian\obsidian.json` 注册 2 个 vault；主库 `C:\Users\Administrator\Documents\Obsidian Vault`，另一个是装修项目专用库（不写） |
+| 同步产物 | `data/test_last.json`（测试结果）、`data/obsidian_history.json`（结果时间线）；均在 `.gitignore` 内 |
 
 ---
 
@@ -173,4 +182,5 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 改观看完成判定 | `app/watcher.py::_tick` + `tests/test_watcher.py` |
 | 加数据库字段 | `app/db.py::SCHEMA` + `_migrate()` 补列，并写迁移不丢数据的用例 |
 | 加 CLI 命令 | `cli.py` 的 `choices` 与分支 + README 第 5 节 |
+| 改 Obsidian 笔记内容 | `app/obsidian.py` 的 `render_*` + `tests/test_obsidian.py`；改路线图请改 `docs/OPTIMIZATION.md` |
 | 发新版 | 走第 3.2 节清单，跑 `tests/test_docs.py` 验证一致性 |

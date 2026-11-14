@@ -9,6 +9,7 @@
     python cli.py progress       # 查看所有断点进度
     python cli.py mark 12 watched|unwatched|reset
     python cli.py test           # 运行完整单元测试
+    python cli.py obsidian status|sync|vaults|path|folder|auto|open
     python cli.py import-alias-file
     python cli.py autostart on|off
     python cli.py daemon
@@ -23,14 +24,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from app import autostart, config, db, importer, metadata, potplayer, scanner  # noqa: E402
+from app import (  # noqa: E402
+    autostart, config, db, importer, metadata, obsidian, potplayer, scanner,
+)
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Magic Video 命令行工具")
     parser.add_argument("command", choices=[
         "init", "import", "scan", "status", "match", "dict", "import-alias-file",
-        "autostart", "daemon", "player", "progress", "mark", "test",
+        "autostart", "daemon", "player", "progress", "mark", "test", "obsidian",
     ])
     parser.add_argument("arg", nargs="?", default="")
     parser.add_argument("arg2", nargs="?", default="")
@@ -100,7 +103,34 @@ def main() -> int:
                   "reset": api.reset_progress}[state]
         print(json.dumps(method(int(args.arg)), ensure_ascii=False))
     elif args.command == "test":
-        return subprocess.call([sys.executable, str(Path(__file__).resolve().parent / "run_tests.py")])
+        code = subprocess.call([sys.executable, str(Path(__file__).resolve().parent / "run_tests.py")])
+        if code == 0 and obsidian.auto_sync_enabled():
+            sync_result = obsidian.sync(reason="cli test", kind="test")
+            if sync_result.get("ok"):
+                print(f"Obsidian 已同步：{sync_result['notes_root']}")
+            else:
+                print(f"Obsidian 同步失败（不影响测试结果）：{sync_result.get('error')}")
+        return code
+    elif args.command == "obsidian":
+        sub = (args.arg or "sync").lower()
+        if sub == "status":
+            print(json.dumps(obsidian.status(), ensure_ascii=False, indent=2))
+        elif sub == "vaults":
+            print(json.dumps(obsidian.detect_vaults(), ensure_ascii=False, indent=2))
+        elif sub == "sync":
+            print(json.dumps(obsidian.sync(reason="cli obsidian", note=args.arg2),
+                             ensure_ascii=False, indent=2))
+        elif sub in ("path", "folder", "auto"):
+            if not args.arg2:
+                print(f"用法：python cli.py obsidian {sub} <值>")
+                return 1
+            key = {"path": "vault", "folder": "folder", "auto": "auto_sync"}[sub]
+            print(json.dumps(obsidian.set_options(**{key: args.arg2}), ensure_ascii=False, indent=2))
+        elif sub == "open":
+            print(json.dumps(obsidian.open_notes_folder(), ensure_ascii=False))
+        else:
+            print("用法：python cli.py obsidian status|sync|vaults|path|folder|auto|open")
+            return 1
     elif args.command == "daemon":
         from daemon import main as daemon_main
         daemon_main()

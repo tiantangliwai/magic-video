@@ -34,6 +34,10 @@ DEFAULTS = {
     "window_width": 1180,
     "window_height": 780,
     "minimize_to_tray": 1,
+    # Obsidian 知识沉淀：vault 留空表示自动探测（仅有一个 vault 时才自动采用）
+    "obsidian_vault": "",
+    "obsidian_folder": "Magic Video",
+    "obsidian_auto_sync": 0,
 }
 
 

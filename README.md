@@ -1,7 +1,7 @@
 # Magic Video · 本地播放历史与断点续播工具
 
 > 一个只跑在你自己电脑上的追番/看剧记录工具。**外观是独立软件窗口，数据全部留在本机。**
-> 当前版本：**v0.3.0**（语义化版本，唯一真源为 `app/__init__.py` 的 `__version__`）
+> 当前版本：**v0.4.0**（语义化版本，唯一真源为 `app/__init__.py` 的 `__version__`）
 
 [![Python](https://img.shields.io/badge/Python-3.13-blue)]() [![Platform](https://img.shields.io/badge/Windows-10%2F11-blue)]() [![DB](https://img.shields.io/badge/SQLite-WAL-lightgrey)]()
 
@@ -16,6 +16,7 @@
 | 添加目录批量扫描已下载视频，外文名自动检索成中文 | ✅ 已完成 | 「扫描目录」页，导入/扫描时同步匹配中文名（**无定时任务**） |
 | 输出方案、语言、Skill 清单并确认后开发 | ✅ 已交付 | 方案评审通过后完成 P0，详见 `docs/FEATURES.md` |
 | 中文名补全不要每天定时，只在导入时自动完成 | ✅ 已按此重构 | v0.2.0 删除定时任务与待补全队列，改为动作内同步匹配 |
+| 结合本地 Obsidian，自动记录开发流程与结果，方便后续优化补齐 | ✅ 已完成 | v0.4.0 同步 6 类笔记 + 按天日志到 vault 独立目录，保留手写批注 |
 
 界面形态按你的选择定为 **C：原生窗口 + 网页界面**（pywebview + 系统自带 Edge WebView2），看起来是独立软件，无浏览器地址栏；后台记录按你的选择做成**托盘常驻 + 可选开机自启**。
 
@@ -131,8 +132,24 @@ python cli.py dict                      :: 词典统计
 python cli.py import-alias-file         :: 手动导入 data/alias_import.json
 python cli.py autostart on|off          :: 开机自启开关
 python cli.py daemon                    :: 前台启动托盘守护
-python cli.py test                      :: 运行全部单元测试
+python cli.py test                      :: 运行全部单元测试（结果写入 data/test_last.json）
+python cli.py obsidian status           :: 查看 vault、笔记与最近测试状态
+python cli.py obsidian sync             :: 同步流程与结果到 Obsidian
+python cli.py obsidian path "D:\My Vault" :: 指定要写入的 vault
+python cli.py obsidian open             :: 打开笔记目录
 ```
+
+### Obsidian：自动记录流程与结果
+
+v0.4.0 起，软件可以把**开发流程、自测结果、优化路线图、功能缺口**自动写进你本机 Obsidian 的一个独立文件夹
+（默认 `Magic Video/`）：项目总览、版本记录、P0–P3 路线图、自测报告、缺口与决策、使用速查，外加按天追加的开发日志。
+
+- **只读你已有的笔记、只写这个独立文件夹**；检测到多个 vault 时不会擅自猜，需要在「设置 → Obsidian 知识沉淀」里明确指定。
+- 每篇笔记的「我的批注」区在同步时**原样保留**，可以直接在 Obsidian 里勾路线图、写想法、加标签。
+- `run_tests.py` 会写 `data/test_last.json`，自测报告与结果时间线从中生成；开启「测试后自动同步」后 `cli.py test` 会自动留痕（默认关闭）。
+- 笔记只有聚合统计与项目文档，**不含视频路径、文件名、观看明细**，也不依赖任何 Obsidian 插件或联网服务。
+
+完整契约见 [`docs/OBSIDIAN.md`](docs/OBSIDIAN.md)；本机已接入 `C:\Users\Administrator\Documents\Obsidian Vault`。
 
 ---
 
@@ -142,7 +159,7 @@ python cli.py test                      :: 运行全部单元测试
 python run_tests.py
 ```
 
-- **116 个单元测试**，覆盖数据层与迁移、文件名解析、清单导入、中文匹配、PotPlayer 桥接、守护会话、js_api、端到端串联、文档版本一致性。
+- **144 个单元测试**，覆盖数据层与迁移、文件名解析、清单导入、中文匹配、PotPlayer 桥接、守护会话、js_api、Obsidian 同步安全边界、端到端串联、文档版本一致性。
 - 全部用例在**临时目录的独立 SQLite** 中运行，并屏蔽真实网络请求，**绝不读写你的真实播放记录**。
 - 版本一致性由 `tests/test_docs.py` 守护：代码版本、README、AGENTS、CHANGELOG 任一漂移，测试立即失败。
 - 详细自测结果见 `docs/TESTING.md`。
@@ -159,8 +176,9 @@ python run_tests.py
 | 功能规格、优化建议、自测报告 | `docs/*.md` | ✅ |
 | 应用代码 / 前端 / 单元测试 | `app/`、`web/`、`tests/`、`*.py` | ✅ |
 | 离线词典（随程序自带） | `app/data/aliases_builtin.json` | ✅ |
-| 运行数据库 / 封面 / 日志 | `data/` | ❌ 已忽略 |
+| 运行数据库 / 封面 / 日志 / 测试结果快照 / 同步历史 | `data/` | ❌ 已忽略 |
 | 项目工作日志与长期笔记 | `.workbuddy/memory/` | ❌ 已忽略 |
+| Obsidian 同步笔记 | vault 内 `Magic Video/`（仓库之外） | ❌ 不入库、不受 git 管理 |
 
 发版规则、提交规范与「每次交付必须同步更新哪些文件」写在 `AGENTS.md`；变更历史见 `CHANGELOG.md`。
 
@@ -171,6 +189,7 @@ python run_tests.py
 | v0.1.0 | 项目骨架、SQLite 8 表、原生窗口 8 页、PotPlayer 桥接、托盘守护、开机自启、列表导入与目录扫描 |
 | v0.2.0 | 中文名改为**导入时同步匹配**，删除每日定时任务与待补全队列；新增匹配引擎 + 98 部离线词典；数据库平滑迁移 |
 | v0.3.0 | 116 个单元测试与端到端自测、25 项缺陷修复、标记已看/未看/重置进度、CLI 纠错命令、完整文档与版本管理体系 |
+| v0.4.0 | Obsidian 知识沉淀：6 类笔记 + 按天开发日志、测试结果自动留痕、路线图/缺口/ADR 联动、设置页与 CLI 同步入口、新增 26 个单测（合计 144） |
 
 ---
 
@@ -193,5 +212,6 @@ python run_tests.py
 | `docs/FEATURES.md` | 功能规格、验收标准、数据流、状态机、API 与表结构 |
 | `docs/OPTIMIZATION.md` | 竞品调研、对比表、优化建议（P0–P3）、避坑清单 |
 | `docs/TESTING.md` | 自测环境、命令、结果、单测覆盖矩阵 |
+| `docs/OBSIDIAN.md` | Obsidian 集成契约、笔记结构、安全边界、同步入口与故障排查 |
 
 > 隐私承诺：所有数据存于本机 `data/library.db`；除你主动配置的在线元数据检索外，程序不向任何服务上传文件名或观看记录。
