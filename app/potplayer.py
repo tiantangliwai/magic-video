@@ -30,15 +30,20 @@ POT_GET_PLAY_STATUS = 0x5006
 STATE_LABEL = {-1: "stopped", 1: "paused", 2: "playing"}
 WINDOW_CLASSES = ("PotPlayer64", "PotPlayer", "PotPlayerMini64")
 
-_user32 = ctypes.windll.user32
-_user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
-_user32.FindWindowW.restype = wintypes.HWND
-_user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-_user32.SendMessageW.restype = ctypes.c_longlong
-_user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+try:  # 非 Windows 平台也能安全导入本模块（纯函数与测试仍可用）
+    _user32 = ctypes.windll.user32
+    _user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
+    _user32.FindWindowW.restype = wintypes.HWND
+    _user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.SendMessageW.restype = ctypes.c_longlong
+    _user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+except (AttributeError, OSError):  # pragma: no cover - 仅在非 Windows 触发
+    _user32 = None
 
 
 def find_window() -> int:
+    if _user32 is None:
+        return 0
     for cls in WINDOW_CLASSES:
         hwnd = _user32.FindWindowW(cls, None)
         if hwnd:
@@ -47,12 +52,16 @@ def find_window() -> int:
 
 
 def window_title(hwnd: int) -> str:
+    if _user32 is None or not hwnd:
+        return ""
     buf = ctypes.create_unicode_buffer(2048)
     _user32.GetWindowTextW(hwnd, buf, 2048)
     return buf.value
 
 
 def send(hwnd: int, code: int, lparam: int = 0) -> int:
+    if _user32 is None or not hwnd:
+        return 0
     return int(_user32.SendMessageW(hwnd, WM_USER, code, lparam))
 
 

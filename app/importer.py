@@ -15,10 +15,12 @@ import re
 from . import db, metadata
 
 SEASON_RES = [
-    re.compile(r"第\s*(\d{1,2})\s*季", re.IGNORECASE),
+    re.compile(r"第\s*(?:(\d{1,2})|([一二三四五六七八九十]))\s*(?:季|期)", re.IGNORECASE),
     re.compile(r"[Ss](?:eason)?\s*(\d{1,2})\b", re.IGNORECASE),
-    re.compile(r"\b(\d{1,2})\s*季"),
+    re.compile(r"\b(\d{1,2})\s*(?:季|期)"),
 ]
+CN_DIGITS = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5,
+             "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
 RANGE_RE = re.compile(r"(\d{1,3})\s*(?:[-~～—至]|到)\s*(\d{1,3})\s*(?:话|集|話)?")
 EPISODE_RE = re.compile(r"第?\s*(\d{1,3})\s*(?:话|集|話|ep)?\b", re.IGNORECASE)
 YEAR_RE = re.compile(r"[（(]\s*(19\d{2}|20\d{2})\s*[)）]|\b(19\d{2}|20\d{2})\b")
@@ -61,7 +63,9 @@ def parse_line(line: str) -> dict | None:
     for pattern in SEASON_RES:
         m = pattern.search(raw)
         if m:
-            season = int(m.group(1))
+            groups = [g for g in m.groups() if g]
+            token = groups[0] if groups else "1"
+            season = CN_DIGITS.get(token) if not token.isdigit() else int(token)
             raw = raw[: m.start()] + " " + raw[m.end():]
             break
 

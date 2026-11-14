@@ -22,6 +22,7 @@ const MATCH_LABEL = {
   online: ['在线匹配', 'green'],
   native: ['中文原名', 'blue'],
   user: ['手动指定', 'green'],
+  base: ['主标题匹配', 'blue'],
   none: ['未匹配', 'amber'],
 };
 
@@ -86,6 +87,7 @@ function progressItem(r, actions) {
     <div class="right">${actions === false ? '' : `<div class="btn-row">
       <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.file_id}">继续观看</button>
       <button class="btn btn-sm" data-action="play-start" data-id="${r.file_id}">从头播放</button>
+      <button class="btn btn-sm" data-action="mark-watched" data-id="${r.file_id}">标记已看</button>
     </div>`}</div>
   </div>`;
 }
@@ -124,10 +126,23 @@ async function renderHome() {
 }
 
 async function renderContinue() {
-  const list = await call('get_continue_watching', 100);
+  const [list, done] = await Promise.all([
+    call('get_continue_watching', 100), call('get_completed', 20),
+  ]);
   setContent(`<div class="card"><h3>继续观看</h3>
-    <p class="hint">点击「继续观看」会用 PotPlayer 从上次的位置打开，播放过程每 3 秒自动记录。</p>
-    <div class="list">${list.length ? list.map(r => progressItem(r)).join('') : empty('暂无进行中的播放', '先扫描目录并播放一集试试')}</div></div>`);
+    <p class="hint">点击「继续观看」会用 PotPlayer 从上次的位置打开，播放过程按设置页的间隔自动记录。</p>
+    <div class="list">${list.length ? list.map(r => progressItem(r)).join('') : empty('暂无进行中的播放', '先扫描目录并播放一集试试')}</div></div>
+    <div class="card"><h3>已看完（可纠错）</h3>
+    <p class="hint">标错或想重看时，点「标记未看」即可恢复；观看历史不会被删除。</p>
+    <div class="list">${done.length ? done.map(r => `<div class="item">
+      <div class="thumb">✓</div>
+      <div class="body"><div class="name">${esc(r.display_title || r.filename)}
+        ${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}</div>
+        <div class="meta">${esc(r.filename || '')} · 最近 ${esc(shortDate(r.last_played_at))}</div></div>
+      <div class="right"><div class="btn-row" style="justify-content:flex-end">
+        <button class="btn btn-primary btn-sm" data-action="mark-unwatched" data-id="${r.file_id}">标记未看</button>
+        <button class="btn btn-sm" data-action="reset-progress" data-id="${r.file_id}">重置进度</button>
+      </div></div></div>`).join('') : empty('还没有已看完的条目', '进度达到设置页的阈值后会自动出现在这里')}</div></div>`);
 }
 
 async function renderHistory() {
@@ -209,8 +224,8 @@ function renderPreview(data) {
   lastPreviewRows = data.rows || [];
   const m = data.match || {};
   const onlineNote = m.online_available
-    ? '在线检索可用'
-    : '在线源当前不可达，已使用离线词典；可在设置里配置代理后点「重新匹配」';
+    ? '在线检索已启用（连通性在本次导入时实测）'
+    : '在线检索已降级为离线词典；可在设置里配置代理后点「重新匹配」';
   document.getElementById('previewBox').innerHTML = `<div class="notice">
     解析出 ${data.total} 条 · 重复 ${data.duplicates} 条（导入时自动跳过）·
     自动匹配 ${num(m.matched)} 条（离线词典 ${num(m.by_builtin)} / 在线 ${num(m.by_online)}）·
@@ -258,7 +273,7 @@ async function renderScan() {
     优先命中离线词典，未命中的外文名会尝试在线检索；本机连不上时自动降级，不阻塞扫描和播放记录。</p>
     <div class="notice">词典共 <b>${num(dict.alias_total)}</b> 条对照（内置 ${num(dict.builtin)} 条 / 已学 ${num(dict.learned)} 条）·
       尚未匹配 <b>${num(dict.unmatched)}</b> 条 ·
-      在线检索${dict.online_available ? '<span class="badge green">可用</span>' : '<span class="badge amber">当前不可达</span>'}
+      在线检索${dict.online_available ? '<span class="badge green">已启用</span>' : '<span class="badge amber">已降级</span>'}
       ${dict.online_error ? `<br><span class="mono" style="font-size:11px">${esc(dict.online_error)}</span>` : ''}</div>
     <div class="btn-row">
       <button class="btn btn-primary" data-action="rematch">重新匹配未识别标题</button>
@@ -294,7 +309,7 @@ async function renderSettings() {
       顺序：内置离线词典 → 本地已学对照 → 在线 Bangumi（未命中且允许联网时才查）。结果当场入库并展示。
       导入预览里改过的中文名会被永久记住，下次自动命中。</div>
       <p class="hint" style="margin:0 0 12px">当前词典 ${num(d.alias_total)} 条 · 未匹配 ${num(d.unmatched)} 条 ·
-        在线检索${d.online_available ? '可用' : '当前不可达（可在下方配置代理）'}</p>
+        在线检索${d.online_available ? '已启用' : '已禁用或已降级（可在下方配置代理）'}</p>
       <div class="field"><label>元数据来源策略</label>
         <select class="input" id="set-metadata_source">
           <option value="cache_first" ${s.metadata_source === 'cache_first' ? 'selected' : ''}>离线词典优先，未命中再联网（推荐）</option>
@@ -380,6 +395,21 @@ async function handleAction(action, btn) {
       return;
     }
     case 'delete-watched': await call('delete_watched', Number(id)); toast('已删除'); break;
+    case 'mark-watched': {
+      const r = await call('mark_watched', Number(id));
+      toast(r.ok ? '已标记为看完' : r.error, r.ok);
+      break;
+    }
+    case 'mark-unwatched': {
+      const r = await call('mark_unwatched', Number(id));
+      toast(r.ok ? '已恢复为未看，可继续观看' : r.error, r.ok);
+      break;
+    }
+    case 'reset-progress': {
+      const r = await call('reset_progress', Number(id));
+      toast(r.ok ? '进度已重置，历史记录保留' : r.error, r.ok);
+      break;
+    }
     case 'remove-dir': await call('remove_directory', Number(id)); toast('目录已移除'); break;
     case 'toggle-dir': await call('set_directory_enabled', Number(id), btn.dataset.enabled !== '1'); toast('已更新'); break;
     case 'choose-dir': {

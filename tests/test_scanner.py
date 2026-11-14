@@ -1,0 +1,128 @@
+"""文件名解析、忽略规则与增量扫描测试。"""
+from __future__ import annotations
+
+import unittest
+from pathlib import Path
+from unittest import mock
+
+from app import config, db, scanner
+from tests.base import IsolatedDbTestCase
+
+
+class FilenameTests(IsolatedDbTestCase):
+    def test_fansub_release_name(self):
+        name = ("[Nekomoe kissaten&LoliHouse] Sono Bisque Doll wa Koi wo Suru - 02 "
+                "[WebRip 1080p HEVC-10bit AAC ASSx2].mkv")
+        info = scanner.parse_filename(name)
+        self.assertEqual(info["title_guess"], "Sono Bisque Doll wa Koi wo Suru")
+        self.assertEqual(info["episode_no"], 2)
+
+    def test_standard_sxxeyy(self):
+        info = scanner.parse_filename("Spy.x.Family.S01E02.1080p.WEB-DL.mkv")
+        self.assertEqual((info["season_no"], info["episode_no"]), (1, 2))
+        self.assertNotIn("s01e02", info["title_guess"].lower())
+
+    def test_year_and_quality_tags_are_removed_from_title(self):
+        info = scanner.parse_filename("Your.Name.(2016).[1080p].mkv")
+        self.assertEqual(info["year"], 2016)
+        self.assertNotIn("2016", info["title_guess"])
+
+    def test_chinese_episode_marker(self):
+        info = scanner.parse_filename("[Group] 葬送的芙莉莲 第03话 [1080p].mkv")
+        self.assertEqual(info["episode_no"], 3)
+
+    def test_ep_marker(self):
+        info = scanner.parse_filename("Frieren - EP12.mkv")
+        self.assertEqual(info["episode_no"], 12)
+
+    def test_season_two_marker(self):
+        info = scanner.parse_filename("[Group] Sono Bisque Doll wa Koi wo Suru Season 2 - 05.mkv")
+        self.assertEqual(info["season_no"], 2)
+        self.assertEqual(info["episode_no"], 5)
+
+    def test_movie_without_episode(self):
+        info = scanner.parse_filename("Violet Evergarden (2020) [BDRip].mkv")
+        self.assertIsNone(info["episode_no"])
+        self.assertEqual(info["year"], 2020)
+
+
+class IgnoreRuleTests(IsolatedDbTestCase):
+    def test_subtitles_and_unknown_extensions_are_ignored(self):
+        self.assertTrue(scanner.should_ignore(Path("D:/Anime/show.srt")))
+        self.assertTrue(scanner.should_ignore(Path("D:/Anime/readme.txt")))
+
+    def test_sample_and_trailer_are_ignored(self):
+        self.assertTrue(scanner.should_ignore(Path("D:/Anime/[Group] Show - 01 Sample.mkv")))
+        self.assertTrue(scanner.should_ignore(Path("D:/Anime/Show.Trailer.mp4")))
+
+    def test_sp_token_must_not_blacklist_regular_titles(self):
+        """「SP」是特典标记，但不能因为 'Spy' / 'Special' 含 sp 就误杀正片。"""
+        self.assertFalse(scanner.should_ignore(Path("D:/Anime/Spy.x.Family.S01E02.mkv")))
+        self.assertFalse(scanner.should_ignore(Path("D:/Anime/Show - Special Edition.mkv")))
+
+    def test_ignored_system_directories(self):
+        self.assertTrue(scanner.should_ignore(Path("D:/$RECYCLE.BIN/movie.mkv")))
+        self.assertTrue(scanner.should_ignore(Path("D:/Anime/.git/movie.mkv")))
+
+    def test_normal_video_is_kept(self):
+        self.assertFalse(scanner.should_ignore(Path("D:/Anime/[Group] Show - 01 [1080p].mkv")))
+
+
+class ScanFlowTests(IsolatedDbTestCase):
+    def _make_library(self):
+        root = self.tmp / "videos"
+        root.mkdir()
+        (root / "Attack on Titan - 01.mkv").write_bytes(b"x" * 10)
+        (root / "Attack on Titan - 02.mkv").write_bytes(b"y" * 20)
+        (root / "notes.srt").write_text("subtitle", encoding="utf-8")
+        return root
+
+    def test_add_directory_rejects_missing_path(self):
+        result = scanner.add_directory(str(self.tmp / "does-not-exist"))
+        self.assertFalse(result["ok"])
+        self.assertIn("目录不存在", result["error"])
+
+    def test_add_directory_is_unique(self):
+        root = self._make_library()
+        first = scanner.add_directory(str(root))
+        second = scanner.add_directory(str(root))
+        self.assertTrue(first["ok"] and second["ok"])
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM directories"), 1)
+
+    def test_scan_is_incremental_and_matches_chinese(self):
+        root = self._make_library()
+        scanner.add_directory(str(root))
+        first = scanner.scan()
+        self.assertEqual(first["added"], 2)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 2)
+        second = scanner.scan()
+        self.assertEqual(second["added"], 0)
+        # 扫描当场完成中文名匹配，不留待办队列
+        titles = {r["title_cn"] for r in db.rows("SELECT title_cn FROM media_files")}
+        self.assertIn("进击的巨人", titles)
+
+    def test_scan_honours_disabled_directory(self):
+        root = self._make_library()
+        added = scanner.add_directory(str(root))
+        scanner.set_directory_enabled(added["id"], False)
+        self.assertEqual(scanner.scan()["added"], 0)
+
+    def test_scan_survives_unreadable_file(self):
+        root = self._make_library()
+        scanner.add_directory(str(root))
+        real_stat = Path.stat
+
+        def flaky_stat(self, *args, **kwargs):
+            if self.suffix.lower() in config.VIDEO_EXTS:
+                raise OSError("locked")
+            return real_stat(self, *args, **kwargs)
+
+        with mock.patch.object(Path, "stat", flaky_stat):
+            result = scanner.scan()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["added"], 0)
+        self.assertGreaterEqual(result["skipped"], 1)
+
+
+if __name__ == "__main__":
+    unittest.main()

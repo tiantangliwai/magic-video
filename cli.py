@@ -6,6 +6,9 @@
     python cli.py status
     python cli.py match          # 重新匹配所有未识别标题
     python cli.py dict           # 查看词典统计
+    python cli.py progress       # 查看所有断点进度
+    python cli.py mark 12 watched|unwatched|reset
+    python cli.py test           # 运行完整单元测试
     python cli.py import-alias-file
     python cli.py autostart on|off
     python cli.py daemon
@@ -14,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
 
@@ -26,9 +30,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Magic Video 命令行工具")
     parser.add_argument("command", choices=[
         "init", "import", "scan", "status", "match", "dict", "import-alias-file",
-        "autostart", "daemon", "player",
+        "autostart", "daemon", "player", "progress", "mark", "test",
     ])
     parser.add_argument("arg", nargs="?", default="")
+    parser.add_argument("arg2", nargs="?", default="")
     args = parser.parse_args()
 
     db.init_db()
@@ -76,6 +81,26 @@ def main() -> int:
         print(json.dumps(result, ensure_ascii=False))
     elif args.command == "player":
         print(json.dumps(potplayer.read_status(), ensure_ascii=False, indent=2))
+    elif args.command == "progress":
+        rows = db.rows(
+            "SELECT p.file_id, COALESCE(f.title_cn, f.title_guess) AS title, "
+            "p.position_ms, p.duration_ms, p.percent, p.completed, p.last_played_at "
+            "FROM watch_progress p LEFT JOIN media_files f ON f.id = p.file_id "
+            "ORDER BY p.last_played_at DESC"
+        )
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
+    elif args.command == "mark":
+        from app.api import Api
+        state = (args.arg2 or "unwatched").lower()
+        if state not in ("watched", "unwatched", "reset"):
+            print("用法：python cli.py mark <file_id> watched|unwatched|reset")
+            return 1
+        api = Api()
+        method = {"watched": api.mark_watched, "unwatched": api.mark_unwatched,
+                  "reset": api.reset_progress}[state]
+        print(json.dumps(method(int(args.arg)), ensure_ascii=False))
+    elif args.command == "test":
+        return subprocess.call([sys.executable, str(Path(__file__).resolve().parent / "run_tests.py")])
     elif args.command == "daemon":
         from daemon import main as daemon_main
         daemon_main()

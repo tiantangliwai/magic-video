@@ -19,7 +19,7 @@ import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
-from . import config, db
+from . import __version__, config, db
 
 _LOCK = threading.RLock()
 _INDEX: dict[str, dict] = {}
@@ -146,26 +146,35 @@ def ensure_builtin_loaded() -> int:
     return inserted
 
 
-def _add_index(entry: dict, keys) -> None:
+def _add_index(entry: dict, keys, *, overwrite: bool = False) -> None:
     for key in keys:
         if not key:
             continue
         n = normalize(str(key))
         if len(n) >= 3:
-            _INDEX.setdefault(n, entry)
+            if overwrite:
+                _INDEX[n] = entry
+            else:
+                _INDEX.setdefault(n, entry)
         base = strip_season(str(key))
         if len(base) >= 4:
-            _INDEX.setdefault(base, entry)
+            if overwrite:
+                _INDEX[base] = entry
+            else:
+                _INDEX.setdefault(base, entry)
 
 
 def rebuild_index() -> None:
-    """重建内存索引：内置词典 + 本地已学词典 + 作品表。"""
+    """重建内存索引；用户手工修正放最后写入，优先级高于内置词典与在线结果。"""
     global _INDEX, _INDEX_DIRTY
     with _LOCK:
         _INDEX = {}
         for entry in builtin_items():
             _add_index(entry, (entry["title_orig"], entry["title_cn"], *entry["aliases"]))
-        for r in db.rows("SELECT raw_title, title_cn, title_orig, source FROM name_alias"):
+        learned = db.rows("SELECT raw_title, title_cn, title_orig, source FROM name_alias")
+        for r in learned:
+            if (r["source"] or "") in ("user", "manual"):
+                continue
             _add_index(_entry(r["title_cn"], r["title_orig"] or "", (r["raw_title"],),
                               source=r["source"] or "local"), (r["raw_title"],))
         for r in db.rows("SELECT title_cn, title_orig, aliases, bgm_id, season_no FROM subjects"):
@@ -174,6 +183,11 @@ def rebuild_index() -> None:
                 keys += [a.strip() for a in re.split(r"[,|;]", r["aliases"]) if a.strip()]
             _add_index(_entry(r["title_cn"], r["title_orig"] or "", (), r["bgm_id"],
                               r["season_no"], "local"), keys)
+        for r in learned:
+            if (r["source"] or "") not in ("user", "manual"):
+                continue
+            _add_index(_entry(r["title_cn"], r["title_orig"] or "", (r["raw_title"],),
+                              source="user"), (r["raw_title"],), overwrite=True)
         _INDEX_DIRTY = False
 
 
@@ -198,6 +212,9 @@ def lookup_local(title: str, *, exact_only: bool = False) -> dict | None:
         if not hit and not exact_only and len(query) >= 7:
             for key, entry in _INDEX.items():
                 if len(key) >= 7 and (key in query or query in key) and abs(len(key) - len(query)) <= 10:
+                    # 模糊匹配同样不能把带季数的标题套成另一季
+                    if wanted and entry.get("season_no") and entry["season_no"] != wanted:
+                        continue
                     hit = entry
                     break
         return dict(hit) if hit else None
@@ -240,6 +257,15 @@ def reset_online() -> None:
         _CFG_CACHE = None
 
 
+def _online_usable() -> bool:
+    """在线通道是否已启用且未被熔断。
+
+    注意：这是「通道状态」而非「网络连通性」结论；真正可达与否在请求时实测，
+    失败会置 _ONLINE_BLOCKED。界面文案据此写「已启用 / 已降级」，不宣称「可用」。
+    """
+    return not _ONLINE_BLOCKED and _online_config()["mode"] != "local_only"
+
+
 def search_online(title: str) -> dict | None:
     """导入时同步尝试 Bangumi 搜索；失败即整批降级，不阻塞后续条目。"""
     global _ONLINE_BLOCKED, _ONLINE_ERROR
@@ -255,7 +281,7 @@ def search_online(title: str) -> dict | None:
         resp = requests.get(
             url,
             params={"type": 2, "max_results": 6, "responseGroup": "small"},
-            headers={"User-Agent": "MagicVideo/0.2 (local personal tool)"},
+            headers={"User-Agent": f"MagicVideo/{__version__} (local personal tool)"},
             timeout=(1.5, 3.0),
             proxies=proxies,
         )
@@ -338,6 +364,15 @@ def match_one(title: str, *, allow_online: bool = True) -> dict:
             "matched": True, "title_cn": local["title_cn"], "title_orig": local["title_orig"],
             "bgm_id": local["bgm_id"], "by": "builtin" if local["source"] == "builtin" else "local",
         }
+    # 带季数但词典没有收录该季：给出主标题中文名，不编造「第 N 季」名称，
+    # 界面标记为 base，用户可在预览里手动改（改动会被记住）。
+    wanted = season_hint(title)
+    if wanted and wanted > 1:
+        base = lookup_local(strip_season(title), exact_only=True)
+        if base and base["title_cn"] and base["title_cn"] != title:
+            return {"matched": True, "title_cn": base["title_cn"],
+                    "title_orig": base["title_orig"], "bgm_id": base["bgm_id"],
+                    "by": "base", "season_no": wanted}
     if not is_foreign:
         # 本身已是中文名，无需翻译
         return {"matched": True, "title_cn": title, "by": "native"}
@@ -356,16 +391,24 @@ def match_one(title: str, *, allow_online: bool = True) -> dict:
 
 
 def match_titles(titles, *, allow_online: bool = True) -> dict:
-    """批量匹配。先本地（瞬时），未命中的再限量并发在线；在线不通时整批快速降级。"""
-    unique = list(dict.fromkeys(t.strip() for t in titles if t and t.strip()))
+    """批量匹配。先本地（瞬时），未命中的再限量并发在线；在线不通时整批快速降级。
+
+    大小写/空格不同的同一标题会合并成一次查询，但仍为每个原始写法保留结果映射，
+    方便调用方按原始标题取值。
+    """
+    raw = [t.strip() for t in titles if t and t.strip()]
+    groups: dict[str, list[str]] = {}
+    for title in raw:
+        groups.setdefault(normalize(title) or title.lower(), []).append(title)
+    representatives = {key: variants[0] for key, variants in groups.items()}
+    unique = list(representatives.values())
+
     results: dict[str, dict] = {}
     pending = []
     for title in unique:
         r = match_one(title, allow_online=False)
-        if r["matched"]:
+        if r["matched"] or not _online_usable():
             results[title] = r
-        elif _ONLINE_BLOCKED or _online_config()["mode"] == "local_only":
-            results[title] = r  # 在线确实不可用，直接判定为未匹配
         else:
             pending.append(title)
 
@@ -376,46 +419,59 @@ def match_titles(titles, *, allow_online: bool = True) -> dict:
     for title in pending:
         results.setdefault(title, {"matched": False, "title_cn": title, "by": "none", "reason": "offline"})
 
+    # 同一归一化标题的所有写法共享同一结果
+    for key, variants in groups.items():
+        rep = representatives[key]
+        for title in variants:
+            if title not in results:
+                results[title] = dict(results[rep])
+
+    representative_values = [results[rep] for rep in unique if rep in results]
     return {
         "ok": True,
         "results": results,
         "total": len(unique),
-        "matched": sum(1 for r in results.values() if r["matched"]),
-        "unmatched": sum(1 for r in results.values() if not r["matched"]),
-        "by_builtin": sum(1 for r in results.values() if r["by"] == "builtin"),
-        "by_online": sum(1 for r in results.values() if r["by"] == "online"),
-        "online_available": not _ONLINE_BLOCKED,
+        "matched": sum(1 for r in representative_values if r["matched"]),
+        "unmatched": sum(1 for r in representative_values if not r["matched"]),
+        "by_builtin": sum(1 for r in representative_values if r["by"] == "builtin"),
+        "by_online": sum(1 for r in representative_values if r["by"] == "online"),
+        "by_base": sum(1 for r in representative_values if r["by"] == "base"),
+        "online_available": _online_usable(),
         "online_error": _ONLINE_ERROR,
     }
 
 
 def apply_to_media(results: dict) -> int:
-    """把匹配结果写回媒体库：保留 title_guess 原文，中文名单独存 title_cn。"""
+    """把匹配结果写回媒体库：保留 title_guess 原文，中文名单独存 title_cn。
+
+    返回值是真正被 UPDATE 的行数，而不是匹配成功的条目数。
+    """
     changed = 0
-    for title, r in results.items():
-        if not r.get("matched"):
-            continue
-        cn = r["title_cn"]
-        db.execute(
-            "UPDATE media_files SET title_cn = ?, match_by = ? "
-            "WHERE title_cn IS NULL AND (lower(title_guess) = lower(?) OR lower(title_raw) = lower(?))",
-            (cn, r["by"], title, title),
-        )
-        changed += 1
+    with db.session() as conn:
+        for title, r in results.items():
+            if not r.get("matched"):
+                continue
+            cur = conn.execute(
+                "UPDATE media_files SET title_cn = ?, match_by = ? "
+                "WHERE title_cn IS NULL AND (lower(title_guess) = lower(?) OR lower(title_raw) = lower(?))",
+                (r["title_cn"], r["by"], title, title),
+            )
+            changed += max(0, cur.rowcount)
     return changed
 
 
 def apply_to_watched(results: dict) -> int:
     changed = 0
-    for title, r in results.items():
-        if not r.get("matched"):
-            continue
-        db.execute(
-            "UPDATE watched_list SET title_cn = ?, match_by = ? "
-            "WHERE lower(title) = lower(?) AND (title_cn IS NULL OR title_cn = '' OR title_cn = title)",
-            (r["title_cn"], r["by"], title),
-        )
-        changed += 1
+    with db.session() as conn:
+        for title, r in results.items():
+            if not r.get("matched"):
+                continue
+            cur = conn.execute(
+                "UPDATE watched_list SET title_cn = ?, match_by = ? "
+                "WHERE lower(title) = lower(?) AND (title_cn IS NULL OR title_cn = '' OR title_cn = title)",
+                (r["title_cn"], r["by"], title),
+            )
+            changed += max(0, cur.rowcount)
     return changed
 
 
@@ -426,7 +482,7 @@ def auto_match_media() -> dict:
         "WHERE title_cn IS NULL AND COALESCE(title_guess, title_raw) IS NOT NULL LIMIT 500"
     )
     if not rows:
-        return {"ok": True, "total": 0, "matched": 0, "online_available": not _ONLINE_BLOCKED}
+        return {"ok": True, "total": 0, "matched": 0, "online_available": _online_usable()}
     out = match_titles([r["t"] for r in rows])
     out["applied"] = apply_to_media(out["results"])
     return out
@@ -470,7 +526,7 @@ def stats() -> dict:
         "unmatched": unmatched_media + unmatched_watched,
         "unmatched_media": unmatched_media,
         "unmatched_watched": unmatched_watched,
-        "online_available": not _ONLINE_BLOCKED,
+        "online_available": _online_usable(),
         "online_error": _ONLINE_ERROR,
         "mode": _online_config()["mode"],
     }

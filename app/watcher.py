@@ -101,7 +101,8 @@ class Watcher:
             "session_id": session_id,
             "started_at": stamp,
             "max_ms": status["position_ms"],
-            "last_written_ms": status["position_ms"],
+            # 首次轮询必须写一次进度/时长/完成判定，不能因为「位置没变」而跳过
+            "last_written_ms": None,
             "last_state": status["state"],
         }
         self._emit("session_started", {"file_id": file_id})
@@ -140,7 +141,8 @@ class Watcher:
         cur = self.current
         pos = status["position_ms"]
         cur["max_ms"] = max(cur["max_ms"], pos)
-        moved = abs(pos - cur["last_written_ms"]) >= 1000
+        moved = (cur["last_written_ms"] is None
+                 or abs(pos - cur["last_written_ms"]) >= 1000)
         if moved or status["state"] != cur["last_state"]:
             complete_at = db.get_int("complete_percent", 90)
             completed = 1 if status["percent"] >= complete_at else 0

@@ -66,6 +66,53 @@ class Api:
             (int(limit),),
         )
 
+    def get_completed(self, limit: int = 50) -> list[dict]:
+        """已看完的条目，供「继续观看」页做纠错（标记未看 / 重看）。"""
+        return db.rows(
+            "SELECT p.*, f.filename, f.path, f.title_guess, "
+            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            "f.season_no, f.episode_no "
+            "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
+            "WHERE p.completed = 1 ORDER BY p.last_played_at DESC LIMIT ?",
+            (int(limit),),
+        )
+
+    def _ensure_progress(self, file_id: int) -> None:
+        stamp = db.now()
+        db.execute(
+            "INSERT OR IGNORE INTO watch_progress"
+            "(file_id, position_ms, duration_ms, percent, completed, "
+            "first_played_at, last_played_at, updated_at) VALUES (?, 0, 0, 0, 0, ?, ?, ?)",
+            (file_id, stamp, stamp, stamp),
+        )
+
+    def _set_watch_state(self, file_id: int, completed: int) -> dict:
+        """标记已看/未看；两种操作都清空续播点，但绝不删除 watch_sessions 历史。"""
+        try:
+            fid = int(file_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "无效的文件 ID"}
+        if not db.scalar("SELECT 1 FROM media_files WHERE id = ?", (fid,)):
+            return {"ok": False, "error": "找不到该文件记录"}
+        self._ensure_progress(fid)
+        db.execute(
+            "UPDATE watch_progress SET completed = ?, position_ms = 0, percent = 0, "
+            "last_played_at = COALESCE(last_played_at, ?), updated_at = ? WHERE file_id = ?",
+            (completed, db.now(), db.now(), fid),
+        )
+        return {"ok": True, "file_id": fid, "completed": completed}
+
+    def mark_watched(self, file_id: int) -> dict:
+        return self._set_watch_state(file_id, 1)
+
+    def mark_unwatched(self, file_id: int) -> dict:
+        """Kodi 语义：标记未看会同时清除 resume point，历史条目保留。"""
+        return self._set_watch_state(file_id, 0)
+
+    def reset_progress(self, file_id: int) -> dict:
+        """一键重置进度（等价于「标记未看」），用于纠错与重新观看。"""
+        return self._set_watch_state(file_id, 0)
+
     def get_history(self, limit: int = 100) -> list[dict]:
         return db.rows(
             "SELECT s.*, f.filename, "
@@ -115,6 +162,7 @@ class Api:
         allowed = {
             "potplayer_path", "poll_interval_sec", "complete_percent", "recording_enabled",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
+            "minimize_to_tray",
         }
         for key, value in (data or {}).items():
             if key in allowed:

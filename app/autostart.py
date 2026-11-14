@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 import sys
-import winreg
 from pathlib import Path
+
+try:  # 非 Windows 平台导入不报错，相关接口安全降级
+    import winreg
+except ImportError:  # pragma: no cover
+    winreg = None
 
 from . import config, db
 
@@ -21,6 +25,8 @@ def command() -> str:
 
 
 def is_enabled() -> bool:
+    if winreg is None:
+        return False
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_READ) as key:
             value, _ = winreg.QueryValueEx(key, ENTRY_NAME)
@@ -30,6 +36,8 @@ def is_enabled() -> bool:
 
 
 def enable() -> dict:
+    if winreg is None:
+        return {"ok": False, "error": "开机自启仅支持 Windows"}
     try:
         with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_WRITE) as key:
             winreg.SetValueEx(key, ENTRY_NAME, 0, winreg.REG_SZ, command())
@@ -41,6 +49,8 @@ def enable() -> dict:
 
 
 def disable() -> dict:
+    if winreg is None:
+        return {"ok": False, "error": "开机自启仅支持 Windows"}
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_WRITE) as key:
             winreg.DeleteValue(key, ENTRY_NAME)

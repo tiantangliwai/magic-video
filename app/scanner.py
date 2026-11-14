@@ -1,6 +1,9 @@
-"""目录扫描（P0 基础版）：递归枚举视频文件并入库。
+"""目录扫描：递归枚举视频文件、解析文件名、入库并即时匹配中文名。
 
-P1 会在这层之上接入完整的文件名解析、中文元数据刮削与封面缓存。
+设计约定：
+    - 绝不修改用户磁盘上的任何视频文件或文件名，只读取。
+    - 增量扫描：以路径为键，已存在的文件只更新 size / mtime。
+    - 文件不可达时只跳过、不删除已有记录，避免移动硬盘离线导致历史丢失。
 """
 from __future__ import annotations
 
@@ -12,17 +15,28 @@ from . import config, db, metadata
 BRACKET_RE = re.compile(r"\[[^\]]*\]")
 PAREN_RE = re.compile(r"\([^)]*\)")
 TAG_RE = re.compile(
-    r"\b(?:1080p|720p|2160p|4K|HEVC|x264|x265|H\.?264|H\.?265|AAC|FLAC|10bit|8bit|WEB-?Rip|WEB-?DL|BDRip|BluRay|ASSx?\d?|GB|Big5|简|繁|内嵌|外挂)\b",
+    r"\b(?:1080p|720p|2160p|4K|HEVC|x264|x265|H\.?264|H\.?265|AAC|FLAC|10bit|8bit|"
+    r"WEB-?Rip|WEB-?DL|BDRip|BluRay|ASSx?\d?|GB|Big5|简|繁|内嵌|外挂)\b",
     re.IGNORECASE,
 )
-SEASON_RE = re.compile(r"(?:S|Season|第)\s*(\d{1,2})\s*(?:季|期)?", re.IGNORECASE)
+# 标准剧集标记优先于模糊猜测
+SXXEYY_RE = re.compile(r"\bS(\d{1,2})E(\d{1,3})(?:-E?(\d{1,3}))?\b", re.IGNORECASE)
+SEASON_RE = re.compile(r"(?:Season|S|第)\s*(\d{1,2})\s*(?:季|期)?", re.IGNORECASE)
+SEASON_WORD_RE = re.compile(
+    r"\b(?:Season|S)\s*\d{1,2}\b|第\s*\d{1,2}\s*(?:季|期)|"
+    r"\b(?:2nd|3rd|1st)\s+Season\b",
+    re.IGNORECASE,
+)
+EPISODE_WORD_RE = re.compile(r"(?:EP|Episode|第)\s*\d{1,3}\s*(?:话|集|話)?", re.IGNORECASE)
+TRAILING_EP_RE = re.compile(r"[-–—_.\s]\s*(\d{1,3})\s*(?:v\d)?\s*$", re.IGNORECASE)
 EPISODE_PATTERNS = [
-    re.compile(r"[Ss](\d{1,2})[Ee](\d{1,3})"),
     re.compile(r"(?:EP|Episode|第)\s*(\d{1,3})\s*(?:话|集|話)?"),
     re.compile(r"^\s*[-_]?\s*(\d{1,3})\s*(?:v\d)?\s*$"),
     re.compile(r"[-_\s]\s*(\d{2,3})\s*(?:v\d)?\s*[-_\s\[]"),
 ]
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+# 「SP」这类短标记必须独立成词，Spy / Special 不能被误判为特典
+SPECIAL_RE = re.compile(r"(?<![A-Za-z])sp(?=\d|[^A-Za-z]|$)", re.IGNORECASE)
 
 
 def add_directory(path: str) -> dict:
@@ -59,36 +73,56 @@ def set_directory_enabled(dir_id: int, enabled: bool) -> dict:
 
 
 def should_ignore(path: Path) -> bool:
+    """跳过非视频、系统目录、样片与特典；短标记按词匹配，避免误杀正片。"""
     if any(part in config.IGNORE_DIR_NAMES for part in path.parts):
         return True
     if path.suffix.lower() not in config.VIDEO_EXTS:
         return True
-    name = path.name
-    return any(tag.lower() in name.lower() for tag in config.IGNORE_NAME_PATTERNS)
+    stem = path.stem.lower()
+    for tag in config.IGNORE_NAME_PATTERNS:
+        token = tag.lower()
+        if token == "sp":
+            if SPECIAL_RE.search(stem):
+                return True
+        elif token in stem:
+            return True
+    return False
 
 
 def parse_filename(filename: str) -> dict:
-    """从文件名提取作品名 / 季 / 集数（P0 基础版，P1 会更精细）。"""
+    """从文件名提取作品名 / 季 / 集数 / 年份。
+
+    同时兼容字幕组命名、Plex 风格 SxxEyy、中文「第 N 话」以及以集数结尾的文件名。
+    解析结果只用于识别与展示，不会回写或重命名原始文件。
+    """
     stem = Path(filename).stem
     season, episode = None, None
 
-    s_ep = EPISODE_PATTERNS[0].search(stem)
+    s_ep = SXXEYY_RE.search(stem)
     if s_ep:
         season, episode = int(s_ep.group(1)), int(s_ep.group(2))
     else:
         s = SEASON_RE.search(stem)
         if s:
             season = int(s.group(1))
-        for pattern in EPISODE_PATTERNS[1:]:
+        for pattern in EPISODE_PATTERNS:
             m = pattern.search(stem)
             if m:
                 episode = int(m.group(1))
                 break
+        if episode is None:
+            m = TRAILING_EP_RE.search(stem)
+            if m:
+                episode = int(m.group(1))
 
     year_match = YEAR_RE.search(stem)
     cleaned = BRACKET_RE.sub(" ", stem)
     cleaned = PAREN_RE.sub(" ", cleaned)
     cleaned = TAG_RE.sub(" ", cleaned)
+    cleaned = SXXEYY_RE.sub(" ", cleaned)
+    cleaned = SEASON_WORD_RE.sub(" ", cleaned)
+    cleaned = EPISODE_WORD_RE.sub(" ", cleaned)
+    cleaned = YEAR_RE.sub(" ", cleaned)
     cleaned = re.sub(r"[_\.]+", " ", cleaned)
     cleaned = re.sub(r"[-–—]\s*\d{1,3}\b.*$", " ", cleaned)
     cleaned = re.sub(r"\s+", " ", cleaned).strip(" -_[]()")
@@ -101,7 +135,7 @@ def parse_filename(filename: str) -> dict:
 
 
 def scan(directory_id: int | None = None, progress_cb=None) -> dict:
-    """增量扫描：已存在的文件只更新 size/mtime，不重复插入。"""
+    """增量扫描：已存在的文件只更新 size/mtime，不重复插入；结束即刻匹配中文名。"""
     db.init_db()
     target = "SELECT * FROM directories WHERE enabled = 1 AND id = ?" if directory_id else \
              "SELECT * FROM directories WHERE enabled = 1"
@@ -112,12 +146,14 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
     for directory in directories:
         root = Path(directory["path"])
         if not root.exists():
+            # 目录暂时不可达（移动硬盘未插、网络盘掉线）时保留历史，不删记录
             continue
         count = 0
         for path in root.rglob("*"):
-            if not path.is_file() or should_ignore(path):
-                continue
             try:
+                # is_file() 内部也会 stat；文件被占用或权限不足时不能让整个扫描中断
+                if not path.is_file() or should_ignore(path):
+                    continue
                 stat = path.stat()
             except OSError:
                 skipped += 1
