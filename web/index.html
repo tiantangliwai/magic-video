@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Magic Video · 播放历史</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo"><span></span></div>
+      <div class="brand-text"><h1>Magic Video</h1><p>播放历史与续播</p></div>
+    </div>
+    <nav class="nav">
+      <button class="nav-item active" data-view="home"><i class="ic ic-home"></i>总览</button>
+      <button class="nav-item" data-view="continue"><i class="ic ic-play"></i>继续观看</button>
+      <button class="nav-item" data-view="history"><i class="ic ic-clock"></i>历史记录</button>
+      <button class="nav-item" data-view="library"><i class="ic ic-grid"></i>媒体库</button>
+      <button class="nav-item" data-view="watched"><i class="ic ic-check"></i>看过的列表</button>
+      <button class="nav-item" data-view="import"><i class="ic ic-import"></i>导入列表</button>
+      <button class="nav-item" data-view="scan"><i class="ic ic-folder"></i>扫描目录</button>
+      <button class="nav-item" data-view="settings"><i class="ic ic-gear"></i>设置</button>
+    </nav>
+    <div class="sidebar-foot">
+      <div class="daemon-state"><span class="dot" id="daemonDot"></span><span id="daemonText">检测后台记录…</span></div>
+      <button class="btn btn-ghost btn-sm" data-action="start-daemon">启动后台记录</button>
+      <div class="version" id="versionText">v0.1.0</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-title"><h2 id="viewTitle">总览</h2><p id="viewSubtitle">你的播放进度一目了然</p></div>
+      <div class="player-chip" id="playerChip"><span class="dot gray"></span><span>正在检测播放器…</span></div>
+    </header>
+    <div class="content" id="content"></div>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+data/
+*.db
+*.db-wal
+*.db-shm
+*.log
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.workbuddy/
+.vscode/
+.idea/
+dist/
+build/
+*.spec
+config.local.json
+.DS_Store
