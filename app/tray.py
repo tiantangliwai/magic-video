@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from . import config, db, metadata_queue, scanner
+from . import config, db, scanner
 
 
 def make_icon(size: int = 64) -> Image.Image:
@@ -50,9 +50,8 @@ class Tray:
     def _scan_now(self, icon=None, item=None):
         def work():
             try:
+                # scanner.scan() 内部已包含中文名即时匹配
                 scanner.scan()
-                metadata_queue.import_aliases()
-                metadata_queue.export_queue()
             except Exception:
                 pass
         threading.Thread(target=work, daemon=True).start()

@@ -10,7 +10,7 @@ DATA_DIR = APP_DIR / "data"
 DB_PATH = DATA_DIR / "library.db"
 COVER_DIR = DATA_DIR / "covers"
 LOG_DIR = DATA_DIR / "logs"
-PENDING_TITLES_FILE = DATA_DIR / "pending_titles.json"
+BUILTIN_ALIAS_FILE = APP_PACKAGE_DIR / "data" / "aliases_builtin.json"
 ALIAS_IMPORT_FILE = DATA_DIR / "alias_import.json"
 
 POTPLAYER_DEFAULT = Path(r"D:\tool\DAUM\PotPlayer\PotPlayerMini64.exe")

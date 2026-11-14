@@ -5,6 +5,7 @@ WAL 模式保证「托盘守护进程」与「主窗口进程」可以并发读�
 from __future__ import annotations
 
 import sqlite3
+import threading
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterable, Sequence
@@ -60,6 +61,8 @@ CREATE TABLE IF NOT EXISTS media_files (
     partial_hash  TEXT,
     title_raw     TEXT,
     title_guess   TEXT,
+    title_cn      TEXT,
+    match_by      TEXT,
     season_no     INTEGER,
     episode_no    INTEGER,
     year          INTEGER,
@@ -82,6 +85,7 @@ CREATE TABLE IF NOT EXISTS watched_list (
     subject_id    INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
     source        TEXT NOT NULL DEFAULT 'manual',
     status        TEXT NOT NULL DEFAULT 'watched',
+    match_by      TEXT,
     imported_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
     note          TEXT
 );
@@ -152,14 +156,40 @@ def session():
         conn.close()
 
 
+def _migrate(conn: sqlite3.Connection) -> None:
+    """为已存在的旧库补列：只 ALTER ADD COLUMN，不重建表、不丢已有播放记录。"""
+    additions = {
+        "media_files": (("title_cn", "TEXT"), ("match_by", "TEXT")),
+        "watched_list": (("match_by", "TEXT"),),
+    }
+    for table, columns in additions.items():
+        existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        for name, decl in columns:
+            if name not in existing:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
+_INIT_LOCK = threading.Lock()
+_INITIALIZED = False
+
+
 def init_db() -> None:
-    with session() as conn:
-        conn.executescript(SCHEMA)
-        for key, value in config.DEFAULTS.items():
-            conn.execute(
-                "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
-                (key, str(value)),
-            )
+    """建表 + 迁移 + 写默认设置；同一进程只执行一次，避免界面刷新时反复写库。"""
+    global _INITIALIZED
+    if _INITIALIZED:
+        return
+    with _INIT_LOCK:
+        if _INITIALIZED:
+            return
+        with session() as conn:
+            conn.executescript(SCHEMA)
+            _migrate(conn)
+            for key, value in config.DEFAULTS.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                    (key, str(value)),
+                )
+        _INITIALIZED = True
 
 
 def rows(sql: str, params: Sequence[Any] = ()) -> list[dict]:

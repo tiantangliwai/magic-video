@@ -13,7 +13,16 @@ const VIEW_META = {
   watched: ['看过的列表', '你导入的已观看作品'],
   import: ['导入列表', '把看过的动漫一次性记录到数据库'],
   scan: ['扫描目录', '添加已下载视频的存放位置'],
-  settings: ['设置', '播放器、记录与中文补全'],
+  settings: ['设置', '播放器、记录与中文名匹配'],
+};
+
+const MATCH_LABEL = {
+  builtin: ['离线词典', 'green'],
+  local: ['本地词典', 'green'],
+  online: ['在线匹配', 'green'],
+  native: ['中文原名', 'blue'],
+  user: ['手动指定', 'green'],
+  none: ['未匹配', 'amber'],
 };
 
 function esc(value) {
@@ -49,7 +58,7 @@ function toast(message, ok) {
   el.textContent = (ok === false ? '×  ' : '✓  ') + message;
   el.classList.add('show');
   clearTimeout(el._timer);
-  el._timer = setTimeout(() => el.classList.remove('show'), 3000);
+  el._timer = setTimeout(() => el.classList.remove('show'), 3200);
 }
 
 function setContent(html) { document.getElementById('content').innerHTML = html; }
@@ -59,7 +68,7 @@ function empty(text, sub) {
 }
 
 function progressItem(r, actions) {
-  const name = r.title_guess || r.filename || '未知文件';
+  const name = r.display_title || r.title_guess || r.filename || '未知文件';
   const ep = r.episode_no ? ` · 第 ${r.episode_no} 集` : '';
   const season = r.season_no ? ` · 第 ${r.season_no} 季` : '';
   const pct = Math.min(100, Math.max(0, num(r.percent)));
@@ -126,7 +135,7 @@ async function renderHistory() {
   setContent(`<div class="card"><h3>历史记录</h3><p class="hint">共 ${list.length} 次观看会话，按时间倒序。</p>
     <div class="list">${list.length ? list.map(r => `<div class="item">
       <div class="thumb">⌚</div>
-      <div class="body"><div class="name">${esc(r.title_guess || r.filename || '未知文件')}
+      <div class="body"><div class="name">${esc(r.display_title || r.filename || '未知文件')}
         ${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}</div>
         <div class="meta">${esc(shortDate(r.started_at))} → ${esc(shortDate(r.ended_at))}</div></div>
       <div class="right">${fmtMs(r.from_ms)} → ${fmtMs(r.to_ms)}<br><span class="mono">最远 ${fmtMs(r.max_ms)}</span></div>
@@ -137,11 +146,12 @@ async function renderLibrary() {
   const keyword = (document.getElementById('libSearch') || {}).value || '';
   const list = await call('get_media_files', keyword, 400);
   setContent(`<div class="card"><h3>媒体库</h3>
-    <p class="hint">已扫描到的本地视频。P1 阶段会在这里展示中文名、封面与季度分组。</p>
-    <div class="field"><input class="input" id="libSearch" placeholder="按文件名或标题搜索…" value="${esc(keyword)}"></div>
+    <p class="hint">已扫描到的本地视频。外文文件名在添加目录时会自动匹配成中文名，原文仍保留在下方。</p>
+    <div class="field"><input class="input" id="libSearch" placeholder="按文件名、中文名或原名搜索…" value="${esc(keyword)}"></div>
     <div class="list">${list.length ? list.map(r => `<div class="item">
       <div class="thumb">▶</div>
-      <div class="body"><div class="name">${esc(r.title_guess || r.filename)}</div>
+      <div class="body"><div class="name">${esc(r.display_title || r.filename)}
+        ${r.title_cn ? '<span class="badge green">已匹配中文</span>' : ''}</div>
         <div class="meta">${esc(r.filename)}${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}</div>
         <div class="mono">${esc(r.path)}</div></div>
       <div class="right">${num(r.percent) ? `${num(r.percent).toFixed(0)}%<br>` : ''}
@@ -163,54 +173,76 @@ async function renderLibrary() {
 async function renderWatched() {
   const list = await call('get_watched_list', 500);
   setContent(`<div class="card"><h3>看过的列表</h3>
-    <p class="hint">你手动导入的已观看作品，共 ${list.length} 条。可在「导入列表」继续追加。</p>
-    <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
-    <tbody>${list.length ? list.map(r => `<tr>
-      <td>${esc(r.title)}</td><td>${esc(r.title_cn || '—')}</td><td>${r.season_no ? esc(r.season_no) : '—'}</td>
+    <p class="hint">你手动导入的已观看作品，共 ${list.length} 条。中文名在导入那一刻就已自动匹配完成。</p>
+    <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名</th><th>匹配方式</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
+    <tbody>${list.length ? list.map(r => {
+      const [label, tone] = MATCH_LABEL[r.match_by] || ['—', ''];
+      return `<tr>
+      <td>${esc(r.title)}</td><td>${esc(r.title_cn || '—')}</td>
+      <td><span class="badge ${tone}">${esc(label)}</span></td>
+      <td>${r.season_no ? esc(r.season_no) : '—'}</td>
       <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
       <td>${esc(shortDate(r.imported_at))}</td>
       <td><button class="btn btn-sm btn-danger" data-action="delete-watched" data-id="${r.id}">删除</button></td>
-    </tr>`).join('') : `<tr><td colspan="6">${empty('还没有导入', '到「导入列表」粘贴你的动漫清单')}</td></tr>`}
+    </tr>`;
+    }).join('') : `<tr><td colspan="7">${empty('还没有导入', '到「导入列表」粘贴你的动漫清单')}</td></tr>`}
     </tbody></table></div></div>`);
 }
 
-function renderImport() {
+async function renderImport() {
+  const dict = await call('dictionary_status');
   setContent(`<div class="card"><h3>导入看过的动漫列表</h3>
     <p class="hint">每行一个作品，支持 <b>作品名</b>、<b>作品名 S2 01-12</b>、<b>作品名 第1季 1-25集</b>，
     也支持 CSV「作品名,季,起始集,结束集」。以 # 开头的行会被忽略。</p>
-    <div class="field"><textarea class="input" id="importText" placeholder="进击的巨人&#10;更衣人偶坠入爱河 S2 01-12&#10;葬送的芙莉莲,1,1,28&#10;间谍过家家 第1季 1-12"></textarea></div>
+    <div class="notice">点「解析预览」时就会自动匹配中文名：先查随程序自带的离线词典（${num(dict.builtin_terms)} 部作品）与本地已学对照（${num(dict.learned)} 条），
+    未命中的外文名再尝试在线检索。结果当场写入数据库，没有定时任务；预览里的中文名可以直接改，改动会被记住。</div>
+    <div class="field"><textarea class="input" id="importText" placeholder="进击的巨人&#10;更衣人偶坠入爱河 S2 01-12&#10;葬送的芙莉莲,1,1,28&#10;Sono Bisque Doll wa Koi wo Suru&#10;Attack on Titan 第1季 1-25"></textarea></div>
     <div class="btn-row" style="margin-bottom:16px">
-      <button class="btn btn-primary" data-action="preview">解析预览</button>
+      <button class="btn btn-primary" data-action="preview">解析预览并匹配中文名</button>
       <button class="btn" data-action="commit">确认导入</button>
       <button class="btn" data-action="goto" data-view="watched">查看已导入</button>
     </div>
-    <div id="previewBox">${empty('等待输入', '粘贴清单后点击「解析预览」')}</div></div>`);
+    <div id="previewBox">${empty('等待输入', '粘贴清单后点击「解析预览并匹配中文名」')}</div></div>`);
 }
 
 function renderPreview(data) {
   lastPreviewRows = data.rows || [];
+  const m = data.match || {};
+  const onlineNote = m.online_available
+    ? '在线检索可用'
+    : '在线源当前不可达，已使用离线词典；可在设置里配置代理后点「重新匹配」';
   document.getElementById('previewBox').innerHTML = `<div class="notice">
-    解析出 ${data.total} 条 · 重复 ${data.duplicates} 条（导入时自动跳过）· 待补全中文名 ${data.unmatched_cn} 条</div>
-    <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名</th><th>季</th><th>集数</th><th>状态</th></tr></thead><tbody>
-    ${lastPreviewRows.length ? lastPreviewRows.map(r => `<tr>
-      <td>${esc(r.title)}</td><td>${esc(r.title_cn)}</td><td>${r.season_no || '—'}</td>
+    解析出 ${data.total} 条 · 重复 ${data.duplicates} 条（导入时自动跳过）·
+    自动匹配 ${num(m.matched)} 条（离线词典 ${num(m.by_builtin)} / 在线 ${num(m.by_online)}）·
+    未匹配 ${data.unmatched_cn} 条<br><span class="hint">${esc(onlineNote)}；中文名列可直接编辑，改动会记入词典。</span></div>
+    <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名（可编辑）</th><th>季</th><th>集数</th><th>匹配状态</th></tr></thead><tbody>
+    ${lastPreviewRows.length ? lastPreviewRows.map((r, i) => {
+      const [label, tone] = r.duplicate ? ['已存在', 'amber'] : (MATCH_LABEL[r.match_by] || ['—', '']);
+      return `<tr>
+      <td>${esc(r.title)}</td>
+      <td><input class="input cn-edit" data-idx="${i}" value="${esc(r.title_cn)}"
+        style="padding:6px 9px;font-size:12px;min-width:180px"></td>
+      <td>${r.season_no || '—'}</td>
       <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to}`) : '—'}</td>
-      <td>${r.duplicate ? '<span class="badge amber">已存在</span>' : r.matched_cn ? '<span class="badge green">已匹配中文</span>' : '<span class="badge blue">待补全</span>'}</td>
-    </tr>`).join('') : `<tr><td colspan="5">没有解析出有效条目</td></tr>`}</tbody></table></div>`;
+      <td><span class="badge ${tone}">${esc(label)}</span></td>
+    </tr>`;
+    }).join('') : `<tr><td colspan="5">没有解析出有效条目</td></tr>`}</tbody></table></div>`;
 }
 
 async function renderScan() {
-  const [dirs, queue, last] = await Promise.all([
-    call('get_directories'), call('queue_status'), call('get_last_scan'),
+  const [dirs, dict, last] = await Promise.all([
+    call('get_directories'), call('dictionary_status'), call('get_last_scan'),
   ]);
   setContent(`<div class="card"><h3>添加视频目录</h3>
-    <p class="hint">添加后会自动递归扫描常见的视频格式（mkv / mp4 / avi / ts 等），并跳过样片、特典与字幕文件。</p>
+    <p class="hint">添加后会自动递归扫描常见的视频格式（mkv / mp4 / avi / ts 等），跳过样片、特典与字幕文件，
+    并在这次扫描里就把外文文件名匹配成中文名。</p>
     <div class="field"><label>目录绝对路径</label>
       <div style="display:flex;gap:9px"><input class="input" id="dirPath" placeholder="例如 D:\\Anime\\已下载">
         <button class="btn" data-action="choose-dir">浏览</button>
         <button class="btn btn-primary" data-action="add-dir">添加并扫描</button></div>
       <div class="tip">路径含空格也可以，直接粘贴即可。</div></div>
-    ${last ? `<div class="notice">上次扫描：新增 ${num(last.added)} 个文件，更新 ${num(last.updated)} 个。</div>` : ''}
+    ${last ? `<div class="notice">上次扫描：新增 ${num(last.added)} 个文件，更新 ${num(last.updated)} 个，
+      自动匹配中文名 ${num(last.matched_cn)} / ${num(last.match_total)} 条。</div>` : ''}
     <div class="list">${dirs.length ? dirs.map(d => `<div class="item">
       <div class="thumb">▤</div><div class="body"><div class="name">${esc(d.path)}</div>
         <div class="meta">${num(d.files)} 个文件 · 最近扫描 ${esc(shortDate(d.last_scan_at))}
@@ -222,12 +254,15 @@ async function renderScan() {
     <div class="btn-row" style="margin-top:14px"><button class="btn" data-action="scan">重新扫描全部</button></div>
   </div>
   <div class="card"><h3>外文名 → 中文名</h3>
-    <p class="hint">扫描后识别不出中文名的标题会进入待补全队列；WorkBuddy 定时自动化任务会联网检索并回填，
-    软件每次启动与扫描时自动导入结果。本机直连境外元数据接口超时也不会影响这条通道。</p>
-    <div class="notice">当前待补全 <b>${num(queue.pending)}</b> 条 · 队列文件 <span class="mono">data/pending_titles.json</span></div>
+    <p class="hint">匹配只在导入列表、扫描目录或点「重新匹配」时执行，<b>没有每日定时任务、没有待补全队列</b>。
+    优先命中离线词典，未命中的外文名会尝试在线检索；本机连不上时自动降级，不阻塞扫描和播放记录。</p>
+    <div class="notice">词典共 <b>${num(dict.alias_total)}</b> 条对照（内置 ${num(dict.builtin)} 条 / 已学 ${num(dict.learned)} 条）·
+      尚未匹配 <b>${num(dict.unmatched)}</b> 条 ·
+      在线检索${dict.online_available ? '<span class="badge green">可用</span>' : '<span class="badge amber">当前不可达</span>'}
+      ${dict.online_error ? `<br><span class="mono" style="font-size:11px">${esc(dict.online_error)}</span>` : ''}</div>
     <div class="btn-row">
-      <button class="btn" data-action="export-queue">导出待补全清单</button>
-      <button class="btn" data-action="import-aliases">导入补全结果</button>
+      <button class="btn btn-primary" data-action="rematch">重新匹配未识别标题</button>
+      <button class="btn" data-action="import-alias-file">导入手动补充词典</button>
       <button class="btn" data-action="open-data">打开数据目录</button>
     </div></div>`);
 }
@@ -241,6 +276,7 @@ function isOn(v) { return v === true || v === 1 || v === '1' || v === 'true' || 
 
 async function renderSettings() {
   const s = await call('get_settings');
+  const d = s.dictionary || {};
   setContent(`<div class="grid-2">
     <div class="card"><h3>播放器与记录</h3>
       <div class="field"><label>PotPlayer 可执行文件路径</label>
@@ -253,18 +289,21 @@ async function renderSettings() {
       ${switchHtml('recording_enabled', isOn(s.recording_enabled), '启用播放记录', '关闭后守护进程不再写入历史')}
       ${switchHtml('autostart', isOn(s.autostart_enabled), '开机自动启动后台记录', '写当前用户注册表 Run 项，无需管理员权限')}
     </div>
-    <div class="card"><h3>中文补全与网络</h3>
-      <div class="notice">软件独立运行时无法直接调用对话里的联网检索，因此采用「本地队列 + WorkBuddy 定时自动化」：
-      软件导出待补全标题 → 自动化任务联网检索中文名并回写 → 软件自动导入。全程无需人工干预。</div>
+    <div class="card"><h3>中文名自动匹配</h3>
+      <div class="notice">只在<b>导入列表 / 扫描目录 / 手动点「重新匹配」</b>时执行，没有定时任务。
+      顺序：内置离线词典 → 本地已学对照 → 在线 Bangumi（未命中且允许联网时才查）。结果当场入库并展示。
+      导入预览里改过的中文名会被永久记住，下次自动命中。</div>
+      <p class="hint" style="margin:0 0 12px">当前词典 ${num(d.alias_total)} 条 · 未匹配 ${num(d.unmatched)} 条 ·
+        在线检索${d.online_available ? '可用' : '当前不可达（可在下方配置代理）'}</p>
       <div class="field"><label>元数据来源策略</label>
         <select class="input" id="set-metadata_source">
-          <option value="cache_first" ${s.metadata_source === 'cache_first' ? 'selected' : ''}>本地缓存优先（推荐）</option>
-          <option value="online_first" ${s.metadata_source === 'online_first' ? 'selected' : ''}>在线检索优先</option>
-          <option value="local_only" ${s.metadata_source === 'local_only' ? 'selected' : ''}>仅使用本地词典</option>
+          <option value="cache_first" ${s.metadata_source === 'cache_first' ? 'selected' : ''}>离线词典优先，未命中再联网（推荐）</option>
+          <option value="online_first" ${s.metadata_source === 'online_first' ? 'selected' : ''}>导入时总是尝试联网校准</option>
+          <option value="local_only" ${s.metadata_source === 'local_only' ? 'selected' : ''}>仅使用离线词典，完全不联网</option>
         </select></div>
       <div class="field"><label>HTTP 代理（可选）</label>
         <input class="input" id="set-http_proxy" placeholder="例如 http://127.0.0.1:7890" value="${esc(s.http_proxy)}">
-        <div class="tip">填写后软件会尝试直连 Bangumi / TMDB；留空则完全依赖本地缓存通道。</div></div>
+        <div class="tip">本机直连境外元数据接口超时；填代理后保存设置，下次导入即可实时补全长尾作品。</div></div>
       <div class="field"><label>Bangumi API 地址</label>
         <input class="input" id="set-bangumi_base" value="${esc(s.bangumi_base)}"></div>
       <div class="field"><label>主窗口尺寸</label>
@@ -275,6 +314,7 @@ async function renderSettings() {
     </div></div>
     <div class="card"><div class="btn-row">
       <button class="btn btn-primary" data-action="save-settings">保存设置</button>
+      <button class="btn" data-action="rematch">重新匹配未识别标题</button>
       <button class="btn" data-action="open-data">打开数据目录</button>
     </div><p class="hint" style="margin:14px 0 0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
 }
@@ -352,25 +392,41 @@ async function handleAction(action, btn) {
       const path = document.getElementById('dirPath').value.trim();
       if (!path) { toast('请先填写目录路径', false); return; }
       const r = await call('add_directory', path);
-      toast(r.ok ? '目录已添加，正在后台扫描' : r.error, r.ok);
-      setTimeout(() => { if (currentView === 'scan') refresh(); }, 1200);
+      toast(r.ok ? '目录已添加，正在后台扫描并匹配中文名' : r.error, r.ok);
+      setTimeout(() => { if (currentView === 'scan') refresh(); }, 1500);
       return;
     }
     case 'scan': {
-      await call('scan_now'); toast('扫描已在后台开始，稍后刷新查看');
-      setTimeout(() => { if (currentView === 'scan') refresh(); }, 1500);
+      await call('scan_now'); toast('扫描已在后台开始，完成后自动匹配中文名');
+      setTimeout(() => { if (currentView === 'scan') refresh(); }, 1800);
       return;
     }
     case 'preview': {
       const text = document.getElementById('importText').value;
-      renderPreview(await call('preview_import', text));
+      btn.disabled = true; btn.textContent = '正在匹配中文名…';
+      try {
+        renderPreview(await call('preview_import', text));
+      } finally {
+        btn.disabled = false; btn.textContent = '解析预览并匹配中文名';
+      }
       return;
     }
     case 'commit': {
-      if (!lastPreviewRows.length) { toast('请先点击「解析预览」', false); return; }
+      if (!lastPreviewRows.length) { toast('请先点击「解析预览并匹配中文名」', false); return; }
+      document.querySelectorAll('.cn-edit').forEach(el => {
+        const i = Number(el.dataset.idx);
+        if (!lastPreviewRows[i]) return;
+        const value = el.value.trim();
+        if (value !== lastPreviewRows[i].title_cn) {
+          lastPreviewRows[i].cn_edited = true;
+          lastPreviewRows[i].title_cn = value || lastPreviewRows[i].title;
+        }
+      });
       const r = await call('commit_import', lastPreviewRows);
-      toast(`导入 ${r.inserted} 条，跳过重复 ${r.skipped} 条`, r.ok);
+      toast(`导入 ${r.inserted} 条 · 跳过重复 ${r.skipped} 条` +
+        (r.learned ? ` · 已记住 ${r.learned} 条中文名` : ''), r.ok);
       lastPreviewRows = [];
+      document.getElementById('previewBox').innerHTML = empty('导入完成', '到「看过的列表」查看结果');
       return;
     }
     case 'save-settings': {
@@ -383,8 +439,21 @@ async function handleAction(action, btn) {
       toast('设置已保存');
       return;
     }
-    case 'export-queue': { const r = await call('export_queue'); toast(`已导出 ${r.count} 条待补全标题`, r.ok); return; }
-    case 'import-aliases': { const r = await call('import_aliases'); toast(`已导入 ${r.imported} 条中文名`, r.ok); break; }
+    case 'rematch': {
+      btn.disabled = true; btn.textContent = '正在匹配…';
+      try {
+        const r = await call('rematch_all');
+        toast(`重新匹配 ${r.matched} / ${r.total} 条（在线 ${r.by_online} 条）`, r.ok);
+      } finally {
+        btn.disabled = false;
+      }
+      break;
+    }
+    case 'import-alias-file': {
+      const r = await call('import_alias_file');
+      toast(r.ok ? `已导入 ${r.imported} 条对照，重新匹配 ${r.rematched} 条` : r.error, r.ok);
+      break;
+    }
     case 'open-data': await call('open_data_folder'); return;
     case 'start-daemon': {
       const r = await call('start_daemon');

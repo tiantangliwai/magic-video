@@ -7,7 +7,7 @@ from __future__ import annotations
 import threading
 from pathlib import Path
 
-from . import db, potplayer, scanner
+from . import db, metadata, potplayer, scanner
 
 
 class Watcher:
@@ -64,12 +64,16 @@ class Watcher:
         if existing:
             return existing
         info = scanner.parse_filename(media_name)
+        # 外部打开的文件也即时查一次离线词典；守护进程不发网络请求，避免阻塞轮询
+        hit = metadata.match_one(info["title_guess"], allow_online=False)
+        title_cn = hit["title_cn"] if hit.get("matched") else None
+        match_by = hit["by"] if hit.get("matched") else None
         file_id = db.execute(
-            "INSERT INTO media_files(path, filename, title_raw, title_guess, season_no, episode_no, status) "
-            "VALUES (?, ?, ?, ?, ?, ?, 'external')",
+            "INSERT INTO media_files(path, filename, title_raw, title_guess, title_cn, match_by, "
+            "season_no, episode_no, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'external')",
             (
                 media_name, media_name, Path(media_name).stem, info["title_guess"],
-                info["season_no"], info["episode_no"],
+                title_cn, match_by, info["season_no"], info["episode_no"],
             ),
         )
         return db.row("SELECT * FROM media_files WHERE id = ?", (file_id,))

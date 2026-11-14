@@ -12,7 +12,7 @@ import csv
 import io
 import re
 
-from . import db
+from . import db, metadata
 
 SEASON_RES = [
     re.compile(r"第\s*(\d{1,2})\s*季", re.IGNORECASE),
@@ -32,22 +32,8 @@ def normalize_title(text: str) -> str:
 
 
 def lookup_chinese(title: str) -> str | None:
-    """优先查本地别名词典，再查已有作品表；查不到时返回 None 交由补全队列处理。"""
-    if not title:
-        return None
-    hit = db.row("SELECT title_cn FROM name_alias WHERE lower(raw_title) = lower(?)", (title,))
-    if hit:
-        return hit["title_cn"]
-    hit = db.row(
-        "SELECT title_cn FROM name_alias WHERE lower(raw_title) LIKE lower(?) LIMIT 1",
-        (f"%{title[:20]}%",),
-    )
-    if hit:
-        return hit["title_cn"]
-    hit = db.row(
-        "SELECT title_cn FROM subjects WHERE title_cn = ? OR title_orig = ? OR aliases LIKE ? LIMIT 1",
-        (title, title, f"%{title}%"),
-    )
+    """兼容封装：查内置 + 本地已学词典（自动匹配统一由 metadata 模块驱动）。"""
+    hit = metadata.lookup_local(title)
     return hit["title_cn"] if hit else None
 
 
@@ -79,6 +65,11 @@ def parse_line(line: str) -> dict | None:
             raw = raw[: m.start()] + " " + raw[m.end():]
             break
 
+    # 年份要先去掉，否则 "2099" 这类数字会被集数正则误切
+    year_match = YEAR_RE.search(raw)
+    if year_match:
+        raw = raw[: year_match.start()] + " " + raw[year_match.end():]
+
     ep_from = ep_to = None
     m = RANGE_RE.search(raw)
     if m:
@@ -89,10 +80,6 @@ def parse_line(line: str) -> dict | None:
         if m:
             ep_from = ep_to = int(m.group(1))
             raw = raw[: m.start()] + " " + raw[m.end():]
-
-    year_match = YEAR_RE.search(raw)
-    if year_match:
-        raw = raw[: year_match.start()] + " " + raw[year_match.end():]
 
     title = normalize_title(raw)
     if not title:
@@ -107,7 +94,9 @@ def _make_record(raw: str, title: str, season, ep_from, ep_to) -> dict:
     return {
         "raw_text": raw,
         "title": title,
-        "title_cn": lookup_chinese(title) or title,
+        "title_cn": title,  # 占位，preview / commit 时统一自动匹配
+        "match_by": "none",
+        "cn_edited": False,
         "season_no": season,
         "episode_from": ep_from,
         "episode_to": ep_to,
@@ -138,27 +127,47 @@ def parse_text(text: str) -> list[dict]:
 
 
 def preview(text: str) -> dict:
+    """解析 + 即时自动匹配中文名，结果当场返回给界面（不产生任何待办队列）。"""
     db.init_db()
+    metadata.ensure_builtin_loaded()
     records = parse_text(text)
+    match_result = metadata.match_titles([r["title"] for r in records])
     existing = {
         (r["title"].lower(), r["season_no"] or 0, r["episode_from"] or 0, r["episode_to"] or 0)
         for r in db.rows("SELECT title, season_no, episode_from, episode_to FROM watched_list")
     }
     for rec in records:
         rec["duplicate"] = _key(rec) in existing
+        hit = match_result["results"].get(rec["title"])
+        if hit and hit.get("matched"):
+            rec["title_cn"] = hit["title_cn"]
+            rec["match_by"] = hit["by"]
+        if rec.get("season_no") and rec["season_no"] > 1:
+            season_cn = metadata.lookup_season(rec["title"], rec["season_no"])
+            if season_cn:
+                rec["title_cn"] = season_cn
         rec["matched_cn"] = bool(rec["title_cn"] and rec["title_cn"] != rec["title"])
     return {
         "ok": True,
         "rows": records,
         "total": len(records),
         "duplicates": sum(1 for r in records if r["duplicate"]),
-        "unmatched_cn": sum(1 for r in records if not r["matched_cn"]),
+        "unmatched_cn": sum(1 for r in records if r["match_by"] == "none"),
+        "match": {
+            "matched": match_result["matched"],
+            "by_builtin": match_result["by_builtin"],
+            "by_online": match_result["by_online"],
+            "online_available": match_result["online_available"],
+            "online_error": match_result["online_error"],
+        },
     }
 
 
 def commit(records: list[dict], source: str = "manual") -> dict:
+    """入库；界面里手改过的中文名会被记住，下次导入自动命中。"""
     db.init_db()
-    inserted = skipped = 0
+    metadata.ensure_builtin_loaded()
+    inserted = skipped = learned = 0
     for rec in records:
         key = _key(rec)
         exists = db.scalar(
@@ -169,13 +178,20 @@ def commit(records: list[dict], source: str = "manual") -> dict:
         if exists:
             skipped += 1
             continue
+        title = rec.get("title") or ""
+        title_cn = (rec.get("title_cn") or title).strip()
+        match_by = rec.get("match_by") or "none"
+        if rec.get("cn_edited") and title_cn and title_cn != title:
+            metadata.remember(title, title_cn, source="user")
+            match_by = "user"
+            learned += 1
         db.execute(
-            "INSERT INTO watched_list(raw_text, title, title_cn, season_no, episode_from, "
-            "episode_to, source) VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO watched_list(raw_text, title, title_cn, match_by, season_no, "
+            "episode_from, episode_to, source) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
-                rec.get("raw_text"), rec.get("title"), rec.get("title_cn"),
+                rec.get("raw_text"), title, title_cn, match_by,
                 rec.get("season_no"), rec.get("episode_from"), rec.get("episode_to"), source,
             ),
         )
         inserted += 1
-    return {"ok": True, "inserted": inserted, "skipped": skipped}
+    return {"ok": True, "inserted": inserted, "skipped": skipped, "learned": learned}

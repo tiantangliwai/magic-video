@@ -3,13 +3,13 @@ from __future__ import annotations
 
 import webview
 
-from . import config, db, metadata_queue
+from . import config, db, metadata
 from .api import Api
 
 
 def create_window(debug: bool = False) -> None:
     db.init_db()
-    metadata_queue.import_aliases()
+    metadata.ensure_builtin_loaded()
     api = Api()
     settings = db.all_settings()
 

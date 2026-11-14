@@ -7,7 +7,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from . import config, db
+from . import config, db, metadata
 
 BRACKET_RE = re.compile(r"\[[^\]]*\]")
 PAREN_RE = re.compile(r"\([^)]*\)")
@@ -148,5 +148,10 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
             "UPDATE directories SET last_scan_at = ?, file_count = ? WHERE id = ?",
             (db.now(), count, directory["id"]),
         )
+    # 扫描结束即完成中文名匹配，结果当场写入媒体库，不依赖任何定时任务
+    match_result = metadata.auto_match_media()
     return {"ok": True, "added": added, "updated": updated, "skipped": skipped,
-            "directories": len(directories)}
+            "directories": len(directories),
+            "matched_cn": match_result.get("matched", 0),
+            "match_total": match_result.get("total", 0),
+            "match_online": match_result.get("online_available", False)}
