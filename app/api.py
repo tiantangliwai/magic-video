@@ -59,14 +59,11 @@ _MEDIA_SORTS = {
 }
 
 
-def _db_signature() -> tuple:
-    """媒体数据的指纹，用来判断缓存是否还有效。
+def _data_fingerprint() -> tuple:
+    """与「写库次数」无关的纯数据指纹：媒体行统计 + 看过的列表行统计。
 
-    刻意**不用**数据库文件 mtime：守护进程每 3 秒写一次播放进度，mtime 一直在变，
-    缓存会永远失效。这里只统计「影响分组的字段」：行数、最大 id、
-    文件名 / 中文名的总长度、软删除行数，再叠加本进程的写库次数
-    （覆盖改名作品、改设置这类不改变上述统计的写）。
-    播放进度变化不影响分组和封面，故意不纳入。
+    播放进度写入（守护每 3 秒一次）不会改变它，所以基于它的缓存不会被正常
+    播放打断；导入 / 同步看过的列表、改名、增删文件则一定会变。
     """
     values = (0, 0, 0, 0, 0)
     try:
@@ -80,8 +77,32 @@ def _db_signature() -> tuple:
         values = tuple(int(row.get(k) or 0) for k in ("n", "max_id", "fn", "cn", "del"))
     except Exception:
         pass
+    watched = (0, 0)
+    try:
+        row = db.row(
+            "SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(COALESCE(title, '')) "
+            "+ LENGTH(COALESCE(title_cn, ''))), 0) AS wl FROM watched_list"
+        ) or {}
+        watched = (int(row.get("n") or 0), int(row.get("wl") or 0))
+    except Exception:
+        pass
+    return values + watched
+
+
+def _db_signature() -> tuple:
+    """媒体数据的指纹，用来判断缓存是否还有效。
+
+    刻意**不用**数据库文件 mtime：守护进程每 3 秒写一次播放进度，mtime 一直在变，
+    缓存会永远失效。这里只统计「影响分组的字段」：行数、最大 id、
+    文件名 / 中文名的总长度、软删除行数、看过的列表行数与标题长度，
+    再叠加本进程的写库次数（覆盖改设置这类不改变上述统计的写）。
+    播放进度的具体位置不影响分组与标记，故意不纳入。
+
+    「看过的列表」单独算一份：剧集墙卡片的「看过」标记跟着它走，
+    同步 / 导入 / 清空之后必须失效，否则标记会停在旧状态。
+    """
     # 键里带库路径：测试会在临时库之间来回切，只看计数会把上一个库的结果带过来
-    return (str(config.DB_PATH), db.write_count()) + values
+    return (str(config.DB_PATH), db.write_count()) + _data_fingerprint()
 
 
 def _cache_get(key: tuple):
@@ -97,6 +118,105 @@ def _cache_put(key: tuple, value: dict) -> dict:
         _MEDIA_CACHE.clear()
     _MEDIA_CACHE[key] = (time.monotonic(), value)
     return value
+
+
+# ---- 剧集墙「是否看过」标记 -------------------------------------------------
+# 两个数据源合起来才完整：
+#   1) watch_progress：本软件里真正播过的集（精确到集，能算 3/12）；
+#   2) watched_list：导入 / 同步来的「看过的列表」（作品级，本地没有播放记录
+#      也应当算看过，否则用户导了几百部之后剧集墙全是「未看」，标记就没意义）。
+# 匹配沿用 watchlist 现成的规则（首个命中即停、短英文词只认独立单词），
+# 不另写一套模糊匹配，避免误标。
+
+def _group_file_ids(node: dict) -> list[int]:
+    """递归收集分组（含季子节点）里的全部文件 id，用来和看过的列表求交集。"""
+    ids: list[int] = []
+    stack = [node]
+    while stack:
+        current = stack.pop()
+        for item in current.get("files") or []:
+            fid = item.get("id")
+            if fid is not None:
+                ids.append(int(fid))
+        stack.extend(current.get("children") or [])
+    return ids
+
+
+_WATCHED_CACHE: dict = {"key": None, "items": []}
+
+
+def _title_contains(card_names: list[str], wanted: str) -> bool:
+    """卡片名与看过的列表标题是否确实是同一部作品。
+
+    ``watchlist.match_files`` 是给追剧列表用的**宽松**匹配（首个命中即停，
+    还会退化到「作品名里最具体的一段」），直接用会把
+    「斯巴达300勇士」算到「斯巴达克斯第二季」头上、「After Story」算到
+    「内情 The inside story」头上、`real真实` 算到一部英文片头上。
+    标记是二元判断，错标比漏标更伤信任，所以这里只认：
+
+    * 归一化后完全相等；或
+    * 一方完整包含另一方，且**短的那一侧至少 4 个字符**。
+
+    2~3 字的通用前缀（「魔王」「斯巴达」）永远不认，那些交给完全相等。
+    """
+    target = textmatch.normalize(wanted)
+    if len(target) < 2:
+        return False
+    for name in card_names:
+        current = textmatch.normalize(name)
+        if len(current) < 2:
+            continue
+        if current == target:
+            return True
+        short, long = (current, target) if len(current) <= len(target) else (target, current)
+        if len(short) >= 4 and short in long:
+            return True
+    return False
+
+
+def _watched_list_matches() -> list[tuple[frozenset[int], str]]:
+    """「看过的列表」里每条记录 -> (它匹配到的本地文件 id, 原始标题)。
+
+    建索引 + 匹配一次约 200ms，所以按数据指纹缓存。这里**刻意不含写库次数**：
+    守护每 3 秒写一次播放进度，写计数一直在涨，带上它等于每 3 秒重算一遍。
+    指纹里的「看过的列表行数 + 标题长度」已经能覆盖导入 / 同步 / 清空。
+    """
+    key = (str(config.DB_PATH),) + _data_fingerprint()
+    if _WATCHED_CACHE["key"] == key:
+        return _WATCHED_CACHE["items"]
+    items: list[tuple[frozenset[int], str]] = []
+    rows = db.rows("SELECT title, title_cn FROM watched_list")
+    if rows:
+        media = watchlist.media_index()      # 整批只建一次索引，不是每行一次
+        for row in rows:
+            for candidate in (row.get("title_cn"), row.get("title")):
+                name = str(candidate or "").strip()
+                if not name:
+                    continue
+                count, hits, _keyword = watchlist.match_files(name, media)
+                if count:
+                    ids = frozenset(int(h["id"]) for h in hits if h.get("id") is not None)
+                    items.append((ids, name))
+                    break
+    _WATCHED_CACHE.update(key=key, items=items)
+    return items
+
+
+def _watch_state(all_done: bool, watched: int, playing: int, listed: bool) -> str:
+    """卡片状态，前端只按这个字符串渲染，不在 JS 里重算优先级。
+
+    优先级：整部看完 > 看过一部分 > 看了一半 > 在「看过的列表」里 > 未看。
+    ``watching`` 排在 ``listed`` 前面：有真实进度时以进度为准。
+    """
+    if all_done:
+        return "done"
+    if watched:
+        return "partial"
+    if playing:
+        return "watching"
+    if listed:
+        return "listed"
+    return "none"
 
 
 class Api:
@@ -945,6 +1065,28 @@ class Api:
         return out
 
     @staticmethod
+    def _listed_in_watched_list(group: dict, cover_titles: list[str],
+                                matches: list[tuple[frozenset[int], str]]) -> bool:
+        """该分组是否在「看过的列表」里被记为看过。
+
+        两道条件缺一不可：① 列表条目确实匹配到了这个分组里的文件；
+        ② 标题也对得上（见 :func:`_title_contains`）。只满足①会把
+        《斯巴达克斯》标成《斯巴达300勇士》；只满足②在重名作品上会误标。
+        """
+        if not matches:
+            return False
+        ids = set(_group_file_ids(group))
+        if not ids:
+            return False
+        names = [str(group.get("label") or ""), *cover_titles]
+        for matched_ids, name in matches:
+            if ids.isdisjoint(matched_ids):
+                continue
+            if _title_contains(names, name):
+                return True
+        return False
+
+    @staticmethod
     def _card_clean_keyword(raw: str) -> str:
         """候选串 -> 可搜索的中文作品名；不像标题就返回空串。"""
         text = str(raw or "").strip()
@@ -1023,23 +1165,34 @@ class Api:
         tree = library_tree.build_tree(rows, "series", self._directory_options(),
                                       self._work_labels())
         cover_entries = covers.subject_covers()
+        # 「看过的列表」命中本地文件的记录：只在有数据时建一次索引（200ms），
+        # 剧集墙本体有 20s 缓存，不会每次切视图都付这笔钱。
+        watched_matches = _watched_list_matches()
         cards = []
         for group in self._prune_blacklisted_groups(tree.get("groups") or []):
             seasons = [c.get("label") for c in group.get("children", [])]
+            watched_count = int(group.get("watched_count") or 0)
+            playing_count = int(group.get("playing_count") or 0)
+            all_done = bool(group.get("all_done"))
+            cover_titles = self._group_cover_titles(group)
+            listed = self._listed_in_watched_list(group, cover_titles, watched_matches)
             cards.append({
                 "title": group.get("label", ""),
                 "search_keyword": self._card_search_keyword(group),
                 "file_count": group.get("file_count", 0),
-                "watched_count": group.get("watched_count", 0),
-                "playing_count": group.get("playing_count", 0),
+                "watched_count": watched_count,
+                "playing_count": playing_count,
                 "next_file_id": group.get("next_file_id"),
                 "season_count": len(seasons),
                 "seasons": seasons[:12],
                 "sub": group.get("sub", ""),
                 "group_id": group.get("id", ""),
-                "all_done": bool(group.get("all_done")),
+                "all_done": all_done,
+                # 卡片「是否看过」标记：前端只认这个字符串，不在 JS 里重算优先级
+                "watch_state": _watch_state(all_done, watched_count, playing_count, listed),
+                "watched_listed": listed,
                 "removable_count": int(group.get("removable_count") or 0),
-                "_cover_titles": self._group_cover_titles(group),
+                "_cover_titles": cover_titles,
             })
         keyword = str(opt.get("keyword") or "").strip().lower()
         if keyword:

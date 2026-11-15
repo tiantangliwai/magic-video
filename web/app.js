@@ -1289,6 +1289,25 @@ function procPollStart() {
   }, 2000);
 }
 
+// 卡片右上角的「是否看过」角标：状态由后端 _watch_state() 算好，
+// 这里只负责文案与配色，不在前端重算优先级（两处判断迟早会不一致）。
+function posterStateTag(card) {
+  const total = num(card.file_count);
+  const watched = num(card.watched_count);
+  switch (card.watch_state) {
+    case 'done':
+      return `<span class="poster-state is-done" title="本地 ${total} 集全部看完">✓ 已看完</span>`;
+    case 'partial':
+      return `<span class="poster-state is-part" title="本地 ${total} 集已看完 ${watched} 集">已看 ${watched}/${total}</span>`;
+    case 'watching':
+      return `<span class="poster-state is-watching" title="有 ${num(card.playing_count)} 集看了一半">在看</span>`;
+    case 'listed':
+      return '<span class="poster-state is-listed" title="在「看过的列表」里记录为看过（本地可能还没播放记录）">看过</span>';
+    default:
+      return '<span class="poster-state is-none" title="还没有看过">未看</span>';
+  }
+}
+
 function posterCardHtml(card, cover) {
   const art = cover
     ? `<img class="poster-art" src="${cover}" alt="${esc(card.title)}" loading="lazy">`
@@ -1303,10 +1322,10 @@ function posterCardHtml(card, cover) {
     : '';
   const removedTag = card.all_done && num(card.removable_count) === 0
     ? '<span class="poster-tag amber">本地文件已移除</span>' : '';
-  return `<div class="poster-card">${art}
+  return `<div class="poster-card">${art}${posterStateTag(card)}
     <div class="poster-body">
       <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
-      <div class="poster-meta">${num(card.file_count)} 集${card.watched_count ? ` · 已看 ${num(card.watched_count)}` : ''}</div>
+      <div class="poster-meta">${num(card.file_count)} 集</div>
       <div class="poster-tags">${seasons}${progress}${removedTag}</div>
       <div class="poster-actions">
         <button class="btn btn-sm" data-action="rename-work" data-node="${esc(card.group_id)}"
@@ -1324,7 +1343,11 @@ function renderPosterCards() {
   const kw = posterState.keyword.trim().toLowerCase();
   const cards = kw ? posterState.cards.filter(c => c.title.toLowerCase().includes(kw)) : posterState.cards;
   const count = document.getElementById('posterCount');
-  if (count) count.textContent = `${cards.length} 部作品 · 已有封面 ${Object.keys(posterState.covers).length} 张`;
+  if (count) {
+    // 「未看」数量放在汇总里：整墙一百多张卡片，光靠角标数不过来
+    const unseen = cards.filter(c => (c.watch_state || 'none') === 'none').length;
+    count.textContent = `${cards.length} 部作品 · 未看 ${unseen} 部 · 已有封面 ${Object.keys(posterState.covers).length} 张`;
+  }
   box.innerHTML = cards.length
     ? cards.map(c => posterCardHtml(c, posterState.covers[c.title])).join('')
     : empty('还没有作品卡片', '先在「扫描目录」添加视频目录；抓取封面后会显示海报');

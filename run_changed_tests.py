@@ -37,7 +37,8 @@ IMPACT: dict[str, tuple[str, ...]] = {
                    "tests.test_player_controls", "tests.test_continue_dismiss",
                    "tests.test_watched_folders", "tests.test_watched_season",
                    "tests.test_manual_cover", "tests.test_everything_open",
-                   "tests.test_blacklist", "tests.test_watchlist_top"),
+                   "tests.test_blacklist", "tests.test_watchlist_top",
+                   "tests.test_poster_watched"),
     "app/db.py": ("tests.test_api", "tests.test_manual_cleanup", "tests.test_watcher",
                   "tests.test_continue_dismiss", "tests.test_blacklist"),
     "app/config.py": ("tests.test_packaging", "tests.test_startup", "tests.test_theme",
@@ -103,6 +104,8 @@ FRONTEND_MODULES: tuple[str, ...] = (
     "tests.test_watchlist_top",
     # 网页搜索视图 / 看过的列表卡片墙结构（外层块 + 内层 grid）的前端契约
     "tests.test_websearch",
+    # 剧集墙「是否看过」角标的前端契约
+    "tests.test_poster_watched",
 )
 
 DOC_PATHS = ("README.md", "AGENTS.md", "CHANGELOG.md")
