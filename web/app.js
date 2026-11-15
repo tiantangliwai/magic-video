@@ -5,6 +5,11 @@ let lastPreviewRows = [];
 let inited = false;
 let searchTimer = null;
 
+// 看过的列表：一次载入全量后本地即时过滤，行内改名只局部刷新表格
+let watchedRows = [];
+let watchedKeyword = '';
+let watchedEditing = 0;
+
 const VIEW_META = {
   home: ['总览', '你的播放进度一目了然'],
   continue: ['继续观看', '从上次中断的位置接着看'],
@@ -269,23 +274,64 @@ async function renderLibrary() {
   if (input) input.focus();
 }
 
-async function renderWatched() {
-  const list = await call('get_watched_list', 500);
-  setContent(`<div class="card"><h3>看过的列表</h3>
-    <p class="hint">你手动导入的已观看作品，共 ${list.length} 条。中文名在导入那一刻就已自动匹配完成。</p>
-    <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名</th><th>匹配方式</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
-    <tbody>${list.length ? list.map(r => {
-      const [label, tone] = MATCH_LABEL[r.match_by] || ['—', ''];
-      return `<tr>
-      <td>${esc(r.title)}</td><td>${esc(r.title_cn || '—')}</td>
-      <td><span class="badge ${tone}">${esc(label)}</span></td>
-      <td>${r.season_no ? esc(r.season_no) : '—'}</td>
-      <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
-      <td>${esc(shortDate(r.imported_at))}</td>
-      <td><button class="btn btn-sm btn-danger" data-action="delete-watched" data-id="${r.id}">删除</button></td>
+function watchedRowHtml(r) {
+  const [label, tone] = MATCH_LABEL[r.match_by] || ['—', ''];
+  if (watchedEditing === Number(r.id)) {
+    return `<tr class="watched-edit">
+      <td><input class="input" id="watchedEditTitle" value="${esc(r.title)}" autocomplete="off"></td>
+      <td><input class="input" id="watchedEditCn" value="${esc(r.title_cn || '')}" placeholder="留空则清除中文名" autocomplete="off"></td>
+      <td colspan="4" class="hint">保存后中文名会被记住，下次导入同名作品自动使用；导入原文保留，旧名字也能搜到。</td>
+      <td><div class="watched-actions">
+        <button class="btn btn-primary btn-sm" data-action="save-watched" data-id="${r.id}">保存</button>
+        <button class="btn btn-sm" data-action="cancel-watched">取消</button>
+      </div></td>
     </tr>`;
-    }).join('') : `<tr><td colspan="7">${empty('还没有导入', '到「导入列表」粘贴你的动漫清单')}</td></tr>`}
-    </tbody></table></div></div>`);
+  }
+  return `<tr>
+    <td>${esc(r.title)}</td><td>${esc(r.title_cn || '—')}</td>
+    <td><span class="badge ${tone}">${esc(label)}</span></td>
+    <td>${r.season_no ? esc(r.season_no) : '—'}</td>
+    <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
+    <td>${esc(shortDate(r.imported_at))}</td>
+    <td><div class="watched-actions">
+      <button class="btn btn-sm" data-action="edit-watched" data-id="${r.id}">改名</button>
+      <button class="btn btn-sm btn-danger" data-action="delete-watched" data-id="${r.id}">删除</button>
+    </div></td>
+  </tr>`;
+}
+
+// 只重写 tbody：搜索框不重建，输入焦点与光标始终保留
+function renderWatchedRows() {
+  const box = document.getElementById('watchedListBody');
+  if (!box) return;
+  const kw = watchedKeyword.trim().toLowerCase();
+  const rows = kw ? watchedRows.filter(r =>
+    [r.title, r.title_cn, r.raw_text, r.note].some(v =>
+      String(v == null ? '' : v).toLowerCase().includes(kw))) : watchedRows;
+  const count = document.getElementById('watchedCount');
+  if (count) count.textContent = kw
+    ? `匹配 ${rows.length} / 共 ${watchedRows.length} 条`
+    : `共 ${watchedRows.length} 条`;
+  box.innerHTML = rows.length ? rows.map(watchedRowHtml).join('')
+    : `<tr><td colspan="7">${empty(kw ? '没有匹配的作品' : '还没有导入',
+        kw ? '换个关键词，或点「清空搜索」' : '到「导入列表」粘贴你的动漫清单')}</td></tr>`;
+}
+
+async function renderWatched() {
+  watchedRows = await call('get_watched_list', 0);
+  watchedEditing = 0;
+  setContent(`<div class="card"><h3>看过的列表</h3>
+    <p class="hint">你手动导入的已观看作品。可直接在下面改名、按名称即时搜索；中文名在导入那一刻已自动匹配，手改后会被记住。</p>
+    <div class="watched-toolbar">
+      <input class="input" id="watchedSearch" placeholder="搜索作品名 / 中文名 / 导入原文 / 备注…" value="${esc(watchedKeyword)}" autocomplete="off">
+      <span class="hint" id="watchedCount"></span>
+      <button class="btn btn-sm" data-action="watched-clear-search">清空搜索</button>
+    </div>
+    <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名</th><th>匹配方式</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
+    <tbody id="watchedListBody"></tbody></table></div></div>`);
+  renderWatchedRows();
+  const input = document.getElementById('watchedSearch');
+  if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
 }
 
 async function renderImport() {
@@ -503,7 +549,45 @@ async function handleAction(action, btn) {
       toast(r.ok ? (r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放` : '已开始播放') : r.error, r.ok);
       return;
     }
-    case 'delete-watched': await call('delete_watched', Number(id)); toast('已删除'); break;
+    case 'edit-watched': {
+      watchedEditing = Number(id);
+      renderWatchedRows();
+      const el = document.getElementById('watchedEditTitle');
+      if (el) { el.focus(); el.select(); }
+      return;
+    }
+    case 'cancel-watched': watchedEditing = 0; renderWatchedRows(); return;
+    case 'save-watched': {
+      const rid = Number(id);
+      const title = (document.getElementById('watchedEditTitle') || {}).value || '';
+      const cn = (document.getElementById('watchedEditCn') || {}).value || '';
+      const r = await call('update_watched', rid, title, cn);
+      if (!r.ok) { toast(r.error || '保存失败', false); return; }
+      const i = watchedRows.findIndex(x => Number(x.id) === rid);
+      if (i >= 0) watchedRows[i] = r.row;
+      watchedEditing = 0;
+      renderWatchedRows();
+      toast(r.learned ? '名称已更新，中文名已记住' : '名称已更新');
+      return;
+    }
+    case 'watched-clear-search': {
+      watchedKeyword = '';
+      watchedEditing = 0;
+      const el = document.getElementById('watchedSearch');
+      if (el) { el.value = ''; el.focus(); }
+      renderWatchedRows();
+      return;
+    }
+    case 'delete-watched': {
+      const rid = Number(id);
+      await call('delete_watched', rid);
+      if (!document.getElementById('watchedListBody')) { await refresh(); toast('已删除'); return; }
+      watchedRows = watchedRows.filter(r => Number(r.id) !== rid);
+      if (watchedEditing === rid) watchedEditing = 0;
+      renderWatchedRows();
+      toast('已删除');
+      return;
+    }
     case 'mark-watched': {
       const r = await call('mark_watched', Number(id));
       toast(r.ok ? '已标记为看完' : r.error, r.ok);
@@ -666,14 +750,37 @@ document.addEventListener('click', async (ev) => {
 
 // 搜索与筛选只局部刷新列表容器，不重建输入框，因此不会丢焦点或光标
 document.addEventListener('input', (ev) => {
-  if (ev.target.id !== 'fileSearch') return;
-  const value = ev.target.value;
+  const el = ev.target;
+  // 看过的列表：本地即时过滤，零延迟；不重建输入框
+  if (el.id === 'watchedSearch') {
+    watchedKeyword = el.value;
+    watchedEditing = 0;
+    renderWatchedRows();
+    return;
+  }
+  if (el.id !== 'fileSearch') return;
+  const value = el.value;
   clearTimeout(searchTimer);
   searchTimer = setTimeout(() => {
     fileListState.keyword = value;
     fileListState.page = 1;
     loadFileList();
   }, 250);
+});
+
+// 改名行内编辑：Enter 保存、Esc 取消
+document.addEventListener('keydown', (ev) => {
+  if (!watchedEditing) return;
+  const id = ev.target.id;
+  if (id !== 'watchedEditTitle' && id !== 'watchedEditCn') return;
+  if (ev.key === 'Enter') {
+    ev.preventDefault();
+    const btn = document.querySelector(`[data-action="save-watched"][data-id="${watchedEditing}"]`);
+    if (btn) btn.click();
+  } else if (ev.key === 'Escape') {
+    watchedEditing = 0;
+    renderWatchedRows();
+  }
 });
 
 document.addEventListener('change', (ev) => {

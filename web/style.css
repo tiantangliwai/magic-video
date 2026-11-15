@@ -143,6 +143,14 @@ td { color: var(--text); }
 .link-btn:hover { text-decoration: underline; }
 .thumb-btn { border: 0; cursor: pointer; }
 .thumb-btn:hover { background: #d7e3ff; }
+
+/* 看过的列表：快速搜索与行内改名 */
+.watched-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.watched-toolbar .input { flex: 1 1 260px; width: auto; padding: 7px 10px; font-size: 12px; }
+.watched-toolbar .hint { flex: none; }
+.watched-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
+.watched-edit td { background: var(--primary-soft); }
+.watched-edit input.input { padding: 6px 9px; font-size: 12px; min-width: 130px; }
 .file-row:hover { background: var(--surface-2); }
 .file-row .name { white-space: normal; line-height: 1.8; }
 .file-row .mono { word-break: break-all; margin-top: 3px; }

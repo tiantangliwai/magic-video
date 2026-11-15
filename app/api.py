@@ -133,8 +133,69 @@ class Api:
             (int(limit),),
         )
 
-    def get_watched_list(self, limit: int = 500) -> list[dict]:
-        return db.rows("SELECT * FROM watched_list ORDER BY id DESC LIMIT ?", (int(limit),))
+    def get_watched_list(self, limit: int = 500, keyword: str = "") -> list[dict]:
+        """看过的列表：按作品名 / 中文名 / 导入原文 / 备注搜索；limit <= 0 表示全部。
+
+        LIKE 的 % / _ / \\ 一律按字面量处理，避免关键词把列表放大成全表。
+        """
+        try:
+            size = int(limit)
+        except (TypeError, ValueError):
+            size = 500
+        kw = str(keyword or "").strip()
+        conditions = ["1=1"]
+        params: list = []
+        if kw:
+            escaped = kw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+            like = f"%{escaped}%"
+            conditions.append(
+                "(title LIKE ? ESCAPE '\\' OR COALESCE(title_cn,'') LIKE ? ESCAPE '\\' "
+                "OR COALESCE(raw_text,'') LIKE ? ESCAPE '\\' "
+                "OR COALESCE(note,'') LIKE ? ESCAPE '\\')"
+            )
+            params.extend([like] * 4)
+        sql = "SELECT * FROM watched_list WHERE " + " AND ".join(conditions) + " ORDER BY id DESC"
+        if size > 0:
+            sql += " LIMIT ?"
+            params.append(size)
+        return db.rows(sql, tuple(params))
+
+    def update_watched(self, item_id: int, title: str | None = None,
+                      title_cn: str | None = None) -> dict:
+        """行内改名。None = 不改该字段；中文名传空串表示清空。
+
+        用户手改的中文名按 ``source='user'`` 记住，下次导入同名作品自动命中；
+        ``raw_text`` 是导入原文，始终保留不改。
+        """
+        try:
+            rid = int(item_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "记录编号无效"}
+        row = db.row("SELECT * FROM watched_list WHERE id = ?", (rid,))
+        if not row:
+            return {"ok": False, "error": "记录不存在"}
+        new_title = row["title"] if title is None else str(title).strip()
+        if not new_title:
+            return {"ok": False, "error": "作品名不能为空"}
+        if title_cn is None:
+            new_cn = row["title_cn"]
+            match_by = row["match_by"]
+        else:
+            new_cn = str(title_cn).strip() or None
+            match_by = "user" if new_cn and new_cn != new_title else (
+                "none" if not new_cn else "native")
+        db.execute(
+            "UPDATE watched_list SET title = ?, title_cn = ?, match_by = ? WHERE id = ?",
+            (new_title, new_cn, match_by, rid),
+        )
+        learned = False
+        if new_cn and new_cn != new_title and (title is not None or title_cn is not None):
+            metadata.remember(new_title, new_cn, source="user")
+            learned = True
+        return {
+            "ok": True, "learned": learned,
+            "row": db.row("SELECT * FROM watched_list WHERE id = ?", (rid,)),
+        }
 
     def delete_watched(self, item_id: int) -> dict:
         db.execute("DELETE FROM watched_list WHERE id = ?", (int(item_id),))

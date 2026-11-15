@@ -160,7 +160,7 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | 分类 | 方法 |
 |---|---|
 | 信息 | `get_app_info` `get_stats` `get_player_status` `get_settings` `save_settings` |
-| 列表 | `get_continue_watching` `get_completed` `get_history` `get_watched_list` `delete_watched` `get_media_files` `get_media_files_page` |
+| 列表 | `get_continue_watching` `get_completed` `get_history` `get_watched_list` `update_watched` `delete_watched` `get_media_files` `get_media_files_page` |
 | 导入 | `preview_import` `commit_import` |
 | 播放 | `play_file` `open_data_folder` |
 | 目录 | `get_directories` `add_directory` `remove_directory` `set_directory_enabled` `choose_directory` `scan_now` `get_last_scan` |
