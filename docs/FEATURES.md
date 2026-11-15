@@ -77,6 +77,13 @@ Bocchi the Rock\t1\t1\t12
 | R4-3 | 托盘菜单：打开主界面 / 立即扫描 / 暂停或恢复记录 / 退出 |
 | R4-4 | 开机自启写 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`，设置页可开关 |
 | R4-5 | 守护进程与主窗口并发读写同一 SQLite 不报 `database is locked` |
+| R4-6 | **后台记录默认自动启动**：打开主窗口即自动拉起托盘守护，不需要在左下角或总览手动点「启动」；左下角只显示状态圆点/文字 |
+| R4-7 | 「设置」页可关掉 `daemon_auto_start`：关闭时立即 `stop_daemon()` 停掉当前守护，重新打开时立即补拉起或下次启动生效 |
+| R4-8 | 自动启动幂等：已在运行不重复拉起；窗口侧与前端 `init()` 双调用也只拉起一个托盘图标 |
+| R4-9 | `Api.__init__` 不启动任何进程；进程拉起只发生在 `create_window()` / 设置变更时的显式调用，单测可安全实例化 `Api()` |
+| R4-10 | 源码版（`pythonw.exe daemon.py`）与打包版（`exe --daemon`）都能被识别、检测与停止 |
+
+> 三个开关语义独立：`daemon_auto_start`（本次启动拉起守护，默认 1）、`autostart`（开机登录自启，默认 0）、`recording_enabled`（守护是否写历史，默认 1）。
 
 ### R5 · 版本与输出管理
 
@@ -168,7 +175,7 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | 目录 | `get_directories` `add_directory` `remove_directory` `set_directory_enabled` `choose_directory` `scan_now` `get_last_scan` |
 | 词典 | `dictionary_status` `rematch_all` `import_alias_file` |
 | 纠错 | `mark_watched` `mark_unwatched` `reset_progress` |
-| 守护 | `daemon_running` `start_daemon` `attach_window` |
+| 守护 | `daemon_running` `start_daemon` `stop_daemon` `ensure_daemon_auto_start` `attach_window` |
 
 > 前端 `web/app.js` 通过 `call('<方法名>', ...)` 调用；新增方法必须前后端同步，并补 `tests/test_api.py`。
 
@@ -199,7 +206,8 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | `poll_interval_sec` | 3 | 守护轮询间隔（秒） |
 | `complete_percent` | 90 | 自动标记已看完的进度阈值 |
 | `recording_enabled` | 1 | 托盘可暂停/恢复记录 |
-| `autostart` | 0 | 开机自启 |
+| `autostart` | 0 | 开机自启（注册表 Run 项） |
+| `daemon_auto_start` | 1 | 打开主窗口时自动拉起托盘守护；设置页可关。关时立即停守护，开时立即补拉起。旧库由 `init_db()` 的 `INSERT OR IGNORE` 自动补默认值 |
 | `http_proxy` | 空 | 在线元数据代理 |
 | `metadata_source` | `cache_first` | `cache_first` / `online_first` / `local_only` |
 | `bangumi_base` | `https://api.bgm.tv` | 在线源地址 |

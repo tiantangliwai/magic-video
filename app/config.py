@@ -90,7 +90,10 @@ DEFAULTS = {
     "poll_interval_sec": 3,
     "complete_percent": 90,
     "recording_enabled": 1,
-    "autostart": 0,
+    "autostart": 0,  # 开机自启：写 HKCU Run 注册表项，只影响系统登录时
+    # 主窗口启动时自动拉起托盘守护（默认开）。与 autostart（开机自启）、
+    # recording_enabled（守护是否写历史）语义互不重叠；可在设置页关闭。
+    "daemon_auto_start": 1,
     "http_proxy": "",
     "metadata_source": "cache_first",
     "bangumi_base": "https://api.bgm.tv",

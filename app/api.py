@@ -32,6 +32,10 @@ class Api:
         # E_NOINTERFACE 并刷屏报错），同时严重拖慢启动。下划线开头会被跳过。
         self._window = None
         self._last_scan: dict | None = None
+        # 仅记录「本进程已成功拉起过守护」，避免窗口就绪 + 前端 init 重复调用时
+        # 在进程刚 spawn、psutil 还看不到的极短窗口里拉起第二个托盘图标。
+        # 绝不在这里直接启动守护：Api() 会被单元测试大量实例化。
+        self._daemon_auto_started = False
         db.init_db()
         metadata.ensure_builtin_loaded()
 
@@ -462,7 +466,7 @@ class Api:
             "potplayer_path", "poll_interval_sec", "complete_percent", "recording_enabled",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
             "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
-            "everything_es_path", "everything_http_url", "embed_player",
+            "everything_es_path", "everything_http_url", "embed_player", "daemon_auto_start",
         }
         for key, value in (data or {}).items():
             if key not in allowed:
@@ -482,6 +486,8 @@ class Api:
                 autostart.disable()
         if "obsidian_vault" in (data or {}):
             obsidian.set_options(vault=str(data["obsidian_vault"]).strip())
+        if "daemon_auto_start" in (data or {}):
+            self._apply_daemon_auto_start()
         return self.get_settings()
 
     # ---------- Everything 快速检索 ----------
@@ -649,15 +655,37 @@ class Api:
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
 
-    def daemon_running(self) -> dict:
-        """检查托盘守护进程是否已经在运行（避免重复拉起多个托盘图标）。"""
+    @staticmethod
+    def _daemon_processes() -> list:
+        """列出托盘守护进程。
+
+        源码版命令行是 ``pythonw.exe daemon.py``；打包版是同一个 exe 带
+        ``--daemon``。打包版必须靠这个参数区分，否则会把主窗口也算成守护。
+        psutil 枚举失败（权限 / 进程退出）一律静默降级为空列表。
+        """
+        found = []
         try:
+            own_exe = str(runtime.executable()).replace("\\", "/").lower()
+            frozen = runtime.is_frozen()
             for proc in psutil.process_iter(["cmdline"]):
-                cmd = " ".join(proc.info.get("cmdline") or [])
-                if "daemon.py" in cmd and "python" in cmd.lower():
-                    return {"running": True, "pid": proc.pid}
+                parts = proc.info.get("cmdline") or []
+                if not parts:
+                    continue
+                cmd = " ".join(parts)
+                source_mode = "daemon.py" in cmd and "python" in cmd.lower()
+                first = str(parts[0]).replace("\\", "/").lower()
+                frozen_mode = frozen and "--daemon" in parts and first == own_exe
+                if source_mode or frozen_mode:
+                    found.append(proc)
         except Exception:
             pass
+        return found
+
+    def daemon_running(self) -> dict:
+        """检查托盘守护进程是否已经在运行（避免重复拉起多个托盘图标）。"""
+        procs = self._daemon_processes()
+        if procs:
+            return {"running": True, "pid": procs[0].pid}
         return {"running": False}
 
     def start_daemon(self) -> dict:
@@ -672,6 +700,55 @@ class Api:
             return {"ok": True}
         except Exception as exc:
             return {"ok": False, "error": str(exc)}
+
+    def stop_daemon(self) -> dict:
+        """停止当前托盘守护进程（设置里关掉自动启动时立即生效）。
+
+        先优雅 terminate，超时再 kill；单个进程异常不影响其余进程，也绝不抛到前端。
+        """
+        stopped = 0
+        for proc in self._daemon_processes():
+            try:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=3)
+                except Exception:
+                    proc.kill()
+                stopped += 1
+            except Exception:
+                continue
+        self._daemon_auto_started = False
+        return {"ok": True, "stopped": stopped}
+
+    @staticmethod
+    def _daemon_auto_start_enabled() -> bool:
+        return db.get_int("daemon_auto_start", config.DEFAULTS["daemon_auto_start"]) == 1
+
+    def ensure_daemon_auto_start(self) -> dict:
+        """窗口就绪后调用：默认自动拉起后台记录，设置里关闭后什么也不做。
+
+        刻意不放在 ``Api.__init__``——单测会大量实例化 Api，绝不能在那里
+        真的拉起进程。这里只被 create_window() / 前端 init() 显式调用。
+        """
+        if not self._daemon_auto_start_enabled():
+            return {"ok": True, "started": False, "disabled": True}
+        if self._daemon_auto_started or self.daemon_running()["running"]:
+            return {"ok": True, "started": False, "already": True}
+        result = self.start_daemon()
+        if result.get("ok") and not result.get("already"):
+            self._daemon_auto_started = True
+        return {
+            "ok": bool(result.get("ok")),
+            "started": bool(result.get("ok")),
+            "error": result.get("error", ""),
+        }
+
+    def _apply_daemon_auto_start(self) -> dict:
+        """设置页保存后立刻生效：开 -> 马上补拉起，关 -> 停掉当前守护。"""
+        self._daemon_auto_started = False
+        if self._daemon_auto_start_enabled():
+            return self.start_daemon()
+        return self.stop_daemon()
 
     def dictionary_status(self) -> dict:
         return metadata.stats()

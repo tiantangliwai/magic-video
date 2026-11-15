@@ -38,6 +38,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 18 | 展示风格先做**黑 / 白两套**即可；设置要持久化 | 用户要求（0.1.4 日常迭代） |
 | 19 | 一键 `./start` 直接连**真实数据库**；要能明确告知 `.db` 位置与 C 盘工作数据 | 用户要求（0.1.4 日常迭代） |
 | 20 | 用户给的真实「看过的列表」（含 `S1/S2`、`（完）`、剧场版、番号等噪声）必须能正确解析入库 | 用户要求（0.1.4 日常迭代） |
+| 21 | **后台记录默认自动启动**，不要再在左下角/总览让用户点「启动」，但可以在设置里关闭；左下角只留状态指示 | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -178,6 +179,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。
 - 启动 / 单实例改动：`tests/test_startup.py` 必须覆盖互斥锁、已有窗口置前、js_api 反射安全与 `./start` 脚本；主题改动必须同时跑 `tests/test_theme.py` 与 `tests/test_theme_native.py`（DWM 原生标题栏、降级路径、CSS `color-scheme` 契约）。
+- 守护自动启动改动：`tests/test_daemon_autostart.py` 必须覆盖默认值、自动拉起 / 已运行不重复 / 关闭不启动、`stop_daemon()`、设置保存的即时生效、源码版与打包版进程识别、前端不再有 `start-daemon` 按钮；**禁止在 `Api.__init__` 拉起进程**，所有 `subprocess.Popen` / `psutil.process_iter` / `proc.terminate()` 一律 mock，绝不真的启停本机托盘守护。
 - 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务。
 - 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
 - **仅用户要求发版或改打包链时**：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。

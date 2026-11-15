@@ -231,7 +231,6 @@ async function renderHome() {
       <div class="btn-row">
         <button class="btn btn-primary" data-action="goto" data-view="import">导入看过的列表</button>
         <button class="btn" data-action="goto" data-view="scan">添加视频目录</button>
-        <button class="btn" data-action="start-daemon">启动后台记录</button>
       </div></div>`);
 }
 
@@ -670,6 +669,8 @@ async function renderSettings() {
         <input class="input" type="number" min="1" max="30" id="set-poll_interval_sec" value="${esc(s.poll_interval_sec)}"></div>
       <div class="field"><label>自动标记「已看完」的进度阈值（%）</label>
         <input class="input" type="number" min="50" max="100" id="set-complete_percent" value="${esc(s.complete_percent)}"></div>
+      ${switchHtml('daemon_auto_start', isOn(s.daemon_auto_start), '启动软件时自动开启后台记录',
+        '默认开启：打开本软件就自动拉起托盘守护并续记播放进度；关闭后不再自动启动，可在设置里随时改回')}
       ${switchHtml('recording_enabled', isOn(s.recording_enabled), '启用播放记录', '关闭后守护进程不再写入历史')}
       ${switchHtml('autostart', isOn(s.autostart_enabled), '开机自动启动后台记录', '写当前用户注册表 Run 项，无需管理员权限')}
     </div>
@@ -1119,6 +1120,7 @@ async function handleAction(action, btn) {
         'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url'];
       const data = {};
       keys.forEach(k => { const el = document.getElementById('set-' + k); if (el) data[k] = el.value; });
+      // 所有开关（含 daemon_auto_start / autostart / embed_player）由 data-setting 统一收集
       document.querySelectorAll('[data-setting]').forEach(el => { data[el.dataset.setting] = el.dataset.value; });
       await call('save_settings', data);
       await refreshEmbedState();
@@ -1180,12 +1182,6 @@ async function handleAction(action, btn) {
     case 'obsidian-open': {
       const r = await call('obsidian_open_folder');
       if (!r.ok) toast(r.error || '打开失败', false);
-      return;
-    }
-    case 'start-daemon': {
-      const r = await call('start_daemon');
-      toast(r.ok ? '后台记录已启动' : r.error, r.ok);
-      setTimeout(updateDaemonState, 900);
       return;
     }
     default: return;
@@ -1287,6 +1283,8 @@ async function init() {
   } catch (e) { /* 忽略 */ }
   // 原生窗口标题栏不受 CSS 控制，窗口就绪后同步一次；重启深色模式也不会退回白条
   try { await call('sync_native_theme'); } catch (e) { /* 不支持 DWM 时静默降级 */ }
+  // 后台记录默认自动启动：create_window 已先拉起一次，此处为幂等兜底（不会重复拉起）
+  try { await call('ensure_daemon_auto_start'); } catch (e) { /* 守护启动失败不影响界面 */ }
   await refreshEmbedState();
   await refresh();
   await updateDaemonState();
