@@ -116,7 +116,9 @@ CREATE TABLE IF NOT EXISTS watch_progress (
     play_count       INTEGER NOT NULL DEFAULT 0,
     first_played_at  TEXT,
     last_played_at   TEXT,
-    updated_at       TEXT
+    updated_at       TEXT,
+    -- 「继续观看」里人工移除的软删除标记；只隐藏列表，绝不删进度/会话
+    dismissed_at     TEXT
 );
 
 CREATE TABLE IF NOT EXISTS watch_sessions (
@@ -177,6 +179,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     additions = {
         "media_files": (("title_cn", "TEXT"), ("match_by", "TEXT"), ("deleted_at", "TEXT")),
         "watched_list": (("match_by", "TEXT"),),
+        "watch_progress": (("dismissed_at", "TEXT"),),
     }
     for table, columns in additions.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}

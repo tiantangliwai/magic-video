@@ -313,6 +313,8 @@ function progressItem(r, actions) {
       <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.file_id}">继续观看</button>
       <button class="btn btn-sm" data-action="play-start" data-id="${r.file_id}">从头播放</button>
       <button class="btn btn-sm" data-action="mark-watched" data-id="${r.file_id}">标记已看</button>
+      <button class="btn btn-sm" data-action="dismiss-continue" data-id="${r.file_id}"
+        title="从继续观看移除（软删除：进度与观看记录全部保留，再次播放会自动回来）">移除</button>
     </div>`}</div>
   </div>`;
 }
@@ -354,7 +356,8 @@ async function renderContinue() {
     call('get_continue_watching', 100), call('get_completed', 20),
   ]);
   setContent(`<div class="card"><h3>继续观看</h3>
-    <p class="hint">点击「继续观看」会用 PotPlayer 从上次的位置打开，播放过程按设置页的间隔自动记录。</p>
+    <p class="hint">点击「继续观看」会用 PotPlayer 从上次的位置打开，播放过程按设置页的间隔自动记录。
+      不想再看某条可点「移除」：只是从本列表隐藏（软删除），进度、断点与观看会话全部保留，再次播放会自动回来。</p>
     <div class="list">${list.length ? list.map(r => progressItem(r)).join('') : empty('暂无进行中的播放', '先扫描目录并播放一集试试')}</div></div>
     <div class="card"><h3>已看完（可纠错 / 可清理本地文件）</h3>
     <p class="hint">标错或想重看时点「标记未看」即可恢复；观看历史不会被删除。已看完的单集可人工把本地文件移入回收站，
@@ -376,7 +379,7 @@ async function renderContinue() {
 async function renderHistory() {
   const list = await call('get_history', 200);
   setContent(`<div class="card"><h3>历史记录</h3>
-    <p class="hint">共 ${list.length} 次观看会话，按时间倒序。可人工删除单条记录；
+    <p class="hint">共 ${list.length} 部作品，每部只显示<b>最新一次</b>观看（旧会话原样保留在数据库里，只是不重复刷屏）。可人工删除单条记录；
       <b>软件不会自动删除任何观看记录</b>，删除一条会话也不会影响播放进度、本地文件或看过的列表。</p>
     <div class="list">${list.length ? list.map(r => `<div class="item">
       <div class="thumb">⌚</div>
@@ -1375,6 +1378,13 @@ async function handleAction(action, btn) {
       return;
     }
     case 'embed-stop': await stopEmbedded(); return;
+    case 'dismiss-continue': {
+      const r = await call('dismiss_continue_watching', Number(id));
+      toast(r.ok ? '已移出「继续观看」（进度与观看记录保留，再次播放会自动回来）'
+        : (r.error || '移除失败'), r.ok);
+      await refresh();
+      return;
+    }
     case 'player-play-pause': await playerControl('play_pause'); return;
     case 'player-stop': await playerControl('stop'); return;
     case 'player-prev': await playerAdjacent('prev'); return;

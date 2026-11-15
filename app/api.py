@@ -119,7 +119,7 @@ class Api:
             "COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "f.season_no, f.episode_no "
             "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
-            "WHERE p.completed = 0 AND p.position_ms > 0 "
+            "WHERE p.completed = 0 AND p.position_ms > 0 AND p.dismissed_at IS NULL "
             "ORDER BY p.last_played_at DESC LIMIT ?",
             (int(limit),),
         )
@@ -134,6 +134,26 @@ class Api:
             "WHERE p.completed = 1 ORDER BY p.last_played_at DESC LIMIT ?",
             (int(limit),),
         )
+
+    def dismiss_continue_watching(self, file_id: int, restore: bool = False) -> dict:
+        """「继续观看」人工移除 / 恢复：**软删除，只 UPDATE 标记**。
+
+        进度、断点、观看会话、本地文件一律不动；再次播放该文件时
+        ``_play_target`` 会自动清标记，让它重新回到继续观看列表。
+        """
+        try:
+            fid = int(file_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "无效的文件 ID"}
+        if not db.scalar("SELECT 1 FROM watch_progress WHERE file_id = ?", (fid,)):
+            return {"ok": False, "error": "找不到该条播放进度"}
+        stamp = None if restore in (True, 1, "1", "true", "on") else db.now()
+        db.execute(
+            "UPDATE watch_progress SET dismissed_at = ?, updated_at = ? WHERE file_id = ?",
+            (stamp, db.now(), fid),
+        )
+        return {"ok": True, "file_id": fid, "dismissed": stamp is not None,
+                "kept_progress": True, "kept_sessions": True}
 
     def _ensure_progress(self, file_id: int) -> None:
         stamp = db.now()
@@ -172,12 +192,20 @@ class Api:
         return self._set_watch_state(file_id, 0)
 
     def get_history(self, limit: int = 100) -> list[dict]:
+        """历史记录按「每个作品只显示最新一次会话」去重。
+
+        只是展示层收拢：``watch_sessions`` 里所有旧会话**原样保留**，
+        人工删除入口仍只作用于用户点中的那一条。file_id 为空的外部播放
+        会话用 ``-id`` 分组，避免彼此被合并掉。
+        """
         return db.rows(
             "SELECT s.*, f.filename, "
             "COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "f.season_no, f.episode_no, f.path "
             "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
-            "ORDER BY s.started_at DESC LIMIT ?",
+            "WHERE s.id IN ("
+            "  SELECT MAX(id) FROM watch_sessions GROUP BY COALESCE(file_id, -id)"
+            ") ORDER BY s.started_at DESC LIMIT ?",
             (int(limit),),
         )
 
@@ -906,6 +934,11 @@ class Api:
             progress = db.row("SELECT position_ms, completed FROM watch_progress WHERE file_id = ?", (record["id"],))
             if progress and not progress["completed"]:
                 position = progress["position_ms"] or 0
+        # 用户之前把这条从「继续观看」里移除过（软删）；重新点播放就让它回来
+        db.execute(
+            "UPDATE watch_progress SET dismissed_at = NULL WHERE file_id = ? AND dismissed_at IS NOT NULL",
+            (record["id"],),
+        )
         title = record["title_cn"] or record["title_guess"] or record["filename"]
         return path, position, title
 

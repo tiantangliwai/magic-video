@@ -28,6 +28,12 @@ class ImpactMappingTests(unittest.TestCase):
         self.assertNotIn("tests.test_obsidian", mods)
         self.assertIn("tests.test_theme", modules_for("web/style.css"))
 
+    def test_continue_dismiss_map_to_contracts(self):
+        for path in ("app/api.py", "app/db.py", "web/app.js"):
+            self.assertIn("tests.test_continue_dismiss", modules_for(path))
+        self.assertEqual(modules_for("tests/test_continue_dismiss.py"),
+                         {"tests.test_continue_dismiss"})
+
     def test_player_controls_map_to_contracts(self):
         self.assertIn("tests.test_player_controls", modules_for("app/potplayer.py"))
         self.assertEqual(modules_for("tests/test_player_controls.py"),

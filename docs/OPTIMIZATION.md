@@ -141,3 +141,30 @@
 
 第 4 节避坑清单与本页「下一版建议」同时出现在 `04 功能缺口与决策.md` 的待办中；
 在 Obsidian 里勾选、批注、排优先级都不影响本仓库，也不会被下次同步覆盖。详细机制见 `docs/OBSIDIAN.md`。
+
+---
+
+## 8. 播放器内核替换调研（2026-11-15，用户要求「同时调查其他开源内核」）
+
+**背景**：用户希望「从 GitHub 下载 PotPlayer 源码彻底集成」。核实结论：**PotPlayer 是 Kakao/Daum 的闭源专有免费软件，官方从未公开源码，GitHub 上只有皮肤 / 插件 / 第三方封装，没有播放器本体；改源码再发布亦有授权风险**。因此该路径不成立，用户确认改为「保留 PotPlayer + 软件内控制层」，并行调研开源内核供未来替换。
+
+| 候选 | 许可 | 嵌入 HWND | 精确控制（倍速 1.25/1.5/2） | 打包 | 迁移成本 |
+|---|---|---|---|---|---|
+| **libmpv + python-mpv** | 官方同时提供 GPL / **LGPLv2.1+** DLL | `--wid=<HWND>`（官方支持） | **完整**：JSON IPC `speed`/`pause`/`time-pos`/`fullscreen`/playlist，`--speed=1.25` 精确赋值 | 单 `libmpv-2.dll` 随 PyInstaller 打包 | 中 |
+| libVLC + python-vlc | 引擎 **LGPLv2+**（插件含 GPL，分发需 LGPL-only 包） | `libvlc_media_player_set_hwnd()` | **完整**：`set_rate(1.25)` / `get_time()` / `get_length()` / `get_state()` | 需随附 dll + `plugins/` 目录 | 中（状态回读改造最小） |
+| MPC-HC / MPC-BE | GPLv3 成品播放器 | 无嵌入式 lib、无 Python 绑定，仍要靠外部窗口 | 无进程内精确 API，老问题不变 | 不适用 | 大且收益低 |
+| GStreamer / ffmpeg 自绘 | LGPL | 需 appsink 取帧自绘或自建 D3D 交换链 | 需自己封装全套控制层 | 依赖体积大 | 大 |
+
+**结论：暂缓替换，维持 PotPlayer 控制层**。当前唯一硬伤是「快捷键步进 0.1 到不了精确 1.25×」，属体验瑕疵而非功能缺失；换内核要重写控制层、嵌入层与守护读状态，还要验证 WebView2 与 D3D 视频输出的 z-order，现阶段收益不足以抵消风险。
+
+**未来首选 libmpv**（许可最稳、单 DLL 打包最简、IPC 控制力最强、倍速原生精确），**备选 libVLC**（状态回读几乎零改造）。渐进迁移路径：
+
+1. 抽象统一播放后端接口 `PlaybackBackend`（play / pause / stop / next / prev / seek / set_speed / set_fullscreen / set_volume / get_status），与现有控制层一一对应。
+2. PotPlayer 保留为默认 backend，新增 `MpvBackend`，用设置项 `player_backend` 两套并存切换。
+3. **复用** `embedded_player.py` 的 `SetParent` + `SetWindowPos`（只把目标换成 mpv `--wid` 子窗口，保持 HWND_TOP）、守护轮询框架、播放记录表结构与 UI 事件分发。
+4. **重写** `potplayer.py` 的按键注入层为 mpv JSON IPC，替换单测里的播放器桩；`watch_progress` / `watch_sessions` 表结构不用动。
+5. 先内部灰度验证倍速精确值、ASS/SSA 字幕、HEVC 硬解、z-order 无闪烁，再决定是否默认切换。
+
+**对当前方案的影响**：调研印证了现有「先复位到 1.0 再按固定次数加速」的做法是相对步进逼近绝对值的正确折中；精确 1.25× 的根本解法是换成原生支持绝对倍速的内核，短期可在设置里把步进改为 0.25 让 1.25 / 1.5 / 2.0 全部精确可达。
+
+主要依据：<https://mpv.io/manual/master/>、<https://github.com/mpv-player/mpv/blob/master/Copyright>、<https://github.com/jaseg/python-mpv>、<https://images.videolan.org/press/lgpl-libvlc.html>、<https://github.com/oaubert/python-vlc>、<https://github.com/MediaPlayerClassic/mpc-hc/blob/master/Readme.md>。
