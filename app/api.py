@@ -11,7 +11,7 @@ import psutil
 
 from . import (
     __version__, autostart, config, covers, db, embedded_player, everything, importer,
-    library_tree, metadata, obsidian, potplayer, runtime, scanner,
+    library_tree, metadata, obsidian, potplayer, runtime, scanner, theme_native,
 )
 
 
@@ -59,7 +59,19 @@ class Api:
         if wanted not in ("light", "dark"):
             return {"ok": False, "error": "主题只支持 light / dark"}
         db.set_setting("theme", wanted)
+        # 网页顶栏由 CSS 变量控制，原生标题栏得靠 DWM；失败也不影响主题切换
+        try:
+            theme_native.apply(wanted)
+        except Exception:
+            pass
         return {"ok": True, "theme": wanted}
+
+    def sync_native_theme(self) -> dict:
+        """窗口就绪后同步一次原生标题栏（重启后深色不会又变成一条白）。"""
+        try:
+            return theme_native.apply(self._theme())
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def get_stats(self) -> dict:
         return db.row(

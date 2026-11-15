@@ -334,8 +334,19 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 只要黑 / 白两套 | `set_theme()` 只接受 `light` / `dark`，非法值直接拒绝；`style.css` 用 `html[data-theme=dark]` 覆盖 CSS 变量，组件样式不复制 |
 | 设置要持久 | 存在 SQLite `settings.theme`，不是 `localStorage`（WebView2 用 `private_mode`，重启会清空浏览器存储） |
 | 切换即时生效 | 前端先本地 `applyTheme()` 再异步落库，不等后端往返；右上按钮与标签同步 |
+| 原生标题栏不返白 | 网页顶栏由 CSS 变量控制，但 pywebview 的 WinForms 标题栏 / 边框由 DWM 绘制，CSS 管不到。`app/theme_native.py` 用 `DwmSetWindowAttribute(DWMWA_USE_IMMERSIVE_DARK_MODE=20，旧系统回退 19)` 同步；Win11 22H2+ 额外设标题栏 / 边框 / 文字颜色；`color-scheme: dark` 让滚动条与 `<select>` 等原生控件跟随；`html { background: var(--bg) }` 铺满 WebView2 画布防露白 |
+| 启动与切换都同步 | `init()` 调 `Api.sync_native_theme()`（窗口刚出现时短重试找 HWND），`set_theme()` 内直接调 `theme_native.apply()`；找不到窗口 / 非 Windows / DWM 失败一律静默降级，不影响主题切换与播放记录 |
 
-测试：`tests/test_theme.py`（含 `save_settings` 白名单不得夹带 `theme` 注入）。
+数据流：
+
+```
+启动 -> pywebviewready -> init() -> Api.sync_native_theme() -> theme_native.apply(theme)
+切换 -> set_theme() 落 SQLite -> theme_native.apply(wanted)
+                              -> embedded_player.find_main_window() (PID + 标题枚举)
+                              -> DwmSetWindowAttribute(hwnd, 20, dark?1:0)
+```
+
+测试：`tests/test_theme.py`（设置持久化 + 前端契约）、`tests/test_theme_native.py`（DWM 属性、旧系统回退、非 Windows/无窗口/异常降级、启动同步、CSS 契约）。本机实测：`DwmGetWindowAttribute` 读回 `dark=1`；`DWMWA_CAPTION_COLOR` 在本机返回失败，已按设计静默忽略。
 
 ---
 

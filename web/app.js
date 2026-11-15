@@ -1285,6 +1285,8 @@ async function init() {
     document.getElementById('versionText').textContent = `v${info.version} · 数据仅存本机`;
     applyTheme(info.theme);
   } catch (e) { /* 忽略 */ }
+  // 原生窗口标题栏不受 CSS 控制，窗口就绪后同步一次；重启深色模式也不会退回白条
+  try { await call('sync_native_theme'); } catch (e) { /* 不支持 DWM 时静默降级 */ }
   await refreshEmbedState();
   await refresh();
   await updateDaemonState();
