@@ -220,7 +220,10 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | `theme` | `light` | 展示风格 `light` / `dark`，只走 `set_theme()`，不在 `save_settings` 白名单里 |
 | `embed_player` | 1 | 是否在软件内嵌播放 PotPlayer；关闭或嵌入失败一律用独立窗口 |
 | `embed_hwnd` | 0 | 运行时写入：内嵌后的 PotPlayer 窗口句柄，供守护进程跨进程回查 |
-| `everything_es_path` / `everything_http_url` | 空 | 全盘快搜的两个可选通道，都不可用时降级为媒体库检索 |
+| `everything_es_path` | 空 | es.exe 路径；**留空即回退** `D:\tool\Everything\es.exe`（空串不再变成 `Path('.')`） |
+| `everything_http_url` | 空 | Everything HTTP 服务地址，如 `http://127.0.0.1:8080` |
+| `everything_http_user` / `everything_http_pass` | 空 | HTTP 服务的 Basic Auth；用户名为空则不发送认证 |
+| `everything_app_path` | 空 | 「打开 Everything」快捷按钮用的主程序路径，留空即 `D:\tool\Everything\Everything.exe`（前端不传路径） |
 | `obsidian_vault` | 空 | Obsidian vault 绝对路径；空且仅检测到 1 个 vault 时自动采用 |
 | `obsidian_folder` | `Magic Video` | vault 内笔记文件夹（相对路径，禁止 `..` / 绝对路径） |
 | `obsidian_auto_sync` | 0 | `cli.py test` 全绿后是否自动同步一次（默认关闭） |
@@ -643,8 +646,87 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 22. 尚未实现（明确边界，避免误判为缺陷）
+## 22. 封面精确抓取、人工设定封面、Everything 快捷方式、季数编辑（0.1.4 日常迭代）
 
-- 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、封面人工确认与多站点兜底。
+对应需求（2026-11-15）：用户给出两个确切搜索 URL
+`agedm.io/search?query=零之使魔` 与 `seeduck.cc/s/零之使魔/`，要求「仔细考虑能否拿到对应图片，实在不行就加一个地方让我人工把背景图粘贴进去，目前很多图片都是错的」；
+另要求「看过的列表第几季像改名一样双击可输入」；以及上一轮未收口的「全盘快搜彻底集成 / 加快捷方式」。
+
+实现文件：`app/covers.py`、`app/everything.py`、`app/api.py`、`app/config.py`、`web/app.js`、`web/style.css`。
+
+### 22-A 官方搜索 URL 实测与错图根因
+
+| 站点 | 实测 | 关键结构 |
+|---|---|---|
+| AGE动漫 | HTTP 200、无需 JS/CF | 4 个 `cata_video_item` 块；`<a title>` 是标题；`data-original` 是百度图片代理（`/gimg/app=2001&...&src=<urlencoded CDN>`）；**所有块 `src` 是同一个占位图** |
+| Seeduck | HTTP 200、无需 JS/CF | `<a title=长标题 class="image"><img src=真实封面>` + 同条目 `<h2>` 干净短标题；图片是绝对 URL、无占位 |
+
+精准命中常在靠后位置（「葬送的芙莉莲」第 2 块、「进击的巨人」第 3 块、「零之使魔」第 4 块），
+旧 `_BLOCK_RE` 用 `(?=...|</main>)` 切块会丢掉最后一条，而最后一条往往正是精确匹配。
+
+修复：
+- `_BLOCK_RE` 改用 `finditer` + `\Z` 兜底，`_blocks()` 保证最后一块不丢；
+- `_age_candidates()` **只取 `data-original`**，从百度代理 `src=` 参数解出原始 CDN 直连并排首位，
+  彻底排除共用占位 `src`；`_GENERIC_IMG_RE` 也不再含裸 `src`；
+- `_seed_pairs()` 按 `<a class="image">` 切条目，优先用 `<h2>` 短标题，旧页回退 `<a title>`；
+- `exact_pick()` 精确 → 去季精确；`strict_pick()` 兜底要求 0.90 相似度且差值只能是季/续作后缀，
+  **无关标题一律不凑数**；
+- `search_cover()` 逐关键词请求 AGE 搜索页 → Seeduck `/s/<kw>/` 搜索页（带短 TTL 缓存）
+  → 旧首页池严格兜底。`SEEDUCK_PAGES` / `seed_pairs()` 无参行为保持不变。
+
+隔离库真实网络实测：`零之使魔 / 葬送的芙莉莲 / 进击的巨人 / 更衣人偶坠入爱河 / 间谍过家家`
+**5/5 精确命中**（`hit` 与查询完全一致），全部落到 `cdn.aqdstatic.com` 直连，
+5 张均为真实 JPEG、24~58 KB、体积各不相同（不再有共用占位图）。
+
+### 22-B 人工设定封面
+
+| # | 验收标准 |
+|---|---|
+| 22-B1 | 剧集墙卡片与看过的列表卡片墙都有「设定封面」；弹窗支持 **Ctrl+V 粘贴剪贴板图片**（FileReader → base64）、系统文件对话框选本地图片、或粘贴 http(s) 图片网址 |
+| 22-B2 | 三种来源统一由后端 `Api.set_cover()` 读取/下载，`covers.validate_image_bytes()` 校验魔数（JPEG/PNG/WebP/GIF/BMP）与 `512B ≤ size ≤ 3MB`；拒绝相对路径、非图片后缀、非 http(s)、非法 base64 |
+| 22-B3 | 落盘到 `cache_path(cover_key(title))`，写 `subjects(source='manual')`；`subject_covers()` 用 `ORDER BY (source='manual') DESC` 保证人工图优先 |
+| 22-B4 | `is_manual()` 按**缓存文件名**（哈希）判定，不受标题空格/大小写影响；`fetch_one()` 连 `force=True` 也不覆盖人工图，`cover_titles()` 把人工作品排除出抓取队列 |
+| 22-B5 | 弹窗「恢复自动」调 `clear_cover()` 删 manual 记录并删掉这一张缓存文件；不碰用户视频/图片文件 |
+| 22-B6 | 不是定时任务；`app/covers.py` 源码不含 `Timer(` / `schedule` |
+
+### 22-C Everything A+B（彻底集成评估结论）
+
+| 问题 | 结论 |
+|---|---|
+| GitHub 有源码吗 | **核心搜索引擎闭源**，无官方源码仓库；`voidtools/ES` 是 MIT 的 es.exe 命令行客户端，`everything_sdk3` 是 IPC 客户端，都只是连到运行中的 Everything 实例 |
+| 能否编译进本软件 | **不能**；Lite 版还会禁用 IPC/ES/HTTP，必须完整版。真正开源可嵌入的替代（FastFind.NET 等）需自研内核 + 提权，本轮不做 |
+| 随包捆绑合法吗 | es.exe / Everything.exe 为 MIT 风格许可，可随第三方分发并保留版权声明；属打包/授权层改动，需单独确认 |
+| 当前降级提示 | **正常设计**，不是 bug |
+
+落地（用户选 A+B 一次到位）：
+- 修 `es_exe()`：设置项空串回退 `DEFAULT_ES_PATH`，不再变成 `Path('.')`；
+- 下载官方 `ES-1.1.0.38.x64.zip` 并把 `es.exe` 放到 `D:\tool\Everything\es.exe`；
+- `http_auth()` 支持 Basic Auth，`search_http()` 传 `auth=`；新增 3 个设置键；
+- `search_es()` 识别退出码 8 / `IPC not found`，给出「Everything 以 -svc 服务模式运行，请启用 HTTP」的可操作提示，降级文案区分「没装 es.exe」与「装了但连不上」；
+- `Api.everything_open()` + `everything.open_app()`：路径由后端固定配置决定（前端不传参），校验绝对/`.exe`/真实存在后 `os.startfile`，不拼 shell 命令；
+- 快搜页与设置页都有「打开 Everything」按钮，主程序不存在时置灰；`capabilities()` 新增 `app_path` / `installed`。
+
+**本机环境事实**：Everything 1.4.1.1032 完整版以 `-svc`（会话 0 服务）运行，用户会话的 es.exe 连不上 IPC（Error 8，`-ipc1/2/3` 与 `-instance` 均无效），`http_server_enabled=0`。这是会话隔离，改系统服务配置/重启需用户决定，本轮不动。要真正全盘检索，请在 Everything 选项启用 HTTP 服务并填地址。
+
+### 22-D 看过的列表「第几季」双击编辑
+
+| # | 验收标准 |
+|---|---|
+| 22-D1 | 表格视图「季」单元格带 `data-edit-watched` + `data-field="season_no"`，双击变数字输入框，失焦 / 回车 / 保存按钮三条路径共用 `saveWatchedEdit()` |
+| 22-D2 | `watchedEditField` 区分 `'title'` 与 `'season_no'`，改名链路（含隐藏中文名域 `watchedEditCn`）原样保留 |
+| 22-D3 | `Api.set_watched_season()` 是独立入口，**只 `UPDATE season_no`**，不动 title/title_cn/raw_text/集数/match_by；支持 `2` / `S3` / `第4季`，留空、`0`、`—` 清空，负数/带符号/超 1–999 拒绝 |
+| 22-D4 | 卡片墙视图不变（按作品聚合的「N 季」标签是统计值，不是单条记录） |
+
+对应测试：`tests/test_manual_cover.py`（真实站点结构、占位图排除、CDN 解析、搜索 URL、人工三种来源、force 不覆盖、含空格标题保护、前端契约）、
+`tests/test_everything_open.py`（空串回退、Error 8 提示、HTTP Auth、打开主程序白名单、前端按钮）、
+`tests/test_watched_season.py`（后端 API 与前端字段分支）。
+`run_changed_tests.py` 的 `app/api.py` / `app/config.py` / `app/covers.py` / `app/everything.py` 与 `FRONTEND_MODULES` 已连带加入三个新模块。
+
+---
+
+## 23. 尚未实现（明确边界，避免误判为缺陷）
+
+- 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、多站点封面兜底自动投票（人工确认已实现，见 §22-B）。
+- 随包捆绑完整版 `Everything.exe` + `es.exe`（合法但属打包/授权层改动，需单独确认）；把开源全盘索引内核编译进本软件。
 - 换用 mpv / libVLC 等开源内核（正在调研，未决定是否迁移；当前仍是 PotPlayer 控制层方案）。
 - 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。

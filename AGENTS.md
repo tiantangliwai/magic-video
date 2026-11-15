@@ -52,6 +52,9 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 32 | 扫描结果按**磁盘目录结构**展示；设置页「保存设置」等按钮固化在内容顶部、上下滚动时常驻 | 用户明确要求（0.1.4 日常迭代） |
 | 33 | 分组修正：`Anna Directors Cut E01–E08` 归成一部剧、`1.36G` 显示为「爱的躯壳」、尽量按目录统一归并、**去掉「未标注季」这一层**，并提供用户可编辑作品名的能力 | 用户明确要求（0.1.4 日常迭代） |
 | 34 | 看过的列表中能匹配到**扫描目录对应目录**的作品，支持用文件资源管理器跳转到该文件夹；匹配不到就不显示入口 | 用户明确要求（0.1.4 日常迭代） |
+| 35 | 用用户给的两个搜索 URL 拿到**正确的**封面（很多图是错的）；若实在拿不到，提供一处让用户**人工粘贴背景图**的入口 | 用户明确要求（0.1.4 日常迭代） |
+| 36 | 看过的列表「第几季」也像改名一样**双击即可输入**（失焦/回车保存） | 用户明确要求（0.1.4 日常迭代） |
+| 37 | 全盘快搜降级提示：评估能否彻底集成 / GitHub 有无源码 / 插件化 / 至少加快捷方式 | 用户明确要求（0.1.4 日常迭代，选 A+B） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -228,7 +231,11 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 守护自动启动改动：`tests/test_daemon_autostart.py` 必须覆盖默认值、自动拉起 / 已运行不重复 / 关闭不启动、`stop_daemon()`、设置保存的即时生效、源码版与打包版进程识别、前端不再有 `start-daemon` 按钮；**禁止在 `Api.__init__` 拉起进程**，所有 `subprocess.Popen` / `psutil.process_iter` / `proc.terminate()` 一律 mock，绝不真的启停本机托盘守护。
   - **血泪坑**：`Api.save_settings({"daemon_auto_start": 0})` 会立刻调 `_apply_daemon_auto_start()` → `stop_daemon()` 真杀本机守护。曾有一个 `save_settings` 用例漏 mock，导致每跑一次 `run_tests.py` 用户的托盘守护就被杀掉、左下角误显示「后台记录未启动」。因此 `DaemonAutoStartApiTests.setUp` 统一把 `app.api.psutil.process_iter` 钉为空列表、`app.api.subprocess.Popen` 钉为抛 `AssertionError`；新增用例若需真实枚举，必须在自身作用域内层 patch 临时覆盖。任何新增的 `save_settings` 用例都要显式 mock `start_daemon` / `stop_daemon`。
 - 播放控制改动：`tests/test_player_controls.py` 必须覆盖按键消息码（WM_KEYDOWN/WM_KEYUP 与 VK）、无窗口 / 非 Windows / PostMessage 失败降级、键位白名单与非法值回退、倍速步进的精确与不精确分支、上下相邻集排序与边界、设置页保存白名单、前端三文件静态契约。**所有 Win32 调用一律 mock，绝不启动真实播放器**；控制条必须放在 `#playerHost` 之外的 HTML 层，否则会被原生子窗口盖住。
-- 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务；改 `app/textmatch.py` 或 `app/covers.py` 还要连带跑 `tests/test_watchlist.py`（关键词变体、两源共享索引、代理断连重试、非 200 换源）。站点搜索**不能只试完整长标题**。
+- 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务；改 `app/textmatch.py` 或 `app/covers.py` 还要连带跑 `tests/test_watchlist.py`（关键词变体、两源共享索引、代理断连重试、非 200 换源）与 `tests/test_manual_cover.py`。站点搜索**不能只试完整长标题**。
+  - **三条硬约束**：① AGE 候选**只取 `data-original`**（可从百度代理 `src=` 解出原始 CDN），`src` 是所有结果共用的占位图，绝不能进候选；② `_blocks()` 必须以字符串末尾兜底，不能丢最后一块（精确匹配常是最后一块）；③ 匹配按 `exact_pick()` 精确/去季精确 → `strict_pick()`（0.90 + 差值只能是季/续作后缀），**禁止退回 0.62 模糊凑数**，宁可返回未找到也不拿别的作品的图。Seeduck 优先用 `/s/<kw>/` 搜索页 `<h2>` 短标题，不用固定首页池凑数。
+  - 人工封面：`source='manual'` 优先级最高，`is_manual()` 按**缓存文件名**（哈希）判定（标题含空格/大小写时 `lower(title_cn)` 会对不上）；`fetch_one()` 连 `force=True` 也不能覆盖，`cover_titles()` 要排除人工作品；`set_cover()` 三种来源都必须校验魔数与大小。
+- Everything 改动：`tests/test_everything.py` + `tests/test_everything_open.py` 必须覆盖空串回退默认路径、Error 8 / `-svc` 会话隔离的可操作提示、HTTP Basic Auth、`open_app()` 只用后端固定路径且 `os.startfile` 全 mock。**绝不修改用户 `Everything.ini` 或重启其服务进程**；核心引擎闭源，禁止尝试「下载源码编译集成」。
+- 看过的列表季数编辑：`tests/test_watched_season.py` 必须覆盖 `set_watched_season()` 只改 `season_no`、三种输入格式、留空清空、负数/超范围拒绝、前端 `watchedEditField` 字段分支与失焦保存；**不得复用 `update_watched` 改季数**，改名链路的隐藏中文名域契约必须保留。
 - 追剧列表 / 后台进程改动：`tests/test_watchlist.py` 必须覆盖解析与编号边界、顺序/状态调整幂等、短英文泛词不误命中、进程状态只读、**新增左侧导航必须同步 `VIEW_META` / `RENDERERS` / nav 三者键集合**；`process_status()` 用例必须显式 mock `daemon_running` 与 `subprocess.Popen`，绝不启停本机守护。
 - 剧集墙改动：「查看分集」必须带 `search_keyword`；脏分组名（如 `1.36G`）要退回组内 `title_cn` 或文件名括号里的中文片名；卡片不得再出现「播放下一集」或封面抓取控件。
 - 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
@@ -277,6 +284,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - ❌ 永久删除本地文件（`os.remove` / `unlink` / `rmtree` 一律禁止，只能 `FOF_ALLOWUNDO` 进回收站，且必须用户二次确认）。
 - ❌ 让在线刮削阻塞导入、扫描或播放记录；必须短超时 + 整批降级。
 - ❌ 把封面抓取做成定时任务 / 开机自跑；入口只在「后台进程」页，进度轮询只在用户停留该页时存在，切走即停。
+- ❌ 把 AGE 的共用占位 `src` 当封面候选；把 0.62 模糊相似度结果当命中；用固定首页池给未命中的作品凑图。
+- ❌ 让自动抓取（含 `force=True`）覆盖用户人工设定的封面；`clear_cover()` 是唯一撤销入口。
+- ❌ 修改用户 `Everything.ini`、重启其 `-svc` 服务进程，或尝试把闭源 Everything 引擎「编译进本软件」。
 - ❌ 用一个长事务同时包住网络请求和数据库写。
 - ❌ 提交 `data/*.db`、日志、临时测试产物。
 - ❌ 未经用户明确要求就升版本 / 重出 ZIP、MSI / 打 tag / 自动同步 Obsidian（见 3.0）。
@@ -293,8 +303,8 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 续播参数 | `/seek=hh:mm:ss` `/current` `/autoplay`（官方 `CmdLine64.txt`） |
 | WebView2 | Edge WebView2 157 已安装，pywebview `gui="edgechromium"`；必须 `private_mode=True`、不传 `background_color` |
 | 原生标题栏 | 由 DWM 绘制、CSS 管不到；`app/theme_native.py::apply()` 用 `DWMWA_USE_IMMERSIVE_DARK_MODE=20`（旧系统回退 19）同步，实测可设可读回 `dark=1`；`DWMWA_CAPTION_COLOR=35` 本机返回失败，静默忽略即可 |
-| Everything | `D:\tool\Everything\Everything.exe` 存在，**没有 `es.exe`**；全盘检索需用户自行补 `es.exe` 或启用 HTTP 服务 |
-| 封面源 | AGE动漫 `www.agedm.io/search?query=` 中文名命中稳定；SeedHub `seeduck.cc` 搜索被 Cloudflare 拦，首页/分类页可按 title 配对；本机 Python 需 `verify=False` |
+| Everything | `D:\tool\Everything\Everything.exe` + 官方 `es.exe`（ES-1.1.0.38）都在。但 Everything 1.4.1.1032 以 `-svc`（会话 0 服务）运行，**es.exe 连不上 IPC（Error 8）**，`http_server_enabled=0`；要全盘检索需用户在 Everything 选项启用 HTTP 服务并填地址。核心引擎闭源、无法编译进本软件（详见 `docs/FEATURES.md` §22-C） |
+| 封面源 | **两个搜索 URL 实测均 200 可用**：AGE动漫 `www.agedm.io/search?query=`（`data-original` 是百度代理，`src` 是共用占位图，必须排除）与 Seeduck `seeduck.cc/s/<kw>/`（`<h2>` 短标题 + `img src` 真封面）。旧结论「搜索被 CF 拦、只能用首页池」已作废。本机 Python 需 `verify=False` |
 | 数据目录 | `./start` / 安装版 / 守护 / 开机自启 = `D:\magicvideo`（D 盘，真实库，2026-11-15 由 `%APPDATA%\Magic Video` 迁移，旧目录保留）；`data/dev` 是 `dev.bat` 的安全副本，别把封面/记录只写进副本 |
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
 | git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.4` |

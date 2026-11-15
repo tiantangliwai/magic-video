@@ -35,17 +35,20 @@ IMPACT: dict[str, tuple[str, ...]] = {
     "app/api.py": ("tests.test_media_browser", "tests.test_media_tree",
                    "tests.test_manual_cleanup", "tests.test_watched_cleanup",
                    "tests.test_player_controls", "tests.test_continue_dismiss",
-                   "tests.test_watched_folders"),
+                   "tests.test_watched_folders", "tests.test_watched_season",
+                   "tests.test_manual_cover", "tests.test_everything_open"),
     "app/db.py": ("tests.test_api", "tests.test_manual_cleanup", "tests.test_watcher",
                   "tests.test_continue_dismiss"),
-    "app/config.py": ("tests.test_packaging", "tests.test_startup", "tests.test_theme"),
+    "app/config.py": ("tests.test_packaging", "tests.test_startup", "tests.test_theme",
+                      "tests.test_everything_open"),
     "app/library_tree.py": ("tests.test_media_tree", "tests.test_covers"),
     "app/importer.py": ("tests.test_importer", "tests.test_importer_realworld",
                         "tests.test_watched_cleanup", "tests.test_watched_list"),
-    "app/covers.py": ("tests.test_covers", "tests.test_watchlist"),
+    "app/covers.py": ("tests.test_covers", "tests.test_watchlist", "tests.test_manual_cover"),
     "app/watchlist.py": ("tests.test_watchlist", "tests.test_watched_folders"),
     "app/textmatch.py": ("tests.test_watchlist", "tests.test_covers"),
-    "app/everything.py": ("tests.test_everything", "tests.test_quicksearch"),
+    "app/everything.py": ("tests.test_everything", "tests.test_quicksearch",
+                          "tests.test_everything_open"),
     "app/embedded_player.py": ("tests.test_embedded_player", "tests.test_potplayer"),
     "app/potplayer.py": ("tests.test_potplayer", "tests.test_embedded_player",
                          "tests.test_player_controls"),
@@ -81,6 +84,10 @@ FRONTEND_MODULES: tuple[str, ...] = (
     # 看过的列表的返回结构与前端契约以前是漏网模块：改共用前端文件必须连带验证
     "tests.test_watched_list",
     "tests.test_watched_folders",
+    # 季数双击编辑 / 人工设定封面 / Everything 快捷按钮的前端契约
+    "tests.test_watched_season",
+    "tests.test_manual_cover",
+    "tests.test_everything_open",
 )
 
 DOC_PATHS = ("README.md", "AGENTS.md", "CHANGELOG.md")

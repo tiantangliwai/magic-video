@@ -417,6 +417,37 @@ class Api:
             "row": db.row("SELECT * FROM watched_list WHERE id = ?", (rid,)),
         }
 
+    def set_watched_season(self, item_id: int, season_no=None) -> dict:
+        """行内改「第几季」。只动 season_no，不改作品名/中文名/原文/集数。
+
+        留空、0、— 表示清空（NULL）；允许「2」「S2」「第2季」这类输入，抽数字。
+        改名走 ``update_watched``，两个入口互不干扰。
+        """
+        try:
+            rid = int(item_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "记录编号无效"}
+        if not db.row("SELECT id FROM watched_list WHERE id = ?", (rid,)):
+            return {"ok": False, "error": "记录不存在"}
+        raw = str(season_no if season_no is not None else "").strip()
+        if not raw or raw in ("0", "—", "-", "无"):
+            value = None
+        else:
+            # 负数/带符号数字不是合法季数，别让 \d+ 把 "-3" 削成 3
+            if re.search(r"[-+]", raw):
+                return {"ok": False, "error": "季数请填正整数，留空表示清空"}
+            m = re.search(r"\d+", raw)
+            if not m:
+                return {"ok": False, "error": "季数请填数字，留空表示清空"}
+            value = int(m.group())
+            if not 1 <= value <= 999:
+                return {"ok": False, "error": "季数需在 1–999 之间"}
+        db.execute("UPDATE watched_list SET season_no = ? WHERE id = ?", (value, rid))
+        return {
+            "ok": True,
+            "row": db.row("SELECT * FROM watched_list WHERE id = ?", (rid,)),
+        }
+
     def delete_watched(self, item_id: int) -> dict:
         db.execute("DELETE FROM watched_list WHERE id = ?", (int(item_id),))
         return {"ok": True}
@@ -925,7 +956,9 @@ class Api:
             "potplayer_path", "poll_interval_sec", "complete_percent", "recording_enabled",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
             "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
-            "everything_es_path", "everything_http_url", "embed_player", "daemon_auto_start",
+            "everything_es_path", "everything_http_url", "everything_app_path",
+            "everything_http_user", "everything_http_pass",
+            "embed_player", "daemon_auto_start",
             # 播放快捷键绑定与倍速步进：PotPlayer 各版本键位不同，允许在设置里改
             "pot_key_play_pause", "pot_key_stop", "pot_key_faster", "pot_key_slower",
             "pot_key_reset_speed", "pot_key_fullscreen", "pot_speed_step",
@@ -958,6 +991,10 @@ class Api:
 
     def everything_search(self, keyword: str, limit: int = 200) -> dict:
         return everything.search(keyword, limit)
+
+    def everything_open(self) -> dict:
+        """打开本机 Everything 主程序（快捷方式）；路径由后端固定配置，前端不传参。"""
+        return everything.open_app()
 
     # ---------- 追剧列表 ----------
     def watchlist_preview(self, text: str) -> dict:
@@ -1023,6 +1060,75 @@ class Api:
             except Exception:
                 continue
         return out
+
+    def set_cover(self, title: str, image: str = "", src_type: str = "datauri") -> dict:
+        """人工设定封面：支持粘贴的 base64 data URI / 本地图片路径 / 图片 URL。
+
+        前端只传字符串，路径与 URL 都由后端读取/下载并校验魔数与大小，
+        不信任任何前端内容；成功后写 subjects(source='manual')，自动抓取永不覆盖。
+        """
+        import base64
+        text = str(title or "").strip()
+        if not text:
+            return {"ok": False, "error": "作品名为空"}
+        payload = str(image or "").strip()
+        kind = str(src_type or "datauri").lower()
+        origin = f"manual:{kind}"
+        try:
+            if kind == "datauri":
+                if not payload.startswith("data:image/") or ";base64," not in payload:
+                    return {"ok": False, "error": "不是图片 data URI"}
+                raw = payload.split(";base64,", 1)[1]
+                data = base64.b64decode(raw, validate=True)
+            elif kind == "path":
+                p = Path(payload)
+                exts = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+                if not p.is_absolute() or p.suffix.lower() not in exts or not p.is_file():
+                    return {"ok": False, "error": "本地图片路径无效"}
+                if p.stat().st_size > 3 * 1024 * 1024:
+                    return {"ok": False, "error": "图片超过 3 MB"}
+                data = p.read_bytes()
+                origin = f"manual:path:{p.name}"[:200]
+            elif kind == "url":
+                if not payload.startswith(("http://", "https://")):
+                    return {"ok": False, "error": "图片地址必须是 http(s)"}
+                resp = covers._get(payload, timeout=covers.IMAGE_TIMEOUT, retries=1)
+                if resp.status_code != 200:
+                    return {"ok": False, "error": f"下载失败 HTTP {resp.status_code}"}
+                data = resp.content
+                origin = f"manual:url:{payload}"[:200]
+            else:
+                return {"ok": False, "error": "不支持的图片来源"}
+        except Exception as exc:
+            return {"ok": False, "error": f"读取图片失败：{type(exc).__name__}"}
+        result = covers.set_manual_cover(text, data, origin)
+        if result.get("ok"):
+            result["is_manual"] = True
+        return result
+
+    def clear_cover(self, title: str) -> dict:
+        """撤销人工封面，恢复自动抓取。"""
+        return covers.clear_manual_cover(title)
+
+    def cover_is_manual(self, titles: list[str]) -> dict:
+        """批量标记哪些作品用了人工封面，供剧集墙卡片显示角标。"""
+        return {str(t): covers.is_manual(str(t)) for t in (titles or [])[:400]}
+
+    def choose_image_file(self) -> dict:
+        """系统文件对话框选一张本地图片；返回绝对路径，由 set_cover 读取。"""
+        try:
+            import webview
+            if not self._window:
+                return {"ok": False, "error": "窗口尚未就绪，请改用粘贴或图片地址"}
+            result = self._window.create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=False,
+                file_types=("图片文件 (*.jpg;*.jpeg;*.png;*.webp;*.gif;*.bmp)",),
+            )
+            if result and len(result):
+                return {"ok": True, "path": str(result[0])}
+            return {"ok": False, "error": "已取消"}
+        except Exception as exc:
+            return {"ok": False, "error": f"对话框不可用：{exc}"}
 
     # ---------- 后台进程管理 ----------
     def process_status(self) -> dict:

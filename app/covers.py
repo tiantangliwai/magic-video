@@ -6,15 +6,19 @@
 - 短超时、整批失败快速降级；任何网络异常都只记状态，不抛给调用方。
 - 图片只写进本程序自己的 ``COVER_DIR``，绝不修改用户视频目录。
 
-数据源（2026-11-15 实测）：
+数据源（2026-11-15 二次实测，用户给出确切搜索 URL 后修正）：
 - 主源 AGE动漫 ``https://www.agedm.io/search?query=<关键词>``：结果块
   ``<div class="card cata_video_item">`` 里 ``<a title="...">`` 为标题，
-  ``img.video_thumbs`` 的 ``data-original`` 是高清封面、``src`` 是缩略图。
-  **用短关键词（书名号内容 / 主标题 / 去季标记 / 中文核心片段）轮番搜**，
-  完整长标题带季号、演员表、括号说明时站点几乎搜不到，是失败率高的主因。
-- 备源 SeedHub(seeduck.cc)：搜索被 Cloudflare 拦，但首页 / 动漫分类页可达，
-  ``<a title="作品名" class="image"><img src="...webp">`` 可按标题配对；
-  页面只取一次，然后用全部关键词在结果里排序挑最像的一条。
+  ``img.video_thumbs`` 的 ``data-original`` 是真实封面（百度图片代理，
+  形如 ``https://gimg3.baidu.com/gimg/app=2001&...&src=<urlencoded CDN>``），
+  **``src`` 是所有结果共用的占位图**，绝不能当封面候选。
+  从代理 URL 的 ``src=`` 参数可解出原始 CDN 直连地址，最稳。
+  精确匹配常常排在后面（「葬送的芙莉莲」第 2 块、「进击的巨人」第 3 块），
+  所以必须按标题精确优先、切块不能丢最后一条。
+- 备源 SeedHub ``https://seeduck.cc/s/<关键词>/``：**搜索页实测 HTTP 200 可用**
+  （旧注释「搜索被 CF 拦」是错的）。结构为
+  ``<a title="长标题" class="image"><img src="真实封面">`` + 同条目 ``<h2>`` 短标题。
+  改用按关键词搜索替代固定首页池，避免用别的作品的图凑数。
 - 本机走系统 HTTPS 代理且为 MITM 证书，Python 必须 ``verify=False`` 才能连通
   （curl 用系统 CA 所以能通）；这是本机环境事实，不是放松校验的通用理由。
 """
@@ -31,13 +35,17 @@ from pathlib import Path
 from . import config, db, textmatch
 
 AGEDM_SEARCH = "https://www.agedm.io/search"
-SEEDUCK_PAGES = (
+SEEDUCK_SEARCH = "https://seeduck.cc/s/{kw}/"
+SEEDUCK_PAGES = (   # 兼容旧契约的兜底池：只有搜索页全部失败时才用
     "https://seeduck.cc/",
     "https://seeduck.cc/categories/1/movies/",
     "https://seeduck.cc/categories/2/movies/",
     "https://seeduck.cc/categories/1/types/1/movies/",
     "https://seeduck.cc/categories/2/types/25/movies/",
 )
+# 百度图片代理：data-original 里的 src= 参数是原始 CDN，直连最稳
+_BAIDU_PROXY_RE = re.compile(r"^https?://gimg\d*\.baidu\.com/", re.I)
+_RAW_CDN_HOSTS = ("cdn.aqdstatic.com",)
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 TIMEOUT = (2.5, 5.0)          # connect, read
@@ -47,15 +55,23 @@ SEARCH_BUDGET_SEC = 16.0      # 单个作品的搜索总预算；超了就降级
 MAX_AGEDM_QUERIES = 4         # 主源最多试几个关键词
 MAX_BYTES = 3 * 1024 * 1024   # 单张封面上限，防止异常响应撑爆磁盘
 
-_BLOCK_RE = re.compile(r'<div class="card cata_video_item(.*?)(?=<div class="card cata_video_item|</main>)',
+# 切块用 finditer + \Z 兜底终点：旧版用 ``(?=...|</main>)`` 的 split 捕获组，
+# 真实页面最后一块后面没有 </main>，会被整块丢掉；而精确匹配常恰好是最后一块。
+_BLOCK_RE = re.compile(r'<div class="card cata_video_item\b.*?(?=<div class="card cata_video_item\b|\Z)',
                        re.S)
-_TITLE_RE = re.compile(r'<a href="[^"]+"[^>]*title="([^"]+)"', re.S)
+_TITLE_RE = re.compile(r'<a\b[^>]*title="([^"]+)"', re.S)
 _ORIG_RE = re.compile(r'data-original="([^"]+)"')
 _SRC_RE = re.compile(r'class="video_thumbs[^"]*"\s+src="([^"]+)"')
 _SEED_RE = re.compile(
     r'<a[^>]+title="([^"]+)"[^>]*class="image"[^>]*>\s*<img[^>]+src="([^"]+)"',
     re.S,
 )
+# Seeduck 搜索页：条目块（<a class="image"> 到下一个同级块），块内 <h2> 是干净短标题
+_SEED_ITEM_RE = re.compile(
+    r'<a\b[^>]*class="image"[^>]*>.*?(?=<a\b[^>]*class="image"|\Z)', re.S)
+_SEED_IMG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.S)
+_SEED_H2_RE = re.compile(r'<h2>(.*?)</h2>', re.S)
+_TAG_RE = re.compile(r"<[^>]+>")
 
 _JOB = {
     "running": False,
@@ -149,6 +165,33 @@ def _fuzzy_match(candidate: str, want: str) -> bool:
     return a == b or b in a or a in b or _norm_key(_strip_season(a)) == _norm_key(_strip_season(b))
 
 
+def _blocks(body: str) -> list[str]:
+    """AGE 搜索页结果块；用字符串末尾兜底，保证最后一块（常为精确匹配）不被丢掉。"""
+    return [m.group(0) for m in _BLOCK_RE.finditer(body)]
+
+
+def _age_candidates(block: str) -> list[str]:
+    """只取 data-original 的真实封面，彻底排除所有结果共用的占位 src。
+
+    data-original 是百度图片代理 ``...&src=<urlencoded>``，其 src 参数就是
+    原始 CDN 直连地址：优先放它，其次放代理本身。两者都比占位图可靠。
+    """
+    out: list[str] = []
+    for raw in _ORIG_RE.findall(block):
+        url = html.unescape(raw)
+        m = re.search(r"[?&]src=([^&]+)", url)
+        if m and _BAIDU_PROXY_RE.match(url):
+            try:
+                origin = urllib.parse.unquote(m.group(1))
+                if (origin.startswith("http") and any(h in origin for h in _RAW_CDN_HOSTS)):
+                    out.append(origin)
+            except (ValueError, UnicodeDecodeError):
+                pass
+        if url.startswith("http"):
+            out.append(url)
+    return list(dict.fromkeys(out))
+
+
 def parse_agedm(body: str, want: str) -> tuple[list[str], str] | None:
     """从 AGE动漫 搜索结果里挑出与 want 最匹配的 (候选封面URL列表, 命中标题)。
 
@@ -156,11 +199,13 @@ def parse_agedm(body: str, want: str) -> tuple[list[str], str] | None:
     没有完全一致时才放宽到包含匹配。
     """
     blocks = []
-    for block in _BLOCK_RE.split(body)[1::2]:
+    for block in _blocks(body):
         titles = _TITLE_RE.findall(block)
         if not titles:
             continue
         name = html.unescape(titles[0]).strip()
+        # parse_agedm 保留旧的 URL 拼接契约（含 src 缩略图），供单测与旧调用方使用；
+        # 真实下载走 _pairs → _age_candidates，那里已排除占位图。
         urls = [html.unescape(u) for u in (_ORIG_RE.findall(block) + _SRC_RE.findall(block))]
         urls = list(dict.fromkeys(u for u in urls if u.startswith("http")))
         if urls:
@@ -181,34 +226,70 @@ def parse_agedm(body: str, want: str) -> tuple[list[str], str] | None:
 
 
 def parse_seeduck(body: str, want: str) -> tuple[list[str], str] | None:
-    """从 SeedHub 首页/分类页里按 title 属性配对封面。"""
-    for name, url in _SEED_RE.findall(body):
-        clean = html.unescape(name).strip()
-        if _fuzzy_match(clean, want) and url.startswith("http"):
-            return [html.unescape(url)], clean
+    """从 SeedHub 搜索页里按 <h2> 短标题（旧页回退 <a title>）配对封面。
+
+    精确匹配优先，避免「零之使魔」被「零之使魔2 ～双月的骑士～」抢走。
+    """
+    pairs = _seed_pairs(body)
+    hit = exact_pick(pairs, want)
+    if hit:
+        return [hit[0][0]], hit[1]
+    hit = strict_pick(pairs, want)
+    if hit:
+        return [hit[0][0]], hit[1]
+    for name, urls in pairs:
+        if _fuzzy_match(name, want) and urls:
+            return [urls[0]], name
     return None
 
 
 # 站点改版时精确 class 会失效：再准备一套「锚点 title + 任意图片地址」的通用兜底。
+# 注意不含裸 src：AGE 的 src 是所有结果共用的占位图，收进来会污染候选。
 _GENERIC_ANCHOR_RE = re.compile(r'<a\b[^>]*title="([^"]+)"[^>]*>(.*?)</a>', re.S)
-_GENERIC_IMG_RE = re.compile(r'(?:data-original|data-src|data-lazy-src|src)="([^"]+)"')
+_GENERIC_IMG_RE = re.compile(r'(?:data-original|data-src|data-lazy-src)="([^"]+)"')
+
+
+def _seed_pairs(body: str) -> list[tuple[str, list[str]]]:
+    """Seeduck 搜索页条目 → (短标题, [真实封面 URL])。
+
+    优先用同条目 ``<h2>`` 的干净短标题；没有 h2（旧首页/分类页）时回退到
+    ``<a title>``。title 常带日文副标题，直接参与打分会干扰匹配。
+    """
+    items = _SEED_ITEM_RE.findall(body)
+    out: list[tuple[str, list[str]]] = []
+    if items:
+        for chunk in items:
+            imgs = [html.unescape(u) for u in _SEED_IMG_RE.findall(chunk)
+                    if u.startswith("http")]
+            if not imgs:
+                continue
+            h2 = _SEED_H2_RE.search(chunk)
+            if h2:
+                name = html.unescape(_TAG_RE.sub("", h2.group(1))).replace("#", "").strip()
+            else:
+                titles = _TITLE_RE.findall(chunk)
+                name = html.unescape(titles[0]).strip() if titles else ""
+            if name:
+                out.append((name, [imgs[0]]))
+    if out:
+        return out
+    # 兼容旧页面结构（tests/test_covers.py 的 SEED_HTML 只有 <a title class=image>）
+    for name, url in _SEED_RE.findall(body):
+        if url.startswith("http"):
+            out.append((html.unescape(name).strip(), [html.unescape(url)]))
+    return out
 
 
 def _pairs(body: str, seed_style: bool = False) -> list[tuple[str, list[str]]]:
     """把搜索结果页拆成 [(标题, 候选图片URL列表)]；先精确规则，失败再通用兜底。"""
-    out: list[tuple[str, list[str]]] = []
-    if seed_style:
-        for name, url in _SEED_RE.findall(body):
-            if url.startswith("http"):
-                out.append((html.unescape(name).strip(), [html.unescape(url)]))
-    else:
-        for block in _BLOCK_RE.split(body)[1::2]:
+    out: list[tuple[str, list[str]]] = _seed_pairs(body) if seed_style else []
+    if not out and not seed_style:
+        for block in _blocks(body):
             titles = _TITLE_RE.findall(block)
             if not titles:
                 continue
             name = html.unescape(titles[0]).strip()
-            urls = [html.unescape(u) for u in (_ORIG_RE.findall(block) + _SRC_RE.findall(block))]
-            urls = list(dict.fromkeys(u for u in urls if u.startswith("http")))
+            urls = _age_candidates(block)   # 只取 data-original 解出的真实封面
             if urls:
                 out.append((name, urls))
     if out:
@@ -230,11 +311,16 @@ _SEQUEL_EXTRA_RE = re.compile(
 _SEED_CACHE_TTL = 1800.0        # 一次抓取任务内共享，半小时后自动过期
 _SEED_CACHE: dict[str, tuple[float, list[tuple[str, list[str]]]]] = {}
 _SEED_CACHE_LOCK = threading.Lock()
+# 按关键词的搜索页缓存：同一批作品常共用关键词，避免重复请求
+_SEED_SEARCH_CACHE: dict[str, tuple[float, list[tuple[str, list[str]]]]] = {}
+_SEED_SEARCH_LOCK = threading.Lock()
 
 
 def clear_seed_cache() -> None:
     with _SEED_CACHE_LOCK:
         _SEED_CACHE.clear()
+    with _SEED_SEARCH_LOCK:
+        _SEED_SEARCH_CACHE.clear()
 
 
 def seed_pairs() -> list[tuple[str, list[str]]]:
@@ -297,16 +383,94 @@ def rank_pick(body: str, queries: list[str], *, seed_style: bool = False,
     return pick_from_pairs(_pairs(body, seed_style=seed_style), queries, threshold)
 
 
+def exact_pick(pairs: list[tuple[str, list[str]]], query: str):
+    """只认「标题完全一致」或「去掉季标记后完全一致」，不做模糊凑数。
+
+    真实站点里精确匹配常排在结果第 2~3 块，必须优先于任何相似度打分，
+    否则「零之使魔」会拿到「零之使魔 第三季」或别的作品的封面。
+    """
+    key = _norm_key(query)
+    if not key:
+        return None
+    base = _norm_key(_strip_season(query))
+    for name, urls in pairs:
+        if _norm_key(name) == key and urls:
+            return urls, name, query, 1.0
+    if base and base != key:
+        for name, urls in pairs:
+            if _norm_key(name) == base and urls:
+                return urls, name, query, 0.98
+    return None
+
+
+def strict_pick(pairs: list[tuple[str, list[str]]], query: str,
+                threshold: float = 0.90):
+    """严格相似度兜底：高分 + 差值只能是季号/续作后缀，否则宁可不返回。
+
+    与 `pick_from_pairs` 的 0.62 宽松阈值不同，这里用于「按关键词搜到的页面」，
+    只接受确实像同一部作品的结果；无关标题一律返回 None，避免抓错图。
+    """
+    qk = textmatch.normalize(query)
+    if not qk or not pairs:
+        return None
+    best = None
+    for name, urls in pairs:
+        if not urls:
+            continue
+        nk = textmatch.normalize(name)
+        score = textmatch.match_score(name, query)
+        if score < threshold:
+            continue
+        if nk != qk:
+            # 允许「标题 第二季」「标题2」这类续作后缀，但不许出现实义词
+            extra = nk.replace(qk, "", 1) if qk in nk else ""
+            if qk in nk and nk.startswith(qk):
+                if not extra or not _SEQUEL_EXTRA_RE.fullmatch(extra):
+                    continue
+            elif nk in qk and len(nk) >= 2:
+                continue    # 候选是查询的前缀，容易是另一部作品，拒绝
+            else:
+                continue
+        rank = (score, 0.2 if nk == qk else 0)
+        if best is None or rank > best[0]:
+            best = (rank, urls, name, query, score)
+    return best[1:] if best else None
+
+
+def _seeduck_search(query: str) -> list[tuple[str, list[str]]]:
+    """Seeduck 按关键词搜索页（实测 HTTP 200 可用），带短 TTL 缓存。"""
+    url = SEEDUCK_SEARCH.format(kw=urllib.parse.quote(query, safe=""))
+    cache_key = "search:" + url
+    with _SEED_SEARCH_LOCK:
+        cached = _SEED_SEARCH_CACHE.get(cache_key)
+    if cached and time.monotonic() - cached[0] < _SEED_CACHE_TTL:
+        return cached[1]
+    pairs: list[tuple[str, list[str]]] = []
+    try:
+        resp = _get(url, timeout=SEARCH_TIMEOUT, retries=1)
+        if resp.status_code == 200:
+            pairs = _seed_pairs(resp.text)
+    except Exception:
+        pairs = []
+    if pairs:      # 空结果不缓存，下轮换时机重试
+        with _SEED_SEARCH_LOCK:
+            _SEED_SEARCH_CACHE[cache_key] = (time.monotonic(), pairs)
+    return pairs
+
+
 def search_cover(title: str) -> dict:
     """同步查一次封面；``{ok, urls, source, hit, query}``。
 
-    策略（用户 2026-11-15 要求「不要全名，用关键词多试一试」）：
-    1. ``textmatch.query_variants()`` 直接从**原始标题**生成短关键词，按
-       「书名号片名 → 主标题 → 去季 → 中文核心片段 → 英文词」排序；
-       不再先过 ``cover_key()``（它的旧季正则会把 ``s1-3`` 削成 ``s``）。
-    2. AGE动漫 逐个关键词搜索，每页按相似度挑最像的一条；
-    3. 主源全落空再取 SeedHub 首页 / 分类页（各只取一次），用全部关键词排序；
-    4. 有总时间预算与请求数上限，任一环节失败立刻换下一个源，绝不阻塞任务线程。
+    策略（2026-11-15 按用户给出的两个确切搜索 URL 重做）：
+    1. ``textmatch.query_variants()`` 从原始标题生成短关键词；
+    2. 逐关键词请求 ``agedm.io/search?query=``，结果块只取 ``data-original``
+       （解出原始 CDN），**标题精确匹配优先**，没有精确才用严格相似度；
+    3. AGE 全落空再逐关键词请求 ``seeduck.cc/s/<kw>/`` 搜索页，同样精确优先；
+    4. 两个搜索页都无果才退回旧的首页/分类页固定池，且只接受严格匹配；
+    5. 有总时间预算与请求数上限，任一环节失败立刻换源，绝不阻塞任务线程。
+
+    旧版把 AGE 共用占位 ``src`` 当候选、用 0.62 相似度在固定池里凑数，
+    是「很多封面都是错的」的根因；现在宁可返回未找到，也不拿别的作品的图。
     """
     original = str(title or "").strip()
     if not original:
@@ -317,32 +481,50 @@ def search_cover(title: str) -> dict:
     deadline = time.monotonic() + SEARCH_BUDGET_SEC
     net_fail = 0
 
-    # 主源：AGE动漫，短关键词轮番试
+    def result(hit, source):
+        return {"ok": True, "urls": hit[0], "source": source,
+                "hit": hit[1], "query": hit[2]}
+
+    # 主源：AGE动漫，短关键词轮番试；每个关键词先精确、再严格兜底
+    loose_agedm = None
     for query in queries[:MAX_AGEDM_QUERIES]:
         if time.monotonic() >= deadline or net_fail >= 2:
-            break       # 代理连续断连就别把预算耗在重复失败上，直接换备源
+            break
         try:
             url = AGEDM_SEARCH + "?" + urllib.parse.urlencode({"query": query})
             resp = _get(url, timeout=SEARCH_TIMEOUT, retries=1)
             if resp.status_code != 200:
                 continue
-            # 统一走 rank_pick：它优先精确相等、对短词有续作后缀校验。
-            # 不能再退回 parse_agedm 的宽松包含匹配，否则「Zero」又会误配《终结者 Zero》。
-            hit = rank_pick(resp.text, queries)
+            pairs = _pairs(resp.text)
+            hit = exact_pick(pairs, query)
             if hit:
-                return {"ok": True, "urls": hit[0], "source": "agedm",
-                        "hit": hit[1], "query": hit[2]}
+                return result(hit, "agedm")
+            if loose_agedm is None:
+                loose_agedm = strict_pick(pairs, query)
         except Exception:
             net_fail += 1
             continue
+    if loose_agedm:
+        return result(loose_agedm, "agedm")
 
-    # 备源：SeedHub 多个分类页，整批共享一次抓取缓存（不是每部作品重抓），
-    # 用全部关键词在缓存结果里排序挑最像的一条
+    # 备源：Seeduck 按关键词搜索页（实测可用，不再是固定首页池）
+    for query in queries[:2]:
+        if time.monotonic() >= deadline:
+            break
+        pairs = _seeduck_search(query)
+        hit = exact_pick(pairs, query)
+        if hit:
+            return result(hit, "seeduck")
+        hit = strict_pick(pairs, query)
+        if hit:
+            return result(hit, "seeduck")
+
+    # 最后兜底：旧首页/分类页固定池，整批共享缓存；只接受严格匹配防止凑数
     pairs = seed_pairs()
-    hit = pick_from_pairs(pairs, queries)
-    if hit:
-        return {"ok": True, "urls": hit[0], "source": "seeduck",
-                "hit": hit[1], "query": hit[2]}
+    for query in queries:
+        hit = exact_pick(pairs, query) or strict_pick(pairs, query)
+        if hit:
+            return result(hit, "seeduck")
     return {"ok": False, "error": "两个源都没有匹配到封面", "query": queries[0]}
 
 
@@ -384,6 +566,105 @@ def local_cover(title: str) -> str:
     return ""
 
 
+_IMAGE_MAGIC = (
+    (b"\xff\xd8\xff", "jpeg"),
+    (b"\x89PNG\r\n\x1a\n", "png"),
+    (b"GIF87a", "gif"),
+    (b"GIF89a", "gif"),
+)
+_IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
+
+
+def validate_image_bytes(data: bytes) -> tuple[bool, str]:
+    """校验图片字节：魔数 + 大小边界。绝不信任前端传来的内容。"""
+    if not data or len(data) < 512:
+        return False, "图片太小或为空"
+    if len(data) > MAX_BYTES:
+        return False, f"图片超过 {MAX_BYTES // 1024 // 1024} MB 上限"
+    if any(magic == data[:len(magic)] for magic, _ in _IMAGE_MAGIC):
+        return True, ""
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return True, ""
+    if data[:2] == b"BM":
+        return True, ""
+    return False, "不是有效的图片文件（仅支持 JPG/PNG/WebP/GIF/BMP）"
+
+
+def manual_marker(title: str) -> str:
+    """人工封面的 subjects 标记键（与自动抓取共用归一化规则）。"""
+    return _norm_key(cover_key(str(title or "")))
+
+
+def manual_filename(title: str) -> str:
+    """按缓存文件名判定人工封面：哈希唯一，不受标题空格/大小写影响。"""
+    return cache_path(cover_key(str(title or ""))).name
+
+
+def is_manual(title: str) -> bool:
+    """该作品是否已由用户人工设定封面。
+
+    用 cover_local 文件名而不是标题做匹配——标题可能含空格、季标记，
+    ``lower(title_cn)`` 与 ``_norm_key()`` 会不一致导致保护失效。
+    """
+    name = manual_filename(title)
+    try:
+        row = db.row(
+            "SELECT 1 FROM subjects WHERE source = 'manual' AND cover_local = ? LIMIT 1",
+            (name,),
+        )
+        return bool(row and _cover_file_ok(name))
+    except Exception:
+        return False
+
+
+def set_manual_cover(title: str, data: bytes, origin: str = "manual:datauri") -> dict:
+    """把用户粘贴/选择的图片落盘，覆盖该作品的自动封面缓存。
+
+    写在同一 ``cache_path(cover_key(title))`` 上，``resolve_cover`` 的哈希直查
+    天然优先命中；``subjects.source='manual'`` 让后台抓取永远不覆盖用户选择。
+    """
+    key_title = cover_key(str(title or "").strip())
+    if not key_title:
+        return {"ok": False, "error": "作品名为空"}
+    ok, why = validate_image_bytes(data or b"")
+    if not ok:
+        return {"ok": False, "error": why}
+    try:
+        config.ensure_dirs()
+        dest = cache_path(key_title)
+        dest.write_bytes(data)
+        # 覆盖掉可能存在的旧自动记录，保证 subjects 里只剩 manual 这一条
+        save_cover_record(key_title, str(origin)[:200], "manual", dest.name)
+        return {"ok": True, "file": dest.name, "title": key_title,
+                "size": len(data), "source": "manual"}
+    except OSError as exc:
+        return {"ok": False, "error": f"写入封面失败：{exc}"}
+
+
+def clear_manual_cover(title: str) -> dict:
+    """撤销人工封面，恢复自动抓取。
+
+    只删本程序 ``COVER_DIR`` 里这一张由人工设定写入的缓存文件（可重抓），
+    不动用户的任何视频/图片文件；下次抓封面会自动重新填充。
+    """
+    key = manual_marker(title)
+    if not key:
+        return {"ok": False, "error": "作品名为空"}
+    name = manual_filename(title)
+    try:
+        db.execute("DELETE FROM subjects WHERE source = 'manual' AND cover_local = ?",
+                   (name,))
+        dest = config.COVER_DIR / name
+        try:
+            if dest.is_file():
+                dest.unlink()
+        except OSError:
+            pass
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+
+
 def save_cover_record(title: str, url: str, source: str, filename: str) -> None:
     """写 subjects 表，供剧集卡片直接读；同标题只保留最新一条。"""
     key = _norm_key(title)
@@ -409,6 +690,10 @@ def fetch_one(title: str, force: bool = False) -> dict:
     """
     key_title = cover_key(title)
     dest = cache_path(key_title)
+    # 人工设定的封面优先级最高：连 force 重抓也不能覆盖用户的选择，
+    # 想恢复自动结果必须先调 clear_manual_cover()。
+    if is_manual(key_title):
+        return {"ok": True, "cached": True, "file": dest.name, "source": "manual"}
     if not force and dest.is_file() and dest.stat().st_size > 512:
         return {"ok": True, "cached": True, "file": dest.name, "source": "cache"}
     found = search_cover(title)
@@ -521,6 +806,9 @@ def cover_titles(limit: int = 0) -> list[str]:
         key = _norm_key(title)
         if not title or key in seen:
             continue
+        # 用户人工设定过的作品不排进抓取队列，避免一次任务把它们全刷掉
+        if is_manual(title):
+            continue
         seen.add(key)
         out.append(title)
         if limit and len(out) >= limit:
@@ -595,7 +883,8 @@ def subject_covers() -> list[tuple[str, str]]:
             (str(r["title"] or ""), str(r["cover_local"] or ""))
             for r in db.rows(
                 "SELECT COALESCE(NULLIF(TRIM(title_cn),''), NULLIF(TRIM(title_orig),'')) AS title, "
-                "cover_local FROM subjects WHERE COALESCE(cover_local,'') <> ''"
+                "cover_local FROM subjects WHERE COALESCE(cover_local,'') <> '' "
+                "ORDER BY (source = 'manual') DESC, id DESC"
             )
         ]
     except Exception:

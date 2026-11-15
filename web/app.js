@@ -27,6 +27,7 @@ function applyTheme(theme) {
 let watchedRows = [];
 let watchedKeyword = '';
 let watchedEditing = 0;
+let watchedEditField = 'title';     // 'title'（改名）| 'season_no'（双击第几季）
 let watchedGrouped = false;         // 表格视图默认平铺，不按作品折叠
 let watchedViewMode = 'table';      // 看过的列表：默认平铺表格，卡片墙仍可一键切换
 let watchedCovers = {};             // 作品名 -> 封面 data URI（只读缓存，不触发抓取任务）
@@ -133,6 +134,103 @@ function confirmDialog({ title, message, note = '', items = [],
     document.addEventListener('keydown', onKey);
     const cancel = layer.querySelector('[data-modal="cancel"]');
     if (cancel) cancel.focus();
+  });
+}
+
+// 人工设定封面弹窗：支持 Ctrl+V 直接粘贴剪贴板图片、选本地文件、填图片网址。
+// 三种来源统一收敛成 { srcType, data }，交给后端 set_cover 读取/下载/校验。
+function coverDialog({ title }) {
+  return new Promise(resolve => {
+    const layer = document.createElement('div');
+    layer.className = 'modal-layer';
+    layer.innerHTML = `<div class="modal-box cover-modal" role="dialog" aria-modal="true">
+      <h3>设定封面 · ${esc(title)}</h3>
+      <p class="modal-msg">自动抓取拿错图时，直接在这里换一张。三种方式任选其一：</p>
+      <div class="cover-drop" id="coverDrop">
+        <div class="cover-preview" id="coverPreviewBox"><span>预览区</span></div>
+        <div class="hint">按 <b>Ctrl + V</b> 粘贴截图/图片，或点下面的按钮选择文件</div>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-sm" id="coverPickFile">选择本地图片…</button>
+        <button class="btn btn-sm" id="coverClear" title="撤销人工封面，恢复自动抓取">恢复自动</button>
+      </div>
+      <div class="field"><label>或粘贴图片网址（http/https）</label>
+        <input class="input" id="coverUrl" placeholder="https://example.com/poster.jpg" autocomplete="off"></div>
+      <p class="hint" id="coverStatus">未选择图片</p>
+      <div class="modal-actions">
+        <button class="btn" data-modal="cancel">取消</button>
+        <button class="btn btn-primary" data-modal="ok" id="coverOk" disabled>保存封面</button>
+      </div>
+    </div>`;
+    document.body.appendChild(layer);
+    let chosen = null;      // { srcType, data }
+    const statusEl = layer.querySelector('#coverStatus');
+    const okBtn = layer.querySelector('#coverOk');
+    const preview = layer.querySelector('#coverPreviewBox');
+
+    const setChosen = (srcType, data, note, previewSrc) => {
+      chosen = { srcType, data };
+      okBtn.disabled = false;
+      statusEl.textContent = note;
+      preview.innerHTML = `<img src="${esc(previewSrc || data)}" alt="封面预览">`;
+    };
+    const done = (value) => {
+      layer.remove();
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('paste', onPaste);
+      resolve(value);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') done(null); };
+    const onPaste = (e) => {
+      const items = (e.clipboardData && e.clipboardData.items) || [];
+      for (const item of items) {
+        if (item.type && item.type.startsWith('image/')) {
+          const file = item.getAsFile();
+          if (!file) continue;
+          const reader = new FileReader();
+          reader.onload = () => setChosen('datauri', reader.result,
+            `已粘贴图片（${Math.round(file.size / 1024)} KB）`, reader.result);
+          reader.readAsDataURL(file);
+          e.preventDefault();
+          return;
+        }
+      }
+      const text = ((e.clipboardData && e.clipboardData.getData('text')) || '').trim();
+      if (/^https?:\/\//i.test(text)) {
+        const input = layer.querySelector('#coverUrl');
+        input.value = text;
+        setChosen('url', text, '已粘贴图片网址', text);
+        e.preventDefault();
+      }
+    };
+    layer.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-modal]');
+      if (btn) { done(btn.dataset.modal === 'ok' ? chosen : null); return; }
+      if (e.target === layer) { done(null); return; }
+      if (e.target.closest('#coverPickFile')) {
+        const r = await call('choose_image_file').catch(() => ({ ok: false }));
+        if (r.ok && r.path) {
+          statusEl.textContent = `已选择本地文件：${r.path}`;
+          chosen = { srcType: 'path', data: r.path };
+          okBtn.disabled = false;
+          preview.innerHTML = '<span>本地文件（保存后显示）</span>';
+        } else if (r.error && r.error !== '已取消') toast(r.error, false);
+      }
+      if (e.target.closest('#coverClear')) {
+        const r = await call('clear_cover', title).catch(() => ({ ok: false }));
+        if (r.ok) { toast('已恢复自动封面，可重新抓取'); done({ clear: true }); }
+        else toast(r.error || '撤销失败', false);
+      }
+    });
+    layer.addEventListener('input', (e) => {
+      if (e.target.id !== 'coverUrl') return;
+      const v = e.target.value.trim();
+      if (/^https?:\/\//i.test(v)) setChosen('url', v, '将按这个地址下载图片', v);
+      else { chosen = null; okBtn.disabled = true; statusEl.textContent = '未选择图片'; }
+    });
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('paste', onPaste);
+    layer.querySelector('#coverDrop').focus?.();
   });
 }
 
@@ -680,18 +778,23 @@ async function renderLibrary() {
 let watchedSaving = false;
 async function saveWatchedEdit(rid) {
   if (watchedSaving) return;
+  const isSeason = watchedEditField === 'season_no';
+  // 「第几季」走专用 API，只改 season_no，不动作品名/中文名/原文/集数
+  const seasonEl = isSeason ? document.getElementById('watchedEditSeason') : null;
   const titleEl = document.getElementById('watchedEditTitle');
   const cnEl = document.getElementById('watchedEditCn');
-  if (!titleEl || !cnEl) return;
+  if (isSeason ? !seasonEl : (!titleEl || !cnEl)) return;
   watchedSaving = true;
   try {
-    const r = await call('update_watched', Number(rid), titleEl.value, cnEl.value);
+    const r = isSeason
+      ? await call('set_watched_season', Number(rid), seasonEl.value)
+      : await call('update_watched', Number(rid), titleEl.value, cnEl.value);
     if (!r.ok) { toast(r.error || '保存失败', false); return; }  // 保留编辑态供重试
     const i = watchedRows.findIndex(x => Number(x.id) === Number(rid));
     if (i >= 0) watchedRows[i] = r.row;
     watchedEditing = 0;
     renderWatchedRows();
-    toast(r.learned ? '名称已更新，中文名已记住' : '名称已更新');
+    toast(isSeason ? '季数已更新' : (r.learned ? '名称已更新，中文名已记住' : '名称已更新'));
   } finally { watchedSaving = false; }
 }
 
@@ -706,21 +809,33 @@ function watchedFolderButton(rowId) {
 function watchedRowHtml(r) {
   const [label, tone] = MATCH_LABEL[r.match_by] || ['—', ''];
   if (watchedEditing === Number(r.id)) {
+    const actions = `<div class="watched-actions">
+        <button class="btn btn-primary btn-sm" data-action="save-watched" data-id="${r.id}">保存</button>
+        <button class="btn btn-sm" data-action="cancel-watched">取消</button>
+      </div>`;
+    if (watchedEditField === 'season_no') {
+      // 季数单独一个入口：只显示一个数字框，其他列保持只读，避免误改作品名
+      return `<tr class="watched-edit">
+        <td>${esc(r.title)}<input type="hidden" id="watchedEditCn" value="${esc(r.title_cn || '')}"></td>
+        <td><span class="badge ${tone}">${esc(label)}</span></td>
+        <td><input class="input" id="watchedEditSeason" type="number" min="1" max="999"
+          value="${r.season_no ? num(r.season_no) : ''}" placeholder="留空=清空" autocomplete="off"></td>
+        <td colspan="2" class="hint">只改这一条的季数；留空表示未标注季，导入原文与集数不变。</td>
+        <td>${actions}</td>
+      </tr>`;
+    }
     // 中文名列不再展示，但已匹配/手改过的中文名要原样保留：用隐藏域带回给后端。
     return `<tr class="watched-edit">
       <td><input class="input" id="watchedEditTitle" value="${esc(r.title)}" autocomplete="off">
         <input type="hidden" id="watchedEditCn" value="${esc(r.title_cn || '')}"></td>
       <td colspan="4" class="hint">改名只影响这一条；导入原文与已记住的中文名保持不变。</td>
-      <td><div class="watched-actions">
-        <button class="btn btn-primary btn-sm" data-action="save-watched" data-id="${r.id}">保存</button>
-        <button class="btn btn-sm" data-action="cancel-watched">取消</button>
-      </div></td>
+      <td>${actions}</td>
     </tr>`;
   }
   return `<tr>
     <td data-edit-watched="${r.id}" data-field="title" title="双击编辑">${esc(r.title)}</td>
     <td><span class="badge ${tone}">${esc(label)}</span></td>
-    <td>${r.season_no ? esc(r.season_no) : '—'}</td>
+    <td data-edit-watched="${r.id}" data-field="season_no" title="双击修改第几季">${r.season_no ? esc(r.season_no) : '—'}</td>
     <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
     <td>${esc(shortDate(r.imported_at))}</td>
     <td><div class="watched-actions">
@@ -762,6 +877,8 @@ function watchedCardsHtml(groups) {
         <div class="poster-tags">${seasons}</div>
         <div class="poster-actions">
           ${folderRow ? watchedFolderButton(folderRow.id) : ''}
+          <button class="btn btn-sm" data-action="set-cover" data-name="${esc(g.key)}"
+            title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>
           <button class="btn btn-sm" data-action="watched-view-mode">查看条目</button>
         </div>
       </div></div>`;
@@ -821,6 +938,7 @@ async function renderWatched() {
   watchedRows = rows;
   watchedFolders = (folderData && folderData.folders) || {};
   watchedEditing = 0;
+  watchedEditField = 'title';
   // 封面只读缓存：和剧集墙同一条 cover_data_uris 通道，不触发后台抓取任务
   // 作品名与中文名都试一遍：封面缓存可能以其中任一种标题落盘
   const titles = [...new Set(watchedRows.flatMap(r => [r.title, r.title_cn])
@@ -832,7 +950,8 @@ async function renderWatched() {
   const cards = watchedViewMode === 'cards';
   setContent(`<div class="card watched-card"><div class="section-head"><h3>看过的列表</h3>
       <span class="badge blue" id="watchedCount">正在统计…</span></div>
-    <p class="hint">你手动导入的已观看作品。<b>默认平铺表格</b>：一行一条、不按作品折叠，双击作品名即可改名；
+    <p class="hint">你手动导入的已观看作品。<b>默认平铺表格</b>：一行一条、不按作品折叠，
+      <b>双击作品名改名、双击「季」这一格改第几季</b>（留空表示未标注季），改完失焦或回车即保存；
       切到卡片墙后每部作品一张封面卡片、只显示一个作品名，导入原文始终保留。
       <b>能在扫描目录里匹配到对应作品时</b>，条目上会出现「打开文件夹」，用资源管理器跳到该文件所在目录。</p>
     <div class="watched-toolbar">
@@ -1018,14 +1137,28 @@ async function renderSettings() {
         <div class="tip">点右上角「深色 / 浅色」即可切换黑白两套主题，设置会保存到本机数据库。</div></div>
     </div>
     <div class="card"><h3>全盘快搜（Everything）</h3>
-      <p class="hint">默认优先用 es.exe，其次 Everything 的 HTTP 服务；两者都没启用时自动降级为媒体库检索，功能始终可用。</p>
-      <div class="field"><label>es.exe 路径（可选）</label>
-        <input class="input" id="set-everything_es_path" value="${esc(s.everything_es_path || '')}" placeholder="D:\\tool\\Everything\\es.exe">
-        <div class="tip">本机 D:\\tool\\Everything 目前只有 Everything.exe。要使用全盘检索，可从 Everything 官网下载 es.exe 放到该目录。</div></div>
+      <p class="hint">默认优先用 es.exe，其次 Everything 的 HTTP 服务；两者都没启用时自动降级为媒体库检索，功能始终可用。
+        Everything 核心引擎闭源，仅 es.exe 命令行客户端开源（MIT），所以本软件通过调用它检索，而不是把搜索引擎编译进来。</p>
+      <div class="field"><label>es.exe 路径（可选，留空即用默认）</label>
+        <input class="input" id="set-everything_es_path" value="${esc(s.everything_es_path || '')}" placeholder="留空 = D:\\tool\\Everything\\es.exe">
+        <div class="tip">留空会自动使用 D:\\tool\\Everything\\es.exe。全盘检索需要这个命令行工具：从 voidtools 官网
+          「Downloads → Command Line Interface / ES」下载 ES 压缩包，把 es.exe 解压到该目录即可（需完整版 Everything，Lite 版不支持）。</div></div>
       <div class="field"><label>Everything HTTP 服务地址（可选）</label>
         <input class="input" id="set-everything_http_url" value="${esc(s.everything_http_url || '')}" placeholder="例如 http://127.0.0.1:8080">
-        <div class="tip">需在 Everything 选项里启用 HTTP 服务并设定端口。</div></div>
-      <div class="btn-row"><button class="btn btn-sm" data-action="goto" data-view="quicksearch">去全盘快搜</button></div>
+        <div class="tip">在 Everything「选项 → HTTP 服务器」启用并设定端口（如 8080）。<b>本机 Everything 以服务模式 (-svc) 运行，es.exe 无法连它的 IPC，推荐改用这条 HTTP 通道。</b></div></div>
+      <div class="field"><label>HTTP 服务用户名 / 密码（可选）</label>
+        <div class="btn-row">
+          <input class="input" id="set-everything_http_user" value="${esc(s.everything_http_user || '')}" placeholder="用户名（留空=无认证）">
+          <input class="input" id="set-everything_http_pass" value="${esc(s.everything_http_pass || '')}" placeholder="密码" type="password">
+        </div>
+        <div class="tip">仅在 Everything 的 HTTP 服务设置了 Basic Auth 时填写；留空则不发送认证。</div></div>
+      <div class="field"><label>Everything 主程序路径（可选，留空即用默认）</label>
+        <input class="input" id="set-everything_app_path" value="${esc(s.everything_app_path || '')}" placeholder="留空 = D:\\tool\\Everything\\Everything.exe">
+        <div class="tip">用于下面的「打开 Everything」快捷按钮；只在本机打开主程序窗口，不读取也不上传任何数据。</div></div>
+      <div class="btn-row">
+        <button class="btn btn-sm btn-primary" data-action="everything-open">打开 Everything</button>
+        <button class="btn btn-sm" data-action="goto" data-view="quicksearch">去全盘快搜</button>
+      </div>
     </div></div>
     <div class="card"><h3>Obsidian 知识沉淀</h3>
       <div class="notice">把<b>开发流程、自测结果、优化路线图、功能缺口</b>自动写进 vault 下独立的
@@ -1092,6 +1225,8 @@ function posterCardHtml(card, cover) {
       <div class="poster-actions">
         <button class="btn btn-sm" data-action="rename-work" data-node="${esc(card.group_id)}"
           data-name="${esc(card.title)}" title="修改这部作品在软件里显示的名称">改名</button>${cleanup}
+        <button class="btn btn-sm" data-action="set-cover" data-name="${esc(card.title)}"
+          title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>
         <button class="btn btn-sm" data-action="goto" data-view="library"
           data-keyword="${esc(card.search_keyword || card.title)}">查看分集</button></div>
     </div></div>`;
@@ -1171,10 +1306,11 @@ async function renderQuickSearch() {
   setContent(`<div class="card"><div class="section-head"><h3>全盘快搜（Everything）</h3>
       <span class="badge blue" id="esSourceBadge">检测检索通道…</span></div>
     <p class="hint">按文件名关键词搜整台电脑的视频，结果可直接「播放 / 续播」。优先用 es.exe，其次 Everything 的 HTTP 服务；
-      两者都没启用时<b>自动降级为媒体库检索</b>，功能始终可用。通道在「设置 → 全盘快搜」里配置。</p>
+      两者都没启用时<b>自动降级为媒体库检索</b>（只搜本软件已扫描的文件），功能始终可用。通道在「设置 → 全盘快搜」里配置。</p>
     <div class="watched-toolbar">
       <input class="input" id="esSearch" placeholder="输入文件名关键词，回车检索…" value="${esc(esState.keyword)}" autocomplete="off">
       <button class="btn btn-sm btn-primary" data-action="es-search">检索</button>
+      <button class="btn btn-sm" data-action="everything-open">打开 Everything</button>
       <button class="btn btn-sm" data-action="goto" data-view="settings">检索设置</button>
       <span class="hint" id="esHint"></span>
     </div>
@@ -1190,6 +1326,16 @@ async function renderQuickSearch() {
     badge.textContent = cap.es_available ? 'es.exe · 全盘检索'
       : cap.http_configured ? 'Everything HTTP · 全盘检索'
         : '媒体库检索（降级）';
+    if (!cap.es_available && !cap.http_configured) {
+      badge.title = '未检测到 es.exe，也未配置 HTTP 服务；检索范围仅限本程序媒体库。'
+        + '到「设置 → 全盘快搜」下载 es.exe 或启用 HTTP 即可升级为整机检索。';
+    }
+    // 主程序不存在时把快捷按钮置灰，避免点了只弹错误
+    const openBtn = document.querySelector('[data-action="everything-open"]');
+    if (openBtn && !cap.installed) {
+      openBtn.disabled = true;
+      openBtn.title = '未找到 Everything 主程序，可在「设置 → 全盘快搜」里指定路径';
+    }
   } catch (e) { /* 能力探测失败不影响检索 */ }
 }
 
@@ -1535,12 +1681,13 @@ async function handleAction(action, btn) {
       return;
     case 'edit-watched': {
       watchedEditing = Number(id);
+      watchedEditField = 'title';
       renderWatchedRows();
       const el = document.getElementById('watchedEditTitle');
       if (el) { el.focus(); el.select(); }
       return;
     }
-    case 'cancel-watched': watchedEditing = 0; renderWatchedRows(); return;
+    case 'cancel-watched': watchedEditing = 0; watchedEditField = 'title'; renderWatchedRows(); return;
     case 'save-watched': await saveWatchedEdit(Number(id)); return;
     case 'sync-watched-history': {
       const r = await call('sync_watched_from_history');
@@ -1674,6 +1821,24 @@ async function handleAction(action, btn) {
       else await refresh();
       return;
     }
+    case 'set-cover': {
+      const name = btn.dataset.name || '';
+      if (!name) return;
+      const picked = await coverDialog({ title: name });
+      if (picked && picked.clear) {
+        if (currentView === 'posters') await loadPosterWall();
+        else if (currentView === 'watched') await renderWatched();
+        return;
+      }
+      if (!picked) return;                       // 取消 / Esc
+      const r = await call('set_cover', name, picked.data, picked.srcType);
+      if (!r.ok) { toast(r.error || '设定封面失败', false); return; }
+      toast('封面已更新，之后自动抓取不会再覆盖它');
+      if (currentView === 'posters') await loadPosterWall();
+      else if (currentView === 'watched') await renderWatched();
+      else await refresh();
+      return;
+    }
     case 'tree-toggle': {
       const key = btn.dataset.node;
       if (!key) return;
@@ -1751,6 +1916,7 @@ async function handleAction(action, btn) {
       const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent', 'http_proxy',
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
         'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url',
+        'everything_http_user', 'everything_http_pass', 'everything_app_path',
         'pot_key_play_pause', 'pot_key_stop', 'pot_key_faster', 'pot_key_slower',
         'pot_key_reset_speed', 'pot_key_fullscreen', 'pot_speed_step'];
       const data = {};
@@ -1903,6 +2069,11 @@ async function handleAction(action, btn) {
       renderEsResults();
       return;
     }
+    case 'everything-open': {
+      const r = await call('everything_open');
+      toast(r.ok ? '已打开 Everything' : (r.error || '打开失败'), !!r.ok);
+      return;
+    }
     case 'play-external':
       await playSmart('path', btn.dataset.path || '', false);
       return;
@@ -1980,19 +2151,21 @@ document.addEventListener('input', (ev) => {
   }, 250);
 });
 
-// 双击单元格直接改名：不必先点右侧「改名」；焦点离开整行时自动保存
+// 双击单元格直接编辑：作品名改名 / 第几季改数字；焦点离开整行时自动保存
 document.addEventListener('dblclick', (ev) => {
   const td = ev.target.closest('[data-edit-watched]');
   if (!td) return;
   watchedEditing = Number(td.dataset.editWatched);
+  watchedEditField = td.dataset.field === 'season_no' ? 'season_no' : 'title';
   renderWatchedRows();
-  const el = document.getElementById(td.dataset.field === 'title_cn' ? 'watchedEditCn' : 'watchedEditTitle');
+  const el = document.getElementById(watchedEditField === 'season_no' ? 'watchedEditSeason'
+    : (td.dataset.field === 'title_cn' ? 'watchedEditCn' : 'watchedEditTitle'));
   if (el) { el.focus(); el.select(); }
 });
 
 document.addEventListener('focusout', (ev) => {
   if (!watchedEditing) return;
-  if (ev.target.id !== 'watchedEditTitle' && ev.target.id !== 'watchedEditCn') return;
+  if (!['watchedEditTitle', 'watchedEditCn', 'watchedEditSeason'].includes(ev.target.id)) return;
   const rid = watchedEditing;
   setTimeout(() => {
     if (!watchedEditing || watchedEditing !== rid) return;
@@ -2019,7 +2192,7 @@ document.addEventListener('keydown', (ev) => {
   }
   if (!watchedEditing) return;
   const id = ev.target.id;
-  if (id !== 'watchedEditTitle' && id !== 'watchedEditCn') return;
+  if (!['watchedEditTitle', 'watchedEditCn', 'watchedEditSeason'].includes(id)) return;
   if (ev.key === 'Enter') {
     ev.preventDefault();
     const btn = document.querySelector(`[data-action="save-watched"][data-id="${watchedEditing}"]`);

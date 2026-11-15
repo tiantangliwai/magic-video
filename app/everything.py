@@ -1,18 +1,26 @@
 """Everything 快速检索：本机全盘文件名检索（可降级）。
 
-本机实测（2026-11-15）：``D:\\tool\\Everything`` 只有 Everything.exe，
-没有官方命令行工具 es.exe；进程以 Services 会话常驻，未开 HTTP 服务、无 IPC 窗口。
-因此按三级降级设计，**没有任何外部依赖也能用**：
+背景（2026-11-15 实测）：Everything 核心引擎闭源，官方只开源 es.exe 命令行
+客户端（MIT）与 SDK；它们都只是连到「正在运行的 Everything 实例」的 IPC 客户端，
+Lite 版还会彻底禁用 IPC/ES/HTTP。本机装的是 1.4.1.1032 完整版，但以
+``-svc``（会话 0 服务）运行，用户会话里 es.exe 连不上 IPC（Error 8），
+所以最可靠的通道是 Everything 的 HTTP 服务。
 
-1. es.exe（可在设置里指定路径）→ ``es.exe -n <limit> <query>``，最快、结果最全；
-2. Everything HTTP 服务（可在设置里填地址）→ ``?s=<query>&j=1`` 拿 JSON；
+三级降级设计，**没有任何外部依赖也能用**：
+
+1. es.exe（设置里可指定路径，留空用默认）→ ``es.exe -n <limit> <query>``；
+2. Everything HTTP 服务（设置里填地址，可选 Basic Auth）→ ``?s=<query>&j=1``；
 3. 库内 SQL：直接检索本程序已扫描的 media_files，毫秒级，功能永远可用。
+
+另外提供 ``open_app()`` 作为快捷方式：直接在系统里打开 Everything 主程序窗口，
+路径由后端固定配置决定，前端不传参。
 
 所有外部调用都有短超时；失败只降级、不抛异常、不阻塞 UI。
 """
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import urllib.parse
 from pathlib import Path
@@ -22,18 +30,34 @@ import requests
 from . import config, db
 
 DEFAULT_ES_PATH = r"D:\tool\Everything\es.exe"
+DEFAULT_APP_PATH = r"D:\tool\Everything\Everything.exe"  # 打开主程序用；非 Lite 版
 VIDEO_EXTS = tuple(sorted(config.VIDEO_EXTS))
 ES_TIMEOUT = 6
 HTTP_TIMEOUT = (1.5, 3.0)
 
 
 def es_exe() -> Path:
-    configured = str(db.get_setting("everything_es_path", DEFAULT_ES_PATH) or "").strip()
-    return Path(configured)
+    """es.exe 路径。设置里存空串时回退默认路径，而不是变成 Path('.') 导致永远找不到。"""
+    configured = str(db.get_setting("everything_es_path", "") or "").strip()
+    return Path(configured or DEFAULT_ES_PATH)
+
+
+def app_exe() -> Path:
+    """Everything 主程序路径：设置值优先，空串回退默认（固定常量，前端不可传）。"""
+    configured = str(db.get_setting("everything_app_path", "") or "").strip()
+    return Path(configured or DEFAULT_APP_PATH)
 
 
 def http_base() -> str:
     return str(db.get_setting("everything_http_url", "") or "").strip().rstrip("/")
+
+
+def http_auth() -> tuple[str, str] | None:
+    """可选的 Everything HTTP 服务 Basic Auth；只在设置了用户名时启用。"""
+    user = str(db.get_setting("everything_http_user", "") or "").strip()
+    if not user:
+        return None
+    return (user, str(db.get_setting("everything_http_pass", "") or ""))
 
 
 def capabilities() -> dict:
@@ -45,8 +69,31 @@ def capabilities() -> dict:
         "http_url": http_base(),
         "http_configured": bool(http_base()),
         "library_fallback": True,
-        "installed": Path(r"D:\tool\Everything\Everything.exe").is_file(),
+        "installed": app_exe().is_file(),
+        "app_path": str(app_exe()),
     }
+
+
+def open_app() -> dict:
+    """打开 Everything 主程序（快捷方式用）。路径取自后端固定配置，前端不传参。
+
+    只放行真实存在的 .exe 文件，用 os.startfile 而非 shell 命令，避免拼接注入。
+    Lite 版不含 IPC/es.exe 支持，打开本身没问题，但检索仍会降级。
+    """
+    exe = app_exe()
+    if not exe.is_absolute():
+        return {"ok": False, "error": "Everything 路径不是绝对路径"}
+    if exe.suffix.lower() != ".exe":
+        return {"ok": False, "error": "Everything 路径不是可执行文件"}
+    if not exe.is_file():
+        return {"ok": False, "error": f"找不到 Everything 主程序：{exe}"}
+    if not hasattr(os, "startfile"):
+        return {"ok": False, "error": "当前系统不支持直接打开程序"}
+    try:
+        os.startfile(str(exe))     # 不是 shell 命令，无法被拼接注入
+        return {"ok": True, "path": str(exe)}
+    except OSError as exc:
+        return {"ok": False, "error": str(exc)}
 
 
 def _row(path: str, library: dict[str, dict]) -> dict:
@@ -84,7 +131,13 @@ def search_es(query: str, limit: int, library: dict) -> tuple[list[dict], str]:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if proc.returncode != 0 and not proc.stdout:
-            return [], f"es.exe 退出码 {proc.returncode}"
+            stderr = (proc.stderr or "").strip()
+            # Error 8：Everything 以 -svc（会话 0 服务）运行，用户会话没有 IPC 窗口，
+            # 这是会话隔离，不是没装 es.exe。给出可操作的下一步。
+            if "Error 8" in stderr or "IPC not found" in stderr:
+                return [], ("es.exe 已就位，但连不上 Everything 的 IPC（本机 Everything 以服务模式 -svc 运行）；"
+                            "请在 Everything 选项里启用 HTTP 服务并填入地址，或改用普通模式启动 Everything")
+            return [], f"es.exe 退出码 {proc.returncode}" + (f"：{stderr[:120]}" if stderr else "")
         rows = []
         for line in (proc.stdout or "").splitlines():
             candidate = line.strip()
@@ -109,7 +162,7 @@ def search_http(query: str, limit: int, library: dict) -> tuple[list[dict], str]
     url = base + "/?" + urllib.parse.urlencode({"s": query, "j": "1", "n": min(limit * 3, 2000),
                                                 "path_column": "1"})
     try:
-        resp = requests.get(url, timeout=HTTP_TIMEOUT)
+        resp = requests.get(url, timeout=HTTP_TIMEOUT, auth=http_auth())
         if resp.status_code != 200:
             return [], f"HTTP {resp.status_code}"
         data = resp.json()
@@ -170,9 +223,16 @@ def search(query: str, limit: int = 200) -> dict:
                 "capabilities": capabilities()}
 
     rows, _ = search_library(q, limit, library)
-    hint = "Everything 未启用命令行/HTTP，已自动降级为「本程序媒体库检索」"
+    # 区分「没装 es.exe」与「装了但连不上 IPC」，避免误导性的一刀切文案
+    es_ready = es_exe().is_file()
+    if es_ready or http_base():
+        hint = "全盘检索通道暂时不可用，已自动降级为「本程序媒体库检索」"
+    else:
+        hint = "Everything 未启用命令行/HTTP，已自动降级为「本程序媒体库检索」"
     if es_error and "不存在" not in es_error:
         hint += f"（{es_error}）"
+    elif http_error and "未配置" not in http_error:
+        hint += f"（{http_error}）"
     return {
         "ok": True, "rows": rows, "source": "library", "hint": hint,
         "capabilities": capabilities(),

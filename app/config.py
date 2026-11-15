@@ -107,6 +107,13 @@ DEFAULTS = {
     "obsidian_vault": "",
     "obsidian_folder": "Magic Video",
     "obsidian_auto_sync": 0,
+    # 全盘快搜（Everything）：留空即使用 app/everything.py 里的默认路径。
+    # es.exe 是官方命令行客户端（MIT），主程序路径只用于「打开 Everything」快捷按钮。
+    "everything_es_path": "",
+    "everything_http_url": "",
+    "everything_http_user": "",
+    "everything_http_pass": "",
+    "everything_app_path": "",
 }
 
 
