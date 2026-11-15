@@ -7,11 +7,14 @@
 - 图片只写进本程序自己的 ``COVER_DIR``，绝不修改用户视频目录。
 
 数据源（2026-11-15 实测）：
-- 主源 AGE动漫 ``https://www.agedm.io/search?query=<中文名>``：结果块
+- 主源 AGE动漫 ``https://www.agedm.io/search?query=<关键词>``：结果块
   ``<div class="card cata_video_item">`` 里 ``<a title="...">`` 为标题，
   ``img.video_thumbs`` 的 ``data-original`` 是高清封面、``src`` 是缩略图。
+  **用短关键词（书名号内容 / 主标题 / 去季标记 / 中文核心片段）轮番搜**，
+  完整长标题带季号、演员表、括号说明时站点几乎搜不到，是失败率高的主因。
 - 备源 SeedHub(seeduck.cc)：搜索被 Cloudflare 拦，但首页 / 动漫分类页可达，
-  ``<a title="作品名" class="image"><img src="...webp">`` 可按标题配对。
+  ``<a title="作品名" class="image"><img src="...webp">`` 可按标题配对；
+  页面只取一次，然后用全部关键词在结果里排序挑最像的一条。
 - 本机走系统 HTTPS 代理且为 MITM 证书，Python 必须 ``verify=False`` 才能连通
   （curl 用系统 CA 所以能通）；这是本机环境事实，不是放松校验的通用理由。
 """
@@ -25,17 +28,23 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from . import config, db
+from . import config, db, textmatch
 
 AGEDM_SEARCH = "https://www.agedm.io/search"
 SEEDUCK_PAGES = (
     "https://seeduck.cc/",
+    "https://seeduck.cc/categories/1/movies/",
     "https://seeduck.cc/categories/2/movies/",
+    "https://seeduck.cc/categories/1/types/1/movies/",
+    "https://seeduck.cc/categories/2/types/25/movies/",
 )
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 TIMEOUT = (2.5, 5.0)          # connect, read
 IMAGE_TIMEOUT = (2.5, 6.0)
+SEARCH_TIMEOUT = (2.0, 4.0)   # 关键词多轮尝试时用更短的超时，避免单部作品卡太久
+SEARCH_BUDGET_SEC = 16.0      # 单个作品的搜索总预算；超了就降级/放弃，任务不阻塞
+MAX_AGEDM_QUERIES = 4         # 主源最多试几个关键词
 MAX_BYTES = 3 * 1024 * 1024   # 单张封面上限，防止异常响应撑爆磁盘
 
 _BLOCK_RE = re.compile(r'<div class="card cata_video_item(.*?)(?=<div class="card cata_video_item|</main>)',
@@ -55,6 +64,9 @@ _JOB = {
     "ok": 0,
     "failed": 0,
     "current": "",          # 当前正在抓取的作品名，供界面显示实时进度
+    "last_query": "",       # 上一次实际用的搜索关键词（诊断「为什么没抓到」）
+    "last_hit": "",         # 上一次命中的站点标题
+    "recent_failures": [],  # 最近若干条失败原因，界面里可直接看到
     "source_hits": {},
     "started_at": "",
     "finished_at": "",
@@ -95,14 +107,34 @@ def cover_key(title: str) -> str:
     return text or original
 
 
-def _get(url: str, *, timeout=TIMEOUT, stream: bool = False):
-    import requests
+_SESSION = None
+_SESSION_LOCK = threading.Lock()
+
+
+def _session():
+    """复用连接：本机 HTTPS 代理（MITM）偶发 RemoteDisconnected，短重试最有效。"""
+    global _SESSION
+    with _SESSION_LOCK:
+        if _SESSION is None:
+            import requests
+            _SESSION = requests.Session()
+            _SESSION.headers.update({"User-Agent": UA, "Referer": "https://www.agedm.io/"})
+        return _SESSION
+
+
+def _get(url: str, *, timeout=TIMEOUT, stream: bool = False, retries: int = 2):
+    """单次请求；网络/代理抖动时最多重试 retries 次，非 200 不重试（交给调用方换源）。"""
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-    return requests.get(
-        url, headers={"User-Agent": UA, "Referer": "https://www.agedm.io/"},
-        timeout=timeout, verify=False, stream=stream,
-    )
+    last = None
+    for attempt in range(max(1, retries + 1)):
+        try:
+            return _session().get(url, timeout=timeout, verify=False, stream=stream)
+        except Exception as exc:
+            last = exc
+            if attempt < retries:
+                time.sleep(0.25 * (attempt + 1))
+    raise last
 
 
 def _strip_season(title: str) -> str:
@@ -157,34 +189,161 @@ def parse_seeduck(body: str, want: str) -> tuple[list[str], str] | None:
     return None
 
 
-def search_cover(title: str) -> dict:
-    """同步查一次封面（供后台线程调用）；返回 {ok,urls,source,hit}。"""
-    want = cover_key(title)
-    if not want:
-        return {"ok": False, "error": "空标题"}
+# 站点改版时精确 class 会失效：再准备一套「锚点 title + 任意图片地址」的通用兜底。
+_GENERIC_ANCHOR_RE = re.compile(r'<a\b[^>]*title="([^"]+)"[^>]*>(.*?)</a>', re.S)
+_GENERIC_IMG_RE = re.compile(r'(?:data-original|data-src|data-lazy-src|src)="([^"]+)"')
 
-    # 主源：AGE动漫搜索
-    try:
-        url = AGEDM_SEARCH + "?" + urllib.parse.urlencode({"query": want})
-        resp = _get(url)
-        if resp.status_code == 200:
-            hit = parse_agedm(resp.text, want)
-            if hit:
-                return {"ok": True, "urls": hit[0], "source": "agedm", "hit": hit[1]}
-    except Exception:
-        pass
 
-    # 备源：SeedHub 首页 / 动漫分类页
+def _pairs(body: str, seed_style: bool = False) -> list[tuple[str, list[str]]]:
+    """把搜索结果页拆成 [(标题, 候选图片URL列表)]；先精确规则，失败再通用兜底。"""
+    out: list[tuple[str, list[str]]] = []
+    if seed_style:
+        for name, url in _SEED_RE.findall(body):
+            if url.startswith("http"):
+                out.append((html.unescape(name).strip(), [html.unescape(url)]))
+    else:
+        for block in _BLOCK_RE.split(body)[1::2]:
+            titles = _TITLE_RE.findall(block)
+            if not titles:
+                continue
+            name = html.unescape(titles[0]).strip()
+            urls = [html.unescape(u) for u in (_ORIG_RE.findall(block) + _SRC_RE.findall(block))]
+            urls = list(dict.fromkeys(u for u in urls if u.startswith("http")))
+            if urls:
+                out.append((name, urls))
+    if out:
+        return out
+    for name, chunk in _GENERIC_ANCHOR_RE.findall(body):
+        urls = [html.unescape(u) for u in _GENERIC_IMG_RE.findall(chunk)]
+        urls = list(dict.fromkeys(u for u in urls if u.startswith("http")))
+        if urls:
+            out.append((html.unescape(name).strip(), urls))
+    return out
+
+
+_SEQUEL_EXTRA_RE = re.compile(
+    r"[\d\s第季期部篇上下中後后剧场版完结篇ovaoadsppartⅡⅢⅣⅤⅥⅦ"
+    r"·:：\-_（）()\[\]]+", re.IGNORECASE,
+)
+
+
+_SEED_CACHE_TTL = 1800.0        # 一次抓取任务内共享，半小时后自动过期
+_SEED_CACHE: dict[str, tuple[float, list[tuple[str, list[str]]]]] = {}
+_SEED_CACHE_LOCK = threading.Lock()
+
+
+def clear_seed_cache() -> None:
+    with _SEED_CACHE_LOCK:
+        _SEED_CACHE.clear()
+
+
+def seed_pairs() -> list[tuple[str, list[str]]]:
+    """备源页面整批共享：每页只抓一次，避免 300 部作品 × 5 页把代理打挂。
+
+    解析出的空结果不缓存（可能是临时 403 / Cloudflare），下次任务会重试。
+    """
+    out: list[tuple[str, list[str]]] = []
     for page in SEEDUCK_PAGES:
-        try:
-            resp = _get(page)
-            if resp.status_code == 200:
-                hit = parse_seeduck(resp.text, want)
-                if hit:
-                    return {"ok": True, "urls": hit[0], "source": "seeduck", "hit": hit[1]}
-        except Exception:
+        with _SEED_CACHE_LOCK:
+            cached = _SEED_CACHE.get(page)
+        if cached and time.monotonic() - cached[0] < _SEED_CACHE_TTL:
+            out.extend(cached[1])
             continue
-    return {"ok": False, "error": "两个源都没有匹配到封面"}
+        pairs: list[tuple[str, list[str]]] = []
+        try:
+            resp = _get(page, timeout=SEARCH_TIMEOUT, retries=1)
+            if resp.status_code == 200:
+                pairs = _pairs(resp.text, seed_style=True)
+        except Exception:
+            pairs = []
+        if pairs:                      # 空结果不缓存，下一轮换个时机再试
+            with _SEED_CACHE_LOCK:
+                _SEED_CACHE[page] = (time.monotonic(), pairs)
+            out.extend(pairs)
+    return out
+
+
+def pick_from_pairs(pairs: list[tuple[str, list[str]]], queries: list[str],
+                    threshold: float = 0.62) -> tuple[list[str], str, str, float] | None:
+    """从 (标题, 图片URL) 列表里挑与关键词最像的一条。"""
+    if not queries:
+        return None
+    best = None
+    for name, urls in pairs:
+        nk = textmatch.normalize(name)
+        for query in queries:
+            qk = textmatch.normalize(query)
+            score = textmatch.match_score(name, query)
+            need = max(threshold, 0.78 if len(qk) <= 3 else 0.0)
+            if score < need:
+                continue
+            # 短词容易误配：「Zero」会把《终结者 Zero》当成《Re:Zero》
+            strict = len(qk) <= 3 or (not re.search(r"[\u4e00-\u9fff]", query) and len(qk) <= 6)
+            if strict and nk != qk:
+                extra = nk.replace(qk, "", 1)
+                if not extra or not _SEQUEL_EXTRA_RE.fullmatch(extra):
+                    continue
+            rank = (score, 0.15 if nk == qk else 0)
+            if best is None or rank > best[0]:
+                best = (rank, urls, name, query, score)
+    if not best:
+        return None
+    return best[1], best[2], best[3], best[4]
+
+
+def rank_pick(body: str, queries: list[str], *, seed_style: bool = False,
+              threshold: float = 0.62) -> tuple[list[str], str, str, float] | None:
+    """一页 HTML 的便捷入口：先拆 (标题, URL) 再按相似度挑。"""
+    return pick_from_pairs(_pairs(body, seed_style=seed_style), queries, threshold)
+
+
+def search_cover(title: str) -> dict:
+    """同步查一次封面；``{ok, urls, source, hit, query}``。
+
+    策略（用户 2026-11-15 要求「不要全名，用关键词多试一试」）：
+    1. ``textmatch.query_variants()`` 直接从**原始标题**生成短关键词，按
+       「书名号片名 → 主标题 → 去季 → 中文核心片段 → 英文词」排序；
+       不再先过 ``cover_key()``（它的旧季正则会把 ``s1-3`` 削成 ``s``）。
+    2. AGE动漫 逐个关键词搜索，每页按相似度挑最像的一条；
+    3. 主源全落空再取 SeedHub 首页 / 分类页（各只取一次），用全部关键词排序；
+    4. 有总时间预算与请求数上限，任一环节失败立刻换下一个源，绝不阻塞任务线程。
+    """
+    original = str(title or "").strip()
+    if not original:
+        return {"ok": False, "error": "空标题"}
+    queries = textmatch.query_variants(original, limit=MAX_AGEDM_QUERIES + 1)
+    if not queries:
+        queries = [cover_key(original)]
+    deadline = time.monotonic() + SEARCH_BUDGET_SEC
+    net_fail = 0
+
+    # 主源：AGE动漫，短关键词轮番试
+    for query in queries[:MAX_AGEDM_QUERIES]:
+        if time.monotonic() >= deadline or net_fail >= 2:
+            break       # 代理连续断连就别把预算耗在重复失败上，直接换备源
+        try:
+            url = AGEDM_SEARCH + "?" + urllib.parse.urlencode({"query": query})
+            resp = _get(url, timeout=SEARCH_TIMEOUT, retries=1)
+            if resp.status_code != 200:
+                continue
+            # 统一走 rank_pick：它优先精确相等、对短词有续作后缀校验。
+            # 不能再退回 parse_agedm 的宽松包含匹配，否则「Zero」又会误配《终结者 Zero》。
+            hit = rank_pick(resp.text, queries)
+            if hit:
+                return {"ok": True, "urls": hit[0], "source": "agedm",
+                        "hit": hit[1], "query": hit[2]}
+        except Exception:
+            net_fail += 1
+            continue
+
+    # 备源：SeedHub 多个分类页，整批共享一次抓取缓存（不是每部作品重抓），
+    # 用全部关键词在缓存结果里排序挑最像的一条
+    pairs = seed_pairs()
+    hit = pick_from_pairs(pairs, queries)
+    if hit:
+        return {"ok": True, "urls": hit[0], "source": "seeduck",
+                "hit": hit[1], "query": hit[2]}
+    return {"ok": False, "error": "两个源都没有匹配到封面", "query": queries[0]}
 
 
 def download_cover(url: str, dest: Path) -> bool:
@@ -254,17 +413,19 @@ def fetch_one(title: str, force: bool = False) -> dict:
         return {"ok": True, "cached": True, "file": dest.name, "source": "cache"}
     found = search_cover(title)
     if not found.get("ok"):
-        return {"ok": False, "error": found.get("error", "未找到")}
+        return {"ok": False, "error": found.get("error", "未找到"),
+                "query": found.get("query", "")}
     used_url = ""
     for candidate in found.get("urls") or []:
         if download_cover(candidate, dest):
             used_url = candidate
             break
     if not used_url:
-        return {"ok": False, "error": "封面下载失败"}
+        return {"ok": False, "error": "封面下载失败", "query": found.get("query", "")}
     save_cover_record(key_title, used_url, found["source"], dest.name)
     return {"ok": True, "cached": False, "file": dest.name,
-            "source": found["source"], "hit": found.get("hit")}
+            "source": found["source"], "hit": found.get("hit"),
+            "query": found.get("query", "")}
 
 
 _TECH_TAG_RE = re.compile(
@@ -370,6 +531,7 @@ def cover_titles(limit: int = 0) -> list[str]:
 def status() -> dict:
     with _job_lock:
         snap = dict(_JOB)
+        snap["recent_failures"] = [dict(x) for x in _JOB["recent_failures"]]
     snap["cached"] = sum(1 for p in config.COVER_DIR.glob("*.jpg")) if config.COVER_DIR.is_dir() else 0
     return snap
 
@@ -379,8 +541,10 @@ def start_job(limit: int = 0, force: bool = False) -> dict:
     with _job_lock:
         if _JOB["running"]:
             return {"ok": False, "error": "已有抓取任务在运行", **status()}
+        clear_seed_cache()          # 每次用户点「抓取」刷新一次备源索引
         titles = cover_titles(limit)
         _JOB.update(running=True, total=len(titles), done=0, ok=0, failed=0, current="",
+                    last_query="", last_hit="", recent_failures=[],
                     source_hits={}, started_at=db.now(), finished_at="", error="", cancel=False)
 
     def work():
@@ -395,6 +559,8 @@ def start_job(limit: int = 0, force: bool = False) -> dict:
                 result = {"ok": False, "error": f"{type(exc).__name__}"}
             with _job_lock:
                 _JOB["done"] += 1
+                _JOB["last_query"] = str(result.get("query") or "")
+                _JOB["last_hit"] = str(result.get("hit") or "")
                 if result.get("ok"):
                     _JOB["ok"] += 1
                     if not result.get("cached"):
@@ -402,6 +568,10 @@ def start_job(limit: int = 0, force: bool = False) -> dict:
                         _JOB["source_hits"][src] = _JOB["source_hits"].get(src, 0) + 1
                 else:
                     _JOB["failed"] += 1
+                    failures = _JOB["recent_failures"]
+                    failures.append({"title": title, "error": str(result.get("error") or "未找到"),
+                                     "query": _JOB["last_query"]})
+                    del failures[:-8]      # 只留最近 8 条，别让状态无限膨胀
             time.sleep(0.08)   # 轻微限速，别把站点打疼
         with _job_lock:
             _JOB["running"] = False

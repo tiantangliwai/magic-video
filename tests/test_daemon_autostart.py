@@ -325,7 +325,13 @@ class DaemonAutoStartFrontendTests(unittest.TestCase):
 
     def test_home_and_action_dispatch_have_no_start_button(self):
         self.assertNotIn("start-daemon", self.js)
-        self.assertNotIn("start_daemon", self.js)
+        # 用户后来明确要求「后台进程」独立页可以启停守护，因此 start_daemon
+        # 只允许出现在该页的按钮分支里；总览 / 左下角仍不得有启动按钮。
+        home = self.js.split("async function renderHome()", 1)[1].split(
+            "async function renderContinue()", 1)[0]
+        self.assertNotIn("start_daemon", home)
+        self.assertIn("case 'proc-daemon-start'", self.js)
+        self.assertIn("call('start_daemon')", self.js)
 
     def test_settings_page_exposes_the_switch(self):
         self.assertIn("switchHtml('daemon_auto_start'", self.js)

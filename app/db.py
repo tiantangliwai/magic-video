@@ -93,6 +93,20 @@ CREATE TABLE IF NOT EXISTS watched_list (
 );
 CREATE INDEX IF NOT EXISTS ix_watched_title ON watched_list(title);
 
+-- 追剧清单：已下载 / 未下载两栏，sort_order 保持导入时的书写顺序且可人工调整。
+-- 与 media_files / watch_progress 没有外键：删掉一条追剧记录绝不影响播放记录。
+CREATE TABLE IF NOT EXISTS watchlist (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    title        TEXT NOT NULL,
+    downloaded   INTEGER NOT NULL DEFAULT 0,
+    sort_order   INTEGER NOT NULL DEFAULT 0,
+    note         TEXT,
+    source       TEXT NOT NULL DEFAULT 'manual',
+    created_at   TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    updated_at   TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_watchlist_order ON watchlist(downloaded, sort_order, id);
+
 CREATE TABLE IF NOT EXISTS watch_progress (
     file_id          INTEGER PRIMARY KEY REFERENCES media_files(id) ON DELETE CASCADE,
     position_ms      INTEGER NOT NULL DEFAULT 0,

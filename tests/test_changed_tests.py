@@ -23,8 +23,18 @@ class ImpactMappingTests(unittest.TestCase):
         mods = modules_for("web/app.js")
         self.assertIn("tests.test_theme", mods)
         self.assertIn("tests.test_quicksearch", mods)
+        self.assertIn("tests.test_watchlist", mods)
         self.assertNotIn("tests.test_obsidian", mods)
         self.assertIn("tests.test_theme", modules_for("web/style.css"))
+
+    def test_watchlist_and_keyword_modules_map_to_contracts(self):
+        """追剧列表 / 关键词模块共用同一套契约，改任一处都要连带验证。"""
+        self.assertIn("tests.test_watchlist", modules_for("app/watchlist.py"))
+        self.assertEqual(modules_for("tests/test_watchlist.py"),
+                         {"tests.test_watchlist"})
+        shared = {"tests.test_watchlist", "tests.test_covers"}
+        self.assertTrue(shared <= modules_for("app/textmatch.py"))
+        self.assertTrue(shared <= modules_for("app/covers.py"))
 
     def test_changed_test_file_runs_itself(self):
         self.assertEqual(modules_for("tests/test_api.py"), {"tests.test_api"})

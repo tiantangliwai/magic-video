@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -11,12 +12,22 @@ import psutil
 
 from . import (
     __version__, autostart, config, covers, db, embedded_player, everything, file_ops,
-    importer, library_tree, metadata, obsidian, potplayer, runtime, scanner, theme_native,
+    importer, library_tree, metadata, obsidian, potplayer, runtime, scanner, textmatch,
+    theme_native, watchlist,
 )
 
 
 # 单次人工删除的文件数上限：一部剧通常十几到几十集，给足余量又防误传整库
 _MAX_DELETE_FILES = 300
+
+# 剧集墙「查看分集」的搜索词清洗：树分组偶尔把 [1.36G] 这类文件大小当成
+# 作品名，此时退回文件名方括号里的真实中文片名（例：[爱的躯壳].La.Belle...）。
+_CARD_CJK_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
+_CARD_BRACKET_RE = re.compile(r"[\[【《（(]([^\[\]【】》（）()]{2,24})[\]】》）)]")
+_CARD_NOISE_WORDS = (
+    "字幕", "中字", "双语", "国配", "粤配", "无修", "高清", "合集",
+    "下载", "预览", "未删减", "完整版", "先行", "特典",
+)
 
 # 文件浏览的排序白名单：用户输入只能选键，绝不直接拼进 SQL
 _MEDIA_SORTS = {
@@ -584,6 +595,59 @@ class Api:
         walk(group)
         return out
 
+    @staticmethod
+    def _card_clean_keyword(raw: str) -> str:
+        """候选串 -> 可搜索的中文作品名；不像标题就返回空串。"""
+        text = str(raw or "").strip()
+        if not text or any(word in text for word in _CARD_NOISE_WORDS):
+            return ""
+        variants = textmatch.query_variants(text, 1)
+        value = variants[0] if variants else text
+        return value if _CARD_CJK_RE.search(value) else ""
+
+    @staticmethod
+    def _group_bracket_titles(group: dict) -> list[str]:
+        """脏分组名时，从组内文件名 / 原始标题的括号里找真正的中文片名。"""
+        seen, out = set(), []
+
+        def walk(node: dict) -> None:
+            for f in node.get("files") or []:
+                for key in ("filename", "title_raw"):
+                    raw = str((f or {}).get(key) or "")
+                    for hit in _CARD_BRACKET_RE.findall(raw):
+                        hit = hit.strip()
+                        if hit and hit not in seen:
+                            seen.add(hit)
+                            out.append(hit)
+                            if len(out) >= 12:
+                                return
+            for child in node.get("children") or []:
+                walk(child)
+                if len(out) >= 12:
+                    return
+
+        walk(group)
+        return out
+
+    @staticmethod
+    def _card_search_keyword(group: dict) -> str:
+        """「查看分集」带去媒体库的搜索词。
+
+        树分组偶尔会把 ``1.36G`` 这类文件大小当成分组名，直接用卡片标题
+        会把媒体库搜成一片空白。依次退回：组内已匹配的中文名 ->
+        文件名括号里的中文片名 -> 原始分组名。
+        """
+        label = str(group.get("label") or "").strip()
+        variants = textmatch.query_variants(label, 1)
+        first = variants[0] if variants else label
+        for source in ([label], Api._group_cover_titles(group),
+                       Api._group_bracket_titles(group)):
+            for candidate in source:
+                cleaned = Api._card_clean_keyword(candidate)
+                if cleaned:
+                    return cleaned
+        return first or label
+
     def get_poster_wall(self, options: dict | None = None) -> dict:
         """剧集墙：作品卡片（封面 + 季/集统计 + 续播集）。复用树分组，不另写一套搜索。"""
         opt = options or {}
@@ -604,6 +668,7 @@ class Api:
             seasons = [c.get("label") for c in group.get("children", [])]
             cards.append({
                 "title": group.get("label", ""),
+                "search_keyword": self._card_search_keyword(group),
                 "file_count": group.get("file_count", 0),
                 "watched_count": group.get("watched_count", 0),
                 "playing_count": group.get("playing_count", 0),
@@ -629,7 +694,13 @@ class Api:
         # 先用卡片标题，再退到该分组内文件的中文名 / 解析原名，命中就复用同一张封面。
         resolved = {}
         for card in cards:
-            for candidate in [card["title"], *card.pop("_cover_titles")]:
+            raw_label = card["title"]
+            # 脏分组名（如 1.36G）展示也换成推断出的中文片名；封面仍先用
+            # 原分组名匹配，避免已经缓存好的封面突然失效。
+            if (not _CARD_CJK_RE.search(raw_label)
+                    and _CARD_CJK_RE.search(card["search_keyword"])):
+                card["title"] = card["search_keyword"]
+            for candidate in [raw_label, card["title"], *card.pop("_cover_titles")]:
                 name = covers.resolve_cover(candidate, cover_entries)
                 if name:
                     resolved[card["title"]] = name
@@ -693,6 +764,36 @@ class Api:
     def everything_search(self, keyword: str, limit: int = 200) -> dict:
         return everything.search(keyword, limit)
 
+    # ---------- 追剧列表 ----------
+    def watchlist_preview(self, text: str) -> dict:
+        """导入前预览：按「已下载：/ 未下载：」分段统计，不写库。"""
+        return watchlist.preview(text or "")
+
+    def watchlist_import(self, text: str, replace: bool = False) -> dict:
+        """导入清单；默认幂等追加，replace=True 由界面二次确认后清空重建。"""
+        flag = replace in (True, 1, "1", "true", "on")
+        return watchlist.import_text(text or "", replace=flag)
+
+    def get_watchlist(self, keyword: str = "") -> dict:
+        return watchlist.items(keyword or "")
+
+    def watchlist_set_downloaded(self, item_id, downloaded: bool) -> dict:
+        """未下载 ↔ 已下载；只改标记，不复制、不删除、不改顺序。"""
+        return watchlist.set_downloaded(item_id, downloaded)
+
+    def watchlist_move(self, item_id, delta: int) -> dict:
+        """上移 / 下移一条，与同栏相邻条目交换顺序。"""
+        return watchlist.move(item_id, int(delta))
+
+    def watchlist_add(self, title: str, downloaded: bool = False) -> dict:
+        return watchlist.add(title, downloaded)
+
+    def watchlist_rename(self, item_id, title: str) -> dict:
+        return watchlist.rename(item_id, title)
+
+    def watchlist_remove(self, item_id) -> dict:
+        return watchlist.remove(item_id)
+
     # ---------- 动漫封面 ----------
     def cover_status(self) -> dict:
         return covers.status()
@@ -727,6 +828,24 @@ class Api:
             except Exception:
                 continue
         return out
+
+    # ---------- 后台进程管理 ----------
+    def process_status(self) -> dict:
+        """一次拿到守护进程 + 封面缓存任务的状态，供「后台进程」页轮询。
+
+        只读，不启动任何进程；封面抓取仍然是用户点按钮才发生的一次性任务。
+        """
+        daemon = self.daemon_running()
+        return {
+            "ok": True,
+            "daemon": {
+                "running": bool(daemon.get("running")),
+                "pid": daemon.get("pid"),
+                "auto_start": bool(self._daemon_auto_start_enabled()),
+            },
+            "covers": covers.status(),
+            "cover_dir": str(config.COVER_DIR),
+        }
 
     def get_directories(self) -> list[dict]:
         return scanner.list_directories()

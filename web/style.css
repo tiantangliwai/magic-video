@@ -93,6 +93,8 @@ button, input, textarea, select { font-family: inherit; font-size: 13px; }
 .ni-check  { --ic-bg: #e5f6e9; --ic-color: #1da35a; }
 .ni-import { --ic-bg: #e6f1ff; --ic-color: #2f83d6; }
 .ni-folder { --ic-bg: #fff4d9; --ic-color: #d79b12; }
+.ni-track  { --ic-bg: #e6f7ef; --ic-color: #1f9d63; }
+.ni-process { --ic-bg: #e9f2f5; --ic-color: #2b7f96; }
 .ni-gear   { --ic-bg: #eeeaf2; --ic-color: #7a6a90; }
 html[data-theme="dark"] .ni-home   { --ic-bg: #25325a; --ic-color: #8aa8ff; }
 html[data-theme="dark"] .ni-play   { --ic-bg: #332a52; --ic-color: #b599ff; }
@@ -103,6 +105,8 @@ html[data-theme="dark"] .ni-search { --ic-bg: #223552; --ic-color: #82aeff; }
 html[data-theme="dark"] .ni-check  { --ic-bg: #1e3a29; --ic-color: #63d995; }
 html[data-theme="dark"] .ni-import { --ic-bg: #22344d; --ic-color: #71b6f5; }
 html[data-theme="dark"] .ni-folder { --ic-bg: #413318; --ic-color: #f2c563; }
+html[data-theme="dark"] .ni-track  { --ic-bg: #1c3d30; --ic-color: #6ee0a8; }
+html[data-theme="dark"] .ni-process { --ic-bg: #1d3a44; --ic-color: #7fd2e8; }
 html[data-theme="dark"] .ni-gear   { --ic-bg: #322c40; --ic-color: #b9a8d0; }
 html[data-theme="dark"] .nav-item.active .nav-icon { color: #14171d; }
 .sidebar-foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--border); }
@@ -339,3 +343,40 @@ button[disabled] { opacity: .45; cursor: not-allowed; }
 .modal-actions { display: flex; justify-content: flex-end; gap: 10px; }
 .modal-actions .btn:focus { outline: 2px solid var(--primary); outline-offset: 2px; }
 html[data-theme="dark"] .modal-warning { background: rgba(248, 113, 113, .12); }
+
+/* 追剧列表：两栏清单按书写顺序展示，行内可上移/下移、改状态、展开本地文件 */
+.watchlist-cols { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .watchlist-cols { grid-template-columns: 1fr; } }
+.watchlist-cols > .card { min-width: 0; }
+.wl-scroll { max-height: 62vh; overflow: auto; }
+.wl-row { display: flex; align-items: flex-start; gap: 9px; padding: 9px 2px;
+  border-bottom: 1px solid var(--border); font-size: 12.5px; }
+.wl-row:last-child { border-bottom: 0; }
+.wl-idx { flex: none; width: 26px; text-align: right; color: var(--faint); font-size: 11px;
+  padding-top: 2px; font-variant-numeric: tabular-nums; }
+.wl-main { flex: 1; min-width: 0; }
+.wl-title { font-weight: 600; font-size: 12.5px; line-height: 1.45; word-break: break-word; }
+.wl-sub { color: var(--muted); font-size: 11px; margin-top: 3px; }
+.wl-ops { flex: none; display: flex; gap: 3px; align-items: center; }
+.wl-ops .btn { padding: 3px 6px; font-size: 10.5px; line-height: 1.2; }
+.wl-files { margin: 7px 0 2px 35px; padding: 7px 9px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 7px; }
+.wl-file { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11.5px; }
+.wl-file .mono { flex: 1; min-width: 0; color: var(--muted); overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; }
+.wl-import { width: 100%; min-height: 92px; resize: vertical; }
+.wl-match { font-size: 10px; padding: 1px 7px; border-radius: 9px;
+  background: var(--green-soft); color: var(--green); }
+.wl-match.none { background: var(--surface-2); color: var(--faint); }
+
+/* 后台进程：守护状态 + 封面缓存进度 */
+.proc-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
+@media (max-width: 1000px) { .proc-grid { grid-template-columns: 1fr; } }
+.proc-line { display: flex; align-items: center; gap: 9px; font-size: 12.5px; margin: 9px 0; }
+.proc-line .label { color: var(--muted); min-width: 76px; }
+.proc-line .value { font-weight: 600; word-break: break-all; }
+.proc-bar { width: 100%; height: 9px; margin: 10px 0 4px; }
+.proc-meta { font-size: 11.5px; color: var(--muted); line-height: 1.9; }
+.proc-fail { margin-top: 8px; max-height: 150px; overflow: auto; font-size: 11px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; }
+.proc-fail div { padding: 2px 0; color: var(--muted); word-break: break-all; }

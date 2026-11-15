@@ -37,8 +37,10 @@ const VIEW_META = {
   posters: ['剧集墙', '按作品展示封面、季数与续播'],
   quicksearch: ['全盘快搜', '整台电脑的视频文件，一搜即播'],
   watched: ['看过的列表', '你导入的已观看作品'],
+  watchlist: ['追剧列表', '已下载 / 未下载清单，可调整顺序并对应本地剧集'],
   import: ['导入列表', '把看过的动漫一次性记录到数据库'],
   scan: ['扫描目录', '添加已下载视频的存放位置'],
+  processes: ['后台进程', '启停后台记录、查看剧集图片缓存进度'],
   settings: ['设置', '播放器、记录与中文名匹配'],
 };
 
@@ -96,13 +98,14 @@ function empty(text, sub) {
 
 // 危险操作的二次确认：列出全部受影响路径，默认焦点在「取消」，Esc / 点遮罩都算取消。
 // WebView2 的原生 confirm 不可靠且放不下一长串路径，所以用自己的模态框。
-function confirmDialog({ title, message, note = '', items = [], confirmText = '确认删除' }) {
+function confirmDialog({ title, message, note = '', items = [],
+                         confirmText = '确认删除', danger = true }) {
   return new Promise(resolve => {
     const layer = document.createElement('div');
     layer.className = 'modal-layer';
     layer.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true">
       <h3>${esc(title)}</h3>
-      <div class="modal-warning">⚠️ 此操作非常危险，可能导致不可逆的数据丢失！</div>
+      ${danger ? '<div class="modal-warning">⚠️ 此操作非常危险，可能导致不可逆的数据丢失！</div>' : ''}
       <p class="modal-msg">${esc(message)}</p>
       ${note ? `<p class="modal-note">${esc(note)}</p>` : ''}
       ${items.length ? `<div class="modal-list">${items.map(t => `<div class="mono">${esc(t)}</div>`).join('')}</div>` : ''}
@@ -851,27 +854,23 @@ async function renderSettings() {
 // ---------- 剧集墙：卡片式展示（参考 SeedHub / AGE动漫 的作品墙） ----------
 let posterState = { keyword: '', cards: [], covers: {}, status: {}, loading: false };
 let esState = { keyword: '', rows: [], source: '', hint: '' };
-let coverPollTimer = null;
+let procPollTimer = null;
 
-// 只在「后台抓取任务运行中」才轮询，任务结束立即停，不是常驻定时器
-function coverPollStart() {
-  if (coverPollTimer) return;
-  const tick = async () => {
-    try {
-      const s = await call('cover_status');
-      posterState.status = s;
-      renderCoverStatus();
-      if (!s.running) {
-        clearInterval(coverPollTimer); coverPollTimer = null;
-        await loadPosterWall();
-        return;
-      }
-    } catch (e) {
-      clearInterval(coverPollTimer); coverPollTimer = null;
+// 追剧列表：一次载入全量后本地过滤；open 记住哪些行展开了本地文件
+let watchlistState = { items: [], keyword: '', open: new Set(), loading: false,
+  downloaded: 0, pending: 0, matched: 0 };
+let procState = { daemon: {}, covers: {}, cover_dir: '' };
+
+// 封面抓取进度只属于「后台进程」页：停留在该页时才轮询，离开立刻停，不是常驻定时任务
+function procPollStart() {
+  if (procPollTimer) return;
+  procPollTimer = setInterval(async () => {
+    if (currentView !== 'processes') {
+      clearInterval(procPollTimer); procPollTimer = null;
+      return;
     }
-  };
-  coverPollTimer = setInterval(tick, 1500);
-  tick();
+    await loadProcessStatus();
+  }, 2000);
 }
 
 function posterCardHtml(card, cover) {
@@ -880,9 +879,8 @@ function posterCardHtml(card, cover) {
     : `<div class="poster-art poster-placeholder"><span>${esc((card.title || '?').slice(0, 2))}</span></div>`;
   const seasons = card.season_count > 1 ? `<span class="poster-tag">${card.season_count} 季</span>` : '';
   const progress = card.playing_count ? `<span class="poster-tag amber">在看 ${num(card.playing_count)}</span>` : '';
-  const playBtn = card.next_file_id
-    ? `<button class="btn btn-primary btn-sm" data-action="play" data-id="${card.next_file_id}">播放下一集</button>`
-    : '';
+  // 用户要求：剧集墙不放「播放下一集」；「查看分集」必须带着搜索词跳过去，
+  // 否则切到媒体库后满屏文件，忘了自己是从哪部作品点进来的。
   const cleanup = card.all_done && num(card.removable_count) > 0
     ? `<button class="btn btn-sm btn-danger" data-action="delete-series-files"
         data-node="${esc(card.group_id)}" title="整部已看完：把本地文件移入回收站，观看记录保留">清理本地文件</button>`
@@ -894,8 +892,9 @@ function posterCardHtml(card, cover) {
       <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
       <div class="poster-meta">${num(card.file_count)} 集${card.watched_count ? ` · 已看 ${num(card.watched_count)}` : ''}</div>
       <div class="poster-tags">${seasons}${progress}${removedTag}</div>
-      <div class="poster-actions">${playBtn}${cleanup}
-        <button class="btn btn-sm" data-action="goto" data-view="library">查看分集</button></div>
+      <div class="poster-actions">${cleanup}
+        <button class="btn btn-sm" data-action="goto" data-view="library"
+          data-keyword="${esc(card.search_keyword || card.title)}">查看分集</button></div>
     </div></div>`;
 }
 
@@ -912,10 +911,10 @@ function renderPosterCards() {
 }
 
 function renderCoverStatus() {
-  const el = document.getElementById('posterStatus');
+  const el = document.getElementById('coverStatusText');
   if (!el) return;
   const bar = document.getElementById('coverProgress');
-  const s = posterState.status || {};
+  const s = procState.covers || posterState.status || {};
   if (s.running) {
     el.textContent = `后台抓取中… ${num(s.done)} / ${num(s.total)}（成功 ${num(s.ok)} · 失败 ${num(s.failed)}）`
       + (s.current ? ` · 当前：${s.current}` : '');
@@ -954,19 +953,14 @@ async function loadPosterWall() {
 async function renderPosters() {
   setContent(`<div class="card"><div class="section-head"><h3>剧集墙</h3>
       <span class="badge blue" id="posterCount">正在统计…</span></div>
-    <p class="hint">按作品展示海报、季数与续播入口。封面由后台任务从 AGE动漫 / SeedHub 抓取后缓存到本地，
-      没抓到时用首字占位；<b>不会自动定时抓取</b>，点下面的按钮才启动一次。</p>
+    <p class="hint">按作品展示海报、季数与分集入口。点「查看分集」会带着作品名跳到媒体库，
+      不用再手动输一次。封面的后台抓取与进度已整合到左侧<b>「后台进程」</b>页。</p>
     <div class="watched-toolbar">
       <input class="input" id="posterSearch" placeholder="搜索作品名…" value="${esc(posterState.keyword)}" autocomplete="off">
       <button class="btn btn-sm" data-action="poster-refresh">刷新</button>
-      <button class="btn btn-sm btn-primary" data-action="cover-fetch">后台抓取封面</button>
-      <button class="btn btn-sm" data-action="cover-cancel">停止</button>
-      <span class="hint" id="posterStatus">检查封面…</span>
-      <progress id="coverProgress" max="100" value="0" title="封面抓取进度"
-        style="width:150px;vertical-align:middle;display:none"></progress>
+      <button class="btn btn-sm" data-action="goto" data-view="processes">去后台进程管理封面</button>
     </div>
     <div id="posterGrid" class="poster-grid">${empty('正在加载剧集墙', '读取媒体库分组…')}</div>
-  </div>
   </div>`);
   await loadPosterWall();
   const input = document.getElementById('posterSearch');
@@ -1023,9 +1017,197 @@ function renderEsResults() {
     </div></div></div>`).join('');
 }
 
+// ---- 追剧列表：两栏按书写顺序，支持排序、状态转换、本地文件匹配 ---------
+function watchlistRowHtml(r, idx) {
+  const open = watchlistState.open.has(r.id);
+  const matched = num(r.match_count) > 0;
+  const files = open && (r.files || []).length
+    ? `<div class="wl-files">${r.files.map(f => `<div class="wl-file">
+        <span class="mono" title="${esc(f.path)}">${esc(f.filename)}</span>
+        ${f.completed ? '<span class="badge green">已看完</span>' : ''}
+        <button class="btn btn-sm" data-action="play" data-id="${f.id}">播放</button>
+      </div>`).join('')}${num(r.match_count) > (r.files || []).length
+        ? `<div class="hint">还有 ${num(r.match_count) - (r.files || []).length} 个文件，点「媒体库搜索」看全部</div>` : ''}</div>`
+    : '';
+  return `<div class="wl-row">
+    <span class="wl-idx">${idx}</span>
+    <div class="wl-main">
+      <div class="wl-title">${esc(r.title)}</div>
+      <div class="wl-sub"><span class="wl-match ${matched ? '' : 'none'}">${matched ? `本地 ${num(r.match_count)} 个文件` : '未匹配到文件'}</span>
+        ${r.search_keyword ? `<span class="mono"> · 搜索词 ${esc(r.search_keyword)}</span>` : ''}</div>
+      ${files}
+    </div>
+    <div class="wl-ops">
+      <button class="btn btn-sm" data-action="watchlist-up" data-id="${r.id}" title="上移">↑</button>
+      <button class="btn btn-sm" data-action="watchlist-down" data-id="${r.id}" title="下移">↓</button>
+      <button class="btn btn-sm" data-action="watchlist-toggle" data-id="${r.id}"
+        data-to="${r.downloaded ? 0 : 1}">${r.downloaded ? '移回未下载' : '标记已下载'}</button>
+      ${matched ? `<button class="btn btn-sm" data-action="watchlist-files" data-id="${r.id}">${open ? '收起' : '本地文件'}</button>
+        <button class="btn btn-sm" data-action="goto" data-view="library"
+          data-keyword="${esc(r.search_keyword || r.title)}">媒体库搜索</button>` : ''}
+      <button class="btn btn-sm btn-danger" data-action="watchlist-remove" data-id="${r.id}" title="从追剧列表移除">×</button>
+    </div>
+  </div>`;
+}
+
+function renderWatchlistRows() {
+  const kw = watchlistState.keyword.trim().toLowerCase();
+  const items = watchlistState.items.filter(r => !kw || r.title.toLowerCase().includes(kw));
+  const boxD = document.getElementById('wlDownloaded');
+  const boxP = document.getElementById('wlPending');
+  if (!boxD || !boxP) return;
+  const d = items.filter(r => r.downloaded === 1);
+  const p = items.filter(r => r.downloaded === 0);
+  boxD.innerHTML = d.length ? d.map((r, i) => watchlistRowHtml(r, i + 1)).join('')
+    : empty('已下载清单为空', '把条目从未下载转过来，或导入一份清单');
+  boxP.innerHTML = p.length ? p.map((r, i) => watchlistRowHtml(r, i + 1)).join('')
+    : empty('未下载清单为空', '点上方「导入清单」粘贴文本');
+  const badge = document.getElementById('wlCount');
+  if (badge) badge.textContent = `已下载 ${watchlistState.downloaded} · 未下载 ${watchlistState.pending} · 已匹配本地 ${watchlistState.matched}`;
+}
+
+async function loadWatchlist() {
+  if (watchlistState.loading) return;
+  watchlistState.loading = true;
+  try {
+    const data = await call('get_watchlist', watchlistState.keyword);
+    watchlistState.items = data.items || [];
+    watchlistState.downloaded = num(data.downloaded);
+    watchlistState.pending = num(data.pending);
+    watchlistState.matched = num(data.matched);
+    renderWatchlistRows();
+  } catch (err) {
+    const box = document.getElementById('wlDownloaded');
+    if (box) box.innerHTML = empty('追剧列表加载失败', String(err && err.message || err));
+  } finally { watchlistState.loading = false; }
+}
+
+async function renderWatchlist() {
+  setContent(`<div class="card"><div class="section-head"><h3>追剧列表</h3>
+      <span class="badge blue" id="wlCount">正在统计…</span></div>
+    <p class="hint">按你粘贴的书写顺序展示，↑ / ↓ 可调整；「标记已下载」只在两栏间移动，不删除、不改顺序。
+      扫描到的本地剧集会显示匹配数，可就地展开点播，或带着搜索词跳到媒体库。</p>
+    <div class="watched-toolbar">
+      <input class="input" id="wlSearch" placeholder="搜索清单…" value="${esc(watchlistState.keyword)}" autocomplete="off">
+      <input class="input" id="wlNewTitle" placeholder="新增一条作品名…" autocomplete="off">
+      <button class="btn btn-sm" data-action="watchlist-add">新增到未下载</button>
+      <button class="btn btn-sm btn-primary" data-action="watchlist-import-open">导入清单</button>
+    </div>
+    <div id="wlImportPanel" style="display:none;margin-top:10px">
+      <p class="hint">粘贴含「已下载：」与「未下载：」两段的文本；先预览再入库，默认跳过已存在的条目。</p>
+      <textarea class="input wl-import" id="wlImportText" placeholder="已下载：&#10;作品 A&#10;作品 B&#10;未下载：&#10;作品 C"></textarea>
+      <div class="btn-row" style="margin-top:8px">
+        <button class="btn btn-sm" data-action="watchlist-preview">预览</button>
+        <button class="btn btn-sm btn-primary" data-action="watchlist-import">确认入库（追加）</button>
+        <button class="btn btn-sm btn-danger" data-action="watchlist-replace">清空并重建</button>
+        <span class="hint" id="wlImportHint"></span>
+      </div>
+    </div>
+    <div class="watchlist-cols" style="margin-top:14px">
+      <div class="card"><div class="section-head"><h3>已下载</h3><span class="badge green">本地可播</span></div>
+        <div class="wl-scroll list" id="wlDownloaded"></div></div>
+      <div class="card"><div class="section-head"><h3>未下载</h3><span class="badge amber">待补</span></div>
+        <div class="wl-scroll list" id="wlPending"></div></div>
+    </div>
+  </div>`);
+  await loadWatchlist();
+}
+
+// ---- 后台进程管理：守护启停 + 封面缓存进度（抓取入口不再放剧集墙） -------
+function renderProcessStatus() {
+  const d = procState.daemon || {}, c = procState.covers || {};
+  const state = document.getElementById('procDaemonState');
+  if (state) state.innerHTML = d.running
+    ? `<span class="dot"></span> 运行中 · PID ${esc(d.pid || '')}`
+    : '<span class="dot gray"></span> 未启动';
+  const auto = document.getElementById('procDaemonAuto');
+  if (auto) auto.textContent = d.auto_start ? '开启（随软件自动启动）' : '关闭';
+  const btn = document.getElementById('procDaemonToggle');
+  if (btn) btn.textContent = d.auto_start ? '关闭自动启动' : '开启自动启动';
+  renderCoverStatus();
+  const bar = document.getElementById('coverProgress');
+  if (bar) {
+    bar.style.display = c.running ? '' : 'none';
+    bar.max = Math.max(1, num(c.total)); bar.value = num(c.done);
+  }
+  const hits = document.getElementById('procCoverHits');
+  if (hits) {
+    const h = c.source_hits || {};
+    hits.textContent = Object.keys(h).length
+      ? Object.entries(h).map(([k, v]) => `${k} ${v} 张`).join(' · ')
+      : '尚无新增缓存';
+  }
+  const dir = document.getElementById('procCoverDir');
+  if (dir) dir.textContent = procState.cover_dir || '';
+  const cur = document.getElementById('procCoverCurrent');
+  if (cur) cur.textContent = c.running
+    ? `当前：${c.current || '准备中…'}${c.last_query ? ` · 关键词「${c.last_query}」` : ''}${c.last_hit ? ` · 命中「${c.last_hit}」` : ''}`
+    : (c.last_query ? `上次关键词「${c.last_query}」` : '');
+  const fail = document.getElementById('procCoverFails');
+  if (fail) {
+    const rows = c.recent_failures || [];
+    fail.innerHTML = rows.length
+      ? rows.map(f => `<div>${esc(f.title)} — ${esc(f.error)}${f.query ? `（关键词 ${esc(f.query)}）` : ''}</div>`).join('')
+      : '<div>暂无失败记录</div>';
+  }
+  const startBtn = document.getElementById('procCoverStart');
+  if (startBtn) startBtn.disabled = !!c.running;
+  const cancelBtn = document.getElementById('procCoverCancel');
+  if (cancelBtn) cancelBtn.disabled = !c.running;
+}
+
+async function loadProcessStatus() {
+  try {
+    const st = await call('process_status');
+    procState = { daemon: st.daemon || {}, covers: st.covers || {}, cover_dir: st.cover_dir || '' };
+    renderProcessStatus();
+  } catch (e) { /* 状态刷新失败保留上一次显示，不打断界面 */ }
+}
+
+async function renderProcesses() {
+  setContent(`<div class="card"><div class="section-head"><h3>后台进程</h3>
+      <span class="badge blue">仅停留本页时刷新</span></div>
+    <p class="hint">在这里启停后台记录守护、查看剧集图片缓存任务。抓取只在点按钮时执行一次，
+      <b>不是定时任务</b>；关闭本页后任务仍在后台继续，回来即可看到最新进度。</p>
+    <div class="proc-grid">
+      <div class="card"><div class="section-head"><h3>后台记录守护</h3></div>
+        <div class="proc-line"><span class="label">运行状态</span><span class="value" id="procDaemonState">检测中…</span></div>
+        <div class="proc-line"><span class="label">自动启动</span><span class="value" id="procDaemonAuto">—</span></div>
+        <p class="proc-meta">负责轮询 PotPlayer 并写入观看历史与断点。关闭自动启动会立即停止守护；
+          再次开启会立即补拉起，并同步左下角状态圆点。</p>
+        <div class="btn-row">
+          <button class="btn btn-sm btn-primary" data-action="proc-daemon-start">启动</button>
+          <button class="btn btn-sm" data-action="proc-daemon-stop">停止</button>
+          <button class="btn btn-sm" data-action="proc-daemon-auto" id="procDaemonToggle">切换自动启动</button>
+        </div>
+      </div>
+      <div class="card"><div class="section-head"><h3>剧集图片缓存</h3></div>
+        <div class="proc-line"><span class="label">任务状态</span><span class="value" id="coverStatusText">检测中…</span></div>
+        <progress id="coverProgress" class="proc-bar" max="100" value="0" style="display:none"></progress>
+        <div class="proc-meta">
+          <div id="procCoverCurrent"></div>
+          <div>本次各源命中：<span id="procCoverHits">—</span></div>
+          <div>缓存目录：<span class="mono" id="procCoverDir">—</span></div>
+        </div>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-sm btn-primary" data-action="cover-fetch" id="procCoverStart">开始抓取</button>
+          <button class="btn btn-sm" data-action="cover-force">强制重抓</button>
+          <button class="btn btn-sm" data-action="cover-cancel" id="procCoverCancel">停止</button>
+          <button class="btn btn-sm" data-action="goto" data-view="posters">看剧集墙</button>
+        </div>
+        <p class="hint" style="margin-top:8px">失败原因（最近 8 条，含实际使用的搜索关键词）</p>
+        <div class="proc-fail" id="procCoverFails"></div>
+      </div>
+    </div>
+  </div>`);
+  await loadProcessStatus();
+  procPollStart();
+}
+
 const RENDERERS = {
   home: renderHome, continue: renderContinue, history: renderHistory, library: renderLibrary,
   posters: renderPosters, quicksearch: renderQuickSearch, watched: renderWatched,
+  watchlist: renderWatchlist, processes: renderProcesses,
   import: renderImport, scan: renderScan, settings: renderSettings,
 };
 
@@ -1044,8 +1226,17 @@ async function refresh() {
   }
 }
 
-function switchView(view) {
+function switchView(view, opts = {}) {
   if (!VIEW_META[view]) return;
+  // 「查看分集 / 媒体库搜索」带搜索词过来：把作品名带进媒体库并自动展开命中分组，
+  // 否则跳过去面对几千个文件就忘了自己要点哪部。
+  if (view === 'library' && typeof opts.keyword === 'string' && opts.keyword.trim()) {
+    fileListState.keyword = opts.keyword.trim();
+    fileListState.page = 1;
+    fileListState.view_mode = 'series';
+    fileListState.mode_touched = true;
+    treeState.open.clear();
+  }
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
   refresh();
@@ -1107,7 +1298,7 @@ async function handleAction(action, btn) {
   switch (action) {
     case 'goto':
       if (playerStageActive) await stopEmbedded(true);
-      switchView(btn.dataset.view);
+      switchView(btn.dataset.view, { keyword: btn.dataset.keyword });
       return;
     case 'toggle-embed': {
       const r = await call('set_embed_player', !embeddedMode);
@@ -1350,13 +1541,116 @@ async function handleAction(action, btn) {
     case 'poster-refresh': await loadPosterWall(); toast('剧集墙已刷新'); return;
     case 'cover-fetch': {
       const r = await call('start_cover_fetch', 0, false);
-      toast(r.ok ? `已启动后台抓取（${r.total} 部作品）· 进度条与当前作品名显示在下方工具栏` : (r.error || '启动失败'), r.ok);
-      coverPollStart();
+      toast(r.ok ? `已启动后台抓取（${r.total} 部作品）· 进度在后台进程页可见` : (r.error || '启动失败'), r.ok);
+      await loadProcessStatus(); procPollStart();
+      return;
+    }
+    case 'cover-force': {
+      const r = await call('start_cover_fetch', 0, true);
+      toast(r.ok ? `已启动强制重抓（${r.total} 部作品）` : (r.error || '启动失败'), r.ok);
+      await loadProcessStatus(); procPollStart();
       return;
     }
     case 'cover-cancel': {
       await call('cancel_cover_fetch');
       toast('已请求停止，当前这一张完成后即停');
+      await loadProcessStatus();
+      return;
+    }
+    case 'proc-daemon-start': {
+      const r = await call('start_daemon');
+      toast(r.ok ? (r.already ? '守护已在运行' : '已启动后台记录') : (r.error || '启动失败'), !!r.ok);
+      await updateDaemonState(); await loadProcessStatus();
+      return;
+    }
+    case 'proc-daemon-stop': {
+      const r = await call('stop_daemon');
+      toast(r.ok ? `已停止 ${num(r.stopped)} 个守护进程` : (r.error || '停止失败'), !!r.ok);
+      await updateDaemonState(); await loadProcessStatus();
+      return;
+    }
+    case 'proc-daemon-auto': {
+      const next = !procState.daemon.auto_start;
+      await call('save_settings', { daemon_auto_start: next ? 1 : 0 });
+      daemonAutoStart = next;
+      toast(next ? '已开启自动启动并补拉起守护' : '已关闭自动启动并停止守护');
+      await updateDaemonState(); await loadProcessStatus();
+      return;
+    }
+    case 'watchlist-import-open': {
+      const panel = document.getElementById('wlImportPanel');
+      if (panel) panel.style.display = panel.style.display === 'none' ? '' : 'none';
+      return;
+    }
+    case 'watchlist-preview': {
+      const text = (document.getElementById('wlImportText') || {}).value || '';
+      const r = await call('watchlist_preview', text);
+      const hint = document.getElementById('wlImportHint');
+      if (hint) hint.textContent = r.ok
+        ? `预览：共 ${num(r.total)} 条 · 已下载 ${num(r.downloaded)} · 未下载 ${num(r.pending)}｜前几条：${(r.sample || []).join('、')}`
+        : (r.error || '预览失败');
+      return;
+    }
+    case 'watchlist-import': case 'watchlist-replace': {
+      const text = (document.getElementById('wlImportText') || {}).value || '';
+      const replace = action === 'watchlist-replace';
+      const r0 = await call('watchlist_preview', text);
+      if (!r0.ok || !num(r0.total)) { toast(r0.error || '没有可导入的条目', false); return; }
+      if (replace) {
+        const ok = await confirmDialog({
+          title: '清空并重建追剧列表',
+          message: `将删除现有追剧清单，按新文本重建 ${num(r0.total)} 条（已下载 ${num(r0.downloaded)} / 未下载 ${num(r0.pending)}）。`,
+          note: '只影响追剧清单；媒体库、观看历史与看过的列表不受影响。',
+          items: [], confirmText: '清空并重建',
+        });
+        if (!ok) return;
+      }
+      const r = await call('watchlist_import', text, replace);
+      toast(r.ok ? `已入库 ${num(r.added)} 条 · 跳过重复 ${num(r.skipped)} 条（已下载 ${num(r.downloaded)} / 未下载 ${num(r.pending)}）`
+        : (r.error || '导入失败'), !!r.ok);
+      if (r.ok) await loadWatchlist();
+      return;
+    }
+    case 'watchlist-add': {
+      const el = document.getElementById('wlNewTitle');
+      const title = (el && el.value || '').trim();
+      if (!title) { toast('请先填写作品名', false); return; }
+      const r = await call('watchlist_add', title, false);
+      toast(r.ok ? '已加入未下载清单' : (r.error || '新增失败'), !!r.ok);
+      if (r.ok && el) el.value = '';
+      await loadWatchlist();
+      return;
+    }
+    case 'watchlist-up': case 'watchlist-down': {
+      const r = await call('watchlist_move', Number(id), action === 'watchlist-up' ? -1 : 1);
+      if (!r.ok) { toast(r.error || '移动失败', false); return; }
+      await loadWatchlist();
+      return;
+    }
+    case 'watchlist-toggle': {
+      const r = await call('watchlist_set_downloaded', Number(id), btn.dataset.to === '1');
+      if (!r.ok) { toast(r.error || '状态修改失败', false); return; }
+      toast(r.downloaded ? '已移到「已下载」' : '已移回「未下载」');
+      await loadWatchlist();
+      return;
+    }
+    case 'watchlist-files': {
+      const rid = Number(id);
+      if (watchlistState.open.has(rid)) watchlistState.open.delete(rid);
+      else watchlistState.open.add(rid);
+      renderWatchlistRows();   // 只重绘行，不重新查库
+      return;
+    }
+    case 'watchlist-remove': {
+      const ok = await confirmDialog({
+        title: '从追剧列表移除',
+        message: '只移除这条追剧记录，本地视频、观看历史与播放进度全部保留。',
+        items: [], confirmText: '移除', danger: false,
+      });
+      if (!ok) return;
+      const r = await call('watchlist_remove', Number(id));
+      toast(r.ok ? '已移除' : (r.error || '移除失败'), !!r.ok);
+      await loadWatchlist();
       return;
     }
     case 'es-search': {
@@ -1431,6 +1725,11 @@ document.addEventListener('input', (ev) => {
     renderPosterCards();   // 已有卡片本地过滤，不发请求
     return;
   }
+  if (el.id === 'wlSearch') {
+    watchlistState.keyword = el.value;
+    renderWatchlistRows();  // 全量已在内存，本地即时过滤
+    return;
+  }
   if (el.id !== 'fileSearch') return;
   const value = el.value;
   clearTimeout(searchTimer);
@@ -1469,6 +1768,12 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && ev.target.id === 'esSearch') {
     ev.preventDefault();
     const btn = document.querySelector('[data-action="es-search"]');
+    if (btn) btn.click();
+    return;
+  }
+  if (ev.key === 'Enter' && ev.target.id === 'wlNewTitle') {
+    ev.preventDefault();
+    const btn = document.querySelector('[data-action="watchlist-add"]');
     if (btn) btn.click();
     return;
   }

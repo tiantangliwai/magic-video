@@ -42,6 +42,10 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 22 | 界面与数据体验 11 项：默认数据目录迁到 `D:\magicvideo`、窗口标题改软件名、媒体库树状改「剧集展示」、双击输入框即改并失焦自动保存、看过的列表脏数据清洗 + 从播放记录同步、列表撑满与表头固定、计数移到卡片右上角、顶栏主题即时切换、封面进度可见、切回窗口即时刷新、关闭播放器断点兜底 | 用户明确要求（0.1.4 日常迭代） |
 | 23 | **全盘快搜（Everything）要单独占一个左侧导航名称**，不再作为「剧集墙」页里的附属卡片 | 用户明确要求（0.1.4 日常迭代） |
 | 24 | **历史记录支持人工删除；整部剧看完后支持人工删除本地文件；但观看记录绝不自动删除**。本地文件只能移入回收站，数据库零 `DELETE`，进度/会话/看过的列表全部保留 | 用户明确要求（0.1.4 日常迭代） |
+| 25 | 增加「追剧列表」导入，分已下载 / 未下载两栏；顺序默认按写入顺序但支持后续调整；未下载 ↔ 已下载可互转；扫描目录中已下载的剧集要能匹配并跳到媒体库搜索或固定展示 | 用户明确要求（0.1.4 日常迭代） |
+| 26 | 剧集墙**不要「播放下一集」按钮**；「查看分集」跳转必须带搜索词，否则跳过去会忘记在看什么 | 用户明确要求（0.1.4 日常迭代） |
+| 27 | 新增「后台进程管理」独立标签，用来启停 / 查看后台进程和剧集图片缓存进度；后台抓取封面整合进去，**不再在剧集墙展示** | 用户明确要求（0.1.4 日常迭代） |
+| 28 | 封面抓取失败率高：不要用全名，改用文件名中的关键字多试几次，从 AGE动漫 / SeedHub 两个网址获取对应背景图 | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -203,7 +207,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 看过的列表解析 / 清洗 / 同步改动：`tests/test_watched_cleanup.py` 必须覆盖解析防再犯、清洗幂等与 `match_by='user'` 保护、区间覆盖判重、守护断点兜底与前端静态契约；清洗函数**只改 `title/title_cn/match_by`**，保留 `raw_text`、季、集、备注。
 - 守护自动启动改动：`tests/test_daemon_autostart.py` 必须覆盖默认值、自动拉起 / 已运行不重复 / 关闭不启动、`stop_daemon()`、设置保存的即时生效、源码版与打包版进程识别、前端不再有 `start-daemon` 按钮；**禁止在 `Api.__init__` 拉起进程**，所有 `subprocess.Popen` / `psutil.process_iter` / `proc.terminate()` 一律 mock，绝不真的启停本机托盘守护。
   - **血泪坑**：`Api.save_settings({"daemon_auto_start": 0})` 会立刻调 `_apply_daemon_auto_start()` → `stop_daemon()` 真杀本机守护。曾有一个 `save_settings` 用例漏 mock，导致每跑一次 `run_tests.py` 用户的托盘守护就被杀掉、左下角误显示「后台记录未启动」。因此 `DaemonAutoStartApiTests.setUp` 统一把 `app.api.psutil.process_iter` 钉为空列表、`app.api.subprocess.Popen` 钉为抛 `AssertionError`；新增用例若需真实枚举，必须在自身作用域内层 patch 临时覆盖。任何新增的 `save_settings` 用例都要显式 mock `start_daemon` / `stop_daemon`。
-- 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务。
+- 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务；改 `app/textmatch.py` 或 `app/covers.py` 还要连带跑 `tests/test_watchlist.py`（关键词变体、两源共享索引、代理断连重试、非 200 换源）。站点搜索**不能只试完整长标题**。
+- 追剧列表 / 后台进程改动：`tests/test_watchlist.py` 必须覆盖解析与编号边界、顺序/状态调整幂等、短英文泛词不误命中、进程状态只读、**新增左侧导航必须同步 `VIEW_META` / `RENDERERS` / nav 三者键集合**；`process_status()` 用例必须显式 mock `daemon_running` 与 `subprocess.Popen`，绝不启停本机守护。
+- 剧集墙改动：「查看分集」必须带 `search_keyword`；脏分组名（如 `1.36G`）要退回组内 `title_cn` 或文件名括号里的中文片名；卡片不得再出现「播放下一集」或封面抓取控件。
 - 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
 - 人工删除改动：`tests/test_manual_cleanup.py` 必须覆盖回收站路径安全、零 `DELETE FROM media_files`、历史单条删除、整剧看完判定、清单预览与伪造 id 拒绝、失败不落标记、扫描恢复标记、前端静态契约；所有 `SHFileOperationW` 调用一律 mock（`file_ops._shell_trash` 在 `setUp` 全局钉死），**绝不真删文件**；本地文件只走回收站 + `UPDATE deleted_at`，观看记录只能由用户逐条人工删除。
 - **仅用户要求发版或改打包链时**：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
@@ -249,6 +255,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - ❌ 自动删除观看记录（守护、扫描、导入、会话关闭都不清理；只有「历史记录」页逐条人工删除）。
 - ❌ 永久删除本地文件（`os.remove` / `unlink` / `rmtree` 一律禁止，只能 `FOF_ALLOWUNDO` 进回收站，且必须用户二次确认）。
 - ❌ 让在线刮削阻塞导入、扫描或播放记录；必须短超时 + 整批降级。
+- ❌ 把封面抓取做成定时任务 / 开机自跑；入口只在「后台进程」页，进度轮询只在用户停留该页时存在，切走即停。
 - ❌ 用一个长事务同时包住网络请求和数据库写。
 - ❌ 提交 `data/*.db`、日志、临时测试产物。
 - ❌ 未经用户明确要求就升版本 / 重出 ZIP、MSI / 打 tag / 自动同步 Obsidian（见 3.0）。
