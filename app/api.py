@@ -701,15 +701,26 @@ class Api:
 
     @staticmethod
     def _prune_blacklisted_groups(groups: list[dict]) -> list[dict]:
-        """按分组标题（作品名 / 目录名）再筛一遍黑名单。
+        """按分组标题（作品名 / 目录名 / 季目录名）再筛一遍黑名单。
 
         只筛标题，不动组内文件：文件行已经被 SQL + :func:`blacklist.filter_rows`
         过滤过；这里补的是「文件名里没有、目录名里才有」那一类。
+
+        季子节点也要看：作品目录可能叫 ``合集``、季目录才叫 ``三上悠亜 精选``，
+        此时卡片标题干净、子标题带词，漏看就等于没过滤。
         """
         if not blacklist.active():
             return groups
-        return [g for g in groups
-                if not blacklist.hit(g.get("label"), g.get("sub"))]
+        kept: list[dict] = []
+        for group in groups:
+            names: list[object] = [group.get("label"), group.get("sub")]
+            for child in group.get("children") or []:
+                if isinstance(child, dict):
+                    names.append(child.get("label"))
+            if blacklist.hit(*names):
+                continue
+            kept.append(group)
+        return kept
 
     # ---- 作品改名：只改展示名，绝不碰媒体文件 / 播放记录 -------------------
     @staticmethod

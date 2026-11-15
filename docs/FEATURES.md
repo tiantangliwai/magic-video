@@ -848,8 +848,12 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 24-D3 | **目录名派生的作品名**（文件名里没有关键词）在剧集墙卡片与媒体库分组这一层再筛一遍，这是「剧集墙还能看到黑名单」的真因之一 |
 | 24-D4 | SQL 侧仍是便宜的 `LIKE` 粗筛（38 词 × 3 字段），归一化精筛放在 Python 侧；**不得**把 5 层 `replace()` 塞进 `WHERE`（实测 2100 行多 110 ms，每次搜索都卡） |
 | 24-D5 | 条目总数随过滤同步扣减，避免「本页只剩 197 条」这类错位 |
+| 24-D6 | **字形归一化**：词表写简体 `三上悠亚`，也能挡住日语新字体 `三上悠亜`（U+4E9C）与繁体 `三上悠亞`（U+4E9E）——三者是不同码位。先 NFKC（全角字母数字折半角）再查异体表归到规范简体，**只改比较、不改展示**。异体表只收字形一一对应的字，不做多义合并（乾/干、著/着不进来），避免误伤 |
+| 24-D7 | **短英文词带词边界**：3~4 字母纯 ASCII 词要求命中位置左右原始字符都不是英文字母，数字与符号放行。`BDrip X264`（去空格后含 `ipx`）、`future`（含 `ure`）、`Return`、`Tsurezure` 不再被误隐藏；`IPX-123`、`SSIS-001`、`MIDA_077`、`@PRED733` 仍正常挡下 |
+| 24-D8 | 词边界**必须同时下推到 SQL**（`lower(x) GLOB '*ipx*' AND NOT GLOB '*[a-z]ipx*' AND NOT GLOB '*ipx[a-z]*'`）：SQL 一旦删行，Python 侧复核就没机会把行放回来 |
+| 24-D9 | 季子节点标题也参与分组过滤：作品目录叫「合集」、季目录才带关键词时也要隐藏 |
 
-对应测试：`tests/test_blacklist.py`（30 个用例，新增 `BlacklistNormalizationTests`）。
+对应测试：`tests/test_blacklist.py`（38 个用例，含 `BlacklistNormalizationTests` 与 `BlacklistVariantTests`）。
 
 ### 24-E 网页搜索（AGE动漫 + Seeduck）
 

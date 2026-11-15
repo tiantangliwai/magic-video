@@ -61,7 +61,11 @@ class BlacklistParsingTests(IsolatedDbTestCase):
         self.assertIn("title_cn", clause)
         self.assertNotIn("f.path", clause)      # 路径不参与，避免整棵子树被隐藏
         self.assertTrue(clause.startswith("NOT ("))
-        self.assertEqual(len(params), len(blacklist.keywords()) * 3)
+        # 长词 / 中文词：每词 3 个字段各 1 个 LIKE 参数；
+        # 短英文词：每字段 3 个 GLOB 参数（包含 + 左右字母边界）。
+        expected = sum(9 if blacklist._is_short_ascii(kw) else 3
+                       for kw in blacklist.keywords())
+        self.assertEqual(len(params), expected)
 
     def test_like_wildcards_in_keyword_are_escaped(self):
         db.set_setting("video_blacklist", "100%_real")
@@ -234,6 +238,83 @@ class BlacklistNormalizationTests(IsolatedDbTestCase):
         db.set_setting("blacklist_enabled", 0)
         wall = client.get_poster_wall({})
         self.assertTrue([c["title"] for c in wall["cards"] if "三上悠亚" in c["title"]])
+
+
+class BlacklistVariantTests(IsolatedDbTestCase):
+    """用户报「黑名单里有三上悠亚，为什么剧集墙里还是有」：
+
+    片名来自日语资源，写的是新字体 `三上悠亜`（U+4E9C），词表里是简体
+    `三上悠亚`（U+4E9A）。三个码位互不相等，纯 `in` 判断永远不命中。
+    同时收紧短英文词的词边界，避免 `future`(ure) / `BDripX264`(ipx) 被误伤。
+    """
+
+    def test_japanese_shinjitai_hits_simplified_keyword(self):
+        self.assertTrue(blacklist.hit("三上悠亜"))
+        self.assertTrue(blacklist.hit("三上悠亞"))
+        self.assertTrue(blacklist.hit("三上悠亚"))
+        self.assertTrue(blacklist.hit("三上悠亜 精选"))   # 目录名派生标题
+
+    def test_normalize_folds_variants_and_fullwidth(self):
+        self.assertEqual(blacklist.normalize_name("三上悠亜"), "三上悠亚")
+        self.assertEqual(blacklist.normalize_name("ＡＢＰ１２３"), "abp123")
+
+    def test_short_ascii_keyword_needs_word_boundary(self):
+        # 正常番：ure / ipx 只是更长单词的一部分，必须放行
+        for name in ("The Return Of The Native (1994) DVDRip",
+                     "Time Trap-Escape to the future ITA-ENG",
+                     "徒然喜欢你 Tsurezure Children",
+                     "[漏勺rip] Gate Jieitai 01 [BDrip X264 10bit].mkv",
+                     "Ownerless.Flower.2014.720p.UNCUT.HDRip"):
+            self.assertFalse(blacklist.hit(name), name)
+
+    def test_short_ascii_keyword_still_hits_real_codes(self):
+        # 番号的正常写法：连字符 / 下划线 / 点 / @ / 词+数字粘连 都要能挡住
+        for name in ("IPX-123.mp4", "SSIS-001.mkv", "MIDA_077.mp4",
+                     "kfa55.com@PRED733.mkv", "WoXav.Com@IPX.mp4",
+                     "(S1)(SSNI-463) 某某.mkv"):
+            self.assertTrue(blacklist.hit(name), name)
+
+    def test_sql_clause_pushes_short_word_boundary_down(self):
+        """SQL 一旦把行删掉，Python 就没机会放回来 → 短词必须用 GLOB 做边界。"""
+        sql, params = blacklist.sql_clause("f")
+        self.assertIn("GLOB", sql.upper())
+        self.assertIn("*[a-z]ure*", params)
+        self.assertIn("*ure[a-z]*", params)
+        # 长词 / 中文词仍然走便宜的 LIKE
+        self.assertIn("%fc2ppv%", params)
+        self.assertIn("%三上悠亚%", params)
+
+    def test_sql_clause_really_keeps_future_and_drops_codes(self):
+        self.media("The Return Of The Native (1994) DVDRip.mkv", title_guess="Return")
+        self.media("Time Trap future ITA-ENG.mkv", title_guess="Time Trap")
+        self.media("SSIS-001.mkv", title_guess="SSIS-001")
+        client = api.Api()
+        names = [r["filename"] for r in client.get_media_files_page({"page_size": 0})["rows"]]
+        self.assertTrue(any("Return" in n for n in names), names)
+        self.assertTrue(any("Time Trap" in n for n in names), names)
+        self.assertFalse(any("SSIS-001" in n for n in names), names)
+
+    def test_wall_hides_group_titled_with_shinjitai(self):
+        client = api.Api()
+        folder = self.tmp / "三上悠亜"
+        folder.mkdir()
+        for idx in (1, 2):
+            name = f"clip {idx}.mkv"
+            self.media(name, path=str(folder / name), title_guess=f"clip {idx}")
+        titles = [c["title"] for c in client.get_poster_wall({})["cards"]]
+        self.assertFalse([t for t in titles if "三上" in t], titles)
+        db.set_setting("blacklist_enabled", 0)
+        titles = [c["title"] for c in client.get_poster_wall({})["cards"]]
+        self.assertTrue([t for t in titles if "三上" in t], titles)
+
+    def test_prune_also_checks_season_child_labels(self):
+        """作品目录名叫「合集」、季目录才带词时，只看 label 会漏。"""
+        groups = [
+            {"label": "合集", "sub": "", "children": [{"label": "三上悠亜 精选"}]},
+            {"label": "葬送的芙莉莲", "sub": "", "children": [{"label": "第1季"}]},
+        ]
+        kept = api.Api._prune_blacklisted_groups(groups)
+        self.assertEqual([g["label"] for g in kept], ["葬送的芙莉莲"])
 
 
 class MediaCacheTests(IsolatedDbTestCase):
