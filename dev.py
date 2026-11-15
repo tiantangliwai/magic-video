@@ -1,18 +1,18 @@
-"""本地调试辅助：把安装版真实数据库复制成安全副本。
+"""本地调试辅助：把真实数据库复制成安全副本。
 
+真实库默认在 ``D:\\magicvideo\\library.db``（见 ``app.config.DEFAULT_DATA_DIR``）。
 调试窗口用它当数据目录，既能看到全部扫描结果，又不会把调试期间的
 播放、导入、扫描操作写进真实播放记录。SQLite backup API 读取一致快照，
-源库开启 WAL 或被安装版占用时也能安全复制。
+源库开启 WAL 或被软件占用时也能安全复制。
 """
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 
-SOURCE = Path(
-    os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
-) / "Magic Video" / "library.db"
+from app import config
+
+SOURCE = config.DEFAULT_DATA_DIR / "library.db"
 TARGET_DIR = Path(__file__).resolve().parent / "data" / "dev"
 TARGET = TARGET_DIR / "library.db"
 

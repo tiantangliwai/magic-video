@@ -111,9 +111,23 @@ class Watcher:
         if not self.current:
             return
         cur = self.current
+        to_ms = cur.get("last_written_ms")
+        # 关闭 PotPlayer 时窗口句柄已消失，无法再回读最后位置。若这次会话还没
+        # 成功写过进度（会话短于轮询间隔 / 首次读到 0），用本次见过的最大位置
+        # 兜底，否则「继续观看」会因 position_ms=0 把刚看的这一集过滤掉。
+        if not to_ms:
+            fallback = int(cur.get("max_ms") or 0)
+            if fallback > 0:
+                db.execute(
+                    "UPDATE watch_progress SET position_ms = ?, last_played_at = ?, updated_at = ? "
+                    "WHERE file_id = ? AND COALESCE(position_ms,0) < ?",
+                    (fallback, db.now(), db.now(), cur["file_id"], fallback),
+                )
+            to_ms = fallback
+            cur["last_written_ms"] = fallback
         db.execute(
             "UPDATE watch_sessions SET ended_at = ?, to_ms = ?, max_ms = ? WHERE id = ?",
-            (db.now(), cur["last_written_ms"], cur["max_ms"], cur["session_id"]),
+            (db.now(), to_ms or 0, cur["max_ms"], cur["session_id"]),
         )
         self.current = None
         self._emit("session_ended", {"file_id": cur["file_id"]})

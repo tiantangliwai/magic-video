@@ -41,7 +41,10 @@ _COMPLETION_RE = re.compile(
     re.IGNORECASE,
 )
 _BOOK_QUOTE_RE = re.compile(r"[《》〈〉\"“”]")
-# 说明性文字：冒号后接中文叙述（不是作品副标题）
+# 说明性文字：冒号后接中文叙述（不是作品副标题）。
+# 注意：clean_line 先做 NFKC（全角「，；」-> 半角），这里刻意只把全角标点写进
+# 排除集，半角逗号/分号因此不会提前终止，整段观感说明能一直删到句号/行尾。
+# 若补上半角标点，反而会把「：独立日常篇,完善角色设定,建议先看。」切成残留碎串。
 _ASIDE_COLON_RE = re.compile(r"[：:]\s*[^，。；、\n]*(?:[，。；、]|$)")
 # 纯季行 / 剧场版行 / 明显是分组说明或对话的句子
 _SEASON_ONLY_RE = re.compile(
@@ -61,12 +64,47 @@ _LEADING_SEASON_RE = re.compile(
 # 中文连写季数：「我独自升级一二季」「S1S2」
 _CN_SEASON_CHAIN_RE = re.compile(r"([一二三四五六七八九十]{2,3})季\s*$")
 
+# ---------- 存量脏数据清洗（旧版解析器留下的空壳括号 / 完结标记 / 垃圾行） ----------
+# 字符类刻意不含任何数字，因此「(2013)」「（24集）」这类合法括注不会被误删。
+_DIRTY_SHELL_RE = re.compile(
+    r"\s*[（(][\s,，、年集话話完结可选稍弱篇全集剧场版·]*[)）]"
+)
+_LEADING_COLON_RE = re.compile(r"^\s*[：:]\s*")
+_JUNK_TITLE_RE = re.compile(r"^[\s\-–—~～。·、,，]*完?[\s。·]*$")
+
+
+def clean_watched_title(title: str) -> str:
+    """清洗已入库的脏标题；只剥噪音外壳，不动合法年份/集数括注与季集字段。
+
+    与 ``clean_line`` 的关键区别：冒号语义按位置区分，绝不能一刀切。
+      - ``《标题》：观感说明，建议先看。`` → 书名号闭合后的冒号是说明，删
+      - ``《剧场版：恩底弥翁的奇迹》``   → 书名号内部的冒号是作品名，保留
+      - ``第二季：《标题》``             → 冒号在书名号前，只删行首冒号、保留标题
+    另外 NFKC 会把「～ / ：」改写成半角，这里还原成作品名原貌。
+    """
+    text = unicodedata.normalize("NFKC", str(title or ""))
+    text = _ZERO_WIDTH_RE.sub("", text).replace("\u3000", " ")
+    text = _COMPLETION_RE.sub("", text)            # 行尾「- 完」「（完）」
+    text = _DIRTY_SHELL_RE.sub(" ", text)          # 只删空壳「（ 年， ）」「（ ）」
+    close = text.find("》")
+    if close >= 0:
+        head, tail = text[:close + 1], text[close + 1:]
+        text = head + _ASIDE_COLON_RE.sub(" ", tail)
+    text = _BOOK_QUOTE_RE.sub("", text)             # 书名号
+    text = _LEADING_COLON_RE.sub("", text)         # 只删行首残留冒号
+    text = text.replace(":", "：")                  # 还原作品名里的中文冒号
+    text = re.sub(r"(?<!\d)~(?!\d)", "～", text)   # 还原标题波浪号，保留 1~12 范围
+    return normalize_title(text)
+
 
 def normalize_title(text: str) -> str:
     title = str(text or "").strip()
     title = re.sub(r"[（(]\s*(19|20)\d{2}\s*[)）]", " ", title)
     title = re.sub(r"\s+", " ", title)
     title = title.strip(" ,，、\t-–—:：。·")
+    # NFKC 会把作品名里的「～」变成「~」。只还原前后都不是数字的波浪号，
+    # 这样「1~12」这类集数范围不受影响，标题与离线词典/存量库保持一致。
+    title = re.sub(r"(?<!\d)~(?!\d)", "～", title)
     return re.sub(r"\s+", " ", title).strip()
 
 
@@ -151,11 +189,16 @@ def parse_line(line: str) -> dict | None:
     if _NOISE_SENTENCE_RE.search(raw) and not re.search(r"[A-Za-z]", raw):
         return None  # 「最后可以再拜托您一件事吗」「大学生篇有哪些新作」
 
-    # CSV 行：标题,季,起始集,结束集 或 标题,起始集,结束集
+    # CSV 行：标题,季,起始集,结束集 或 标题,起始集,结束集。
+    # 只有后续列「全是数字/空且至少一个数字」才算 CSV；否则自然语言里的
+    # 半角逗号（如「（2007 年, 12 集）」）会把标题截断成残缺串。
     if "," in raw or "\t" in raw:
         delimiter = "\t" if "\t" in raw else ","
         parts = [p.strip() for p in next(csv.reader(io.StringIO(raw), delimiter=delimiter))]
-        if parts and parts[0]:
+        numeric_tail = (len(parts) >= 2 and parts[0]
+                        and any(p.isdigit() for p in parts[1:])
+                        and all(p == "" or p.isdigit() for p in parts[1:]))
+        if numeric_tail:
             season = ep_from = ep_to = None
             nums = [p for p in parts[1:] if p.isdigit()]
             if len(nums) >= 3:
@@ -253,6 +296,20 @@ def parse_text(text: str) -> list[dict]:
                 lines_to_add.append(rec)
         else:
             record = parse_line(line)
+            if not record and is_continuation and not last_title:
+                # 旧清单里「第二季：《作品名》（年，集）。 - 完」单独成行时，
+                # clean_line 会把冒号后的标题当成观感说明删掉。改用原文书名号
+                # 救回标题；纯「S1 - 完」这类无书名号的垃圾行仍然丢弃。
+                book = re.search(r"《([^》]+)》", line)
+                if book:
+                    fallback = clean_watched_title(book.group(1))
+                    if fallback and not _JUNK_TITLE_RE.match(fallback):
+                        ep_match = EPISODE_RE.search(line[book.end():])
+                        ep = int(ep_match.group(1)) if ep_match else None
+                        record = _make_record(
+                            line, fallback, seasons[0] if seasons else None, ep, ep
+                        )
+                        record["seasons"] = seasons
             if not record:
                 continue
             base_title = record["title"]
@@ -342,6 +399,14 @@ def commit(records: list[dict], source: str = "manual") -> dict:
     metadata.ensure_builtin_loaded()
     inserted = skipped = learned = 0
     for rec in records:
+        # 防旧版前端 / 旧缓存把脏串再次塞进库：先剥噪音外壳，再按干净标题判重。
+        raw_title = rec.get("title") or ""
+        guard = clean_watched_title(raw_title)
+        if guard and guard != raw_title:
+            rec = dict(rec)
+            rec["title"] = guard
+            if (rec.get("title_cn") or raw_title).strip() == raw_title:
+                rec["title_cn"] = guard
         key = _key(rec)
         exists = db.scalar(
             "SELECT COUNT(*) FROM watched_list WHERE lower(title) = ? AND "
@@ -369,3 +434,114 @@ def commit(records: list[dict], source: str = "manual") -> dict:
         )
         inserted += 1
     return {"ok": True, "inserted": inserted, "skipped": skipped, "learned": learned}
+
+
+def clean_watched_rows(dry_run: bool = False) -> dict:
+    """幂等清洗看过的列表里的存量脏标题，并删除「- 完」之类垃圾行。
+
+    只改 ``title / title_cn / match_by``；``raw_text``、季、集数范围、``note``
+    一律保留（旧版这几个字段恰好是对的，重洗会丢语义）。用户手改过的中文名
+    （``match_by='user'``）不会被覆盖。``dry_run=True`` 只统计不写库。
+    """
+    db.init_db()
+    rows = db.rows("SELECT id, title, title_cn, match_by FROM watched_list")
+    updated = deleted = unchanged = 0
+    samples: list[dict] = []
+    for item in rows:
+        original = str(item.get("title") or "")
+        clean = clean_watched_title(original)
+        rid = int(item["id"])
+        if not clean or _JUNK_TITLE_RE.match(clean):
+            if not dry_run:
+                db.execute("DELETE FROM watched_list WHERE id = ?", (rid,))
+            deleted += 1
+            if len(samples) < 12:
+                samples.append({"action": "delete", "before": original})
+            continue
+        if clean == original:
+            unchanged += 1
+            continue
+        title_cn = item.get("title_cn")
+        match_by = item.get("match_by") or "none"
+        if match_by == "user" or (title_cn and title_cn != original):
+            new_cn = title_cn  # 手改 / 词典匹配出来的中文名优先保留
+        else:
+            new_cn = clean
+            match_by = "native" if match_by in ("none", "native") else match_by
+        if not dry_run:
+            db.execute(
+                "UPDATE watched_list SET title = ?, title_cn = ?, match_by = ? WHERE id = ?",
+                (clean, new_cn, match_by, rid),
+            )
+        updated += 1
+        if len(samples) < 12:
+            samples.append({"action": "update", "before": original, "after": clean})
+    return {
+        "ok": True, "dry_run": bool(dry_run), "scanned": len(rows),
+        "updated": updated, "deleted": deleted, "unchanged": unchanged,
+        "samples": samples,
+    }
+
+
+def sync_watched_from_progress() -> dict:
+    """手动把「已看完」的播放记录回补进看过的列表；幂等，不改手动导入行。
+
+    播放记录（``watch_progress`` / ``watch_sessions``）与看过的列表原本是两条
+    互不相交的数据流，这个函数是它们之间唯一的桥。只在用户点按钮时执行一次，
+    **不是定时任务、不随启动运行**。
+    """
+    db.init_db()
+    metadata.ensure_builtin_loaded()
+    completed = db.rows(
+        "SELECT f.title_guess, f.title_raw, f.title_cn, f.filename, "
+        "f.season_no, f.episode_no "
+        "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
+        "WHERE p.completed = 1"
+    )
+    added = skipped = 0
+    for item in completed:
+        base = (item.get("title_cn") or item.get("title_guess")
+                or item.get("title_raw") or item.get("filename") or "")
+        title = clean_watched_title(base)
+        if not title or _JUNK_TITLE_RE.match(title):
+            skipped += 1
+            continue
+        season = item.get("season_no") or 0
+        ep = item.get("episode_no")
+        cn = (item.get("title_cn") or "").strip() or title
+        title_key = "(lower(title) = lower(?) OR lower(COALESCE(title_cn,'')) = lower(?))"
+        # 区间覆盖判重：手动导入的「1-25」或整部（区间为 NULL）行覆盖单集，
+        # 不产生重复行。ep 为空时只有「整部」行算已覆盖。
+        if ep:
+            covered = db.scalar(
+                f"SELECT COUNT(*) FROM watched_list WHERE {title_key} "
+                "AND COALESCE(season_no,0) = ? AND "
+                "(episode_from IS NULL OR episode_from <= ?) AND "
+                "(episode_to IS NULL OR episode_to >= ?)",
+                (title, cn, season, ep, ep),
+            )
+        else:
+            covered = db.scalar(
+                f"SELECT COUNT(*) FROM watched_list WHERE {title_key} "
+                "AND COALESCE(season_no,0) = ? AND "
+                "episode_from IS NULL AND episode_to IS NULL",
+                (title, cn, season),
+            )
+        if covered:
+            skipped += 1
+            continue
+        rec = {
+            "raw_text": None,
+            "title": title,
+            "title_cn": cn,
+            "match_by": "native" if item.get("title_cn") else "none",
+            "cn_edited": False,
+            "season_no": item.get("season_no"),
+            "episode_from": ep,
+            "episode_to": ep,
+            "note": "",
+        }
+        result = commit([rec], source="playback")
+        added += int(result.get("inserted", 0))
+        skipped += int(result.get("skipped", 0))
+    return {"ok": True, "scanned": len(completed), "added": added, "skipped": skipped}

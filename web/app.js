@@ -289,6 +289,8 @@ function option(value, label, current) {
 
 function fileListCard(title, hint, directories) {
   const s = fileListState;
+  // 旧状态里可能残留「目录树」视图，统一归一到剧集展示，避免刷新后仍是目录层级
+  if (s.view_mode === 'folder') s.view_mode = 'series';
   const dirs = ['<option value="0">全部目录</option>']
     .concat((directories || []).map(d => option(d.id, `${d.path}（${num(d.files)}）`, s.directory_id)));
   return `<div class="card"><div class="section-head">
@@ -314,11 +316,10 @@ function fileListCard(title, hint, directories) {
     <div class="tree-toolbar">
       <span class="tree-toolbar-label">展示方式</span>
       <select class="input" id="fileViewMode">
-        ${option('series', '作品 → 季 → 集', s.view_mode)}
-        ${option('folder', '目录树', s.view_mode)}
+        ${option('series', '剧集展示（作品 → 季 → 集）', s.view_mode)}
         ${option('flat', '平铺列表', s.view_mode)}
       </select>
-      <span class="hint" id="treeSummary">按作品分组，展开季即可看到每一集</span>
+      <span class="hint" id="treeSummary">按剧集分组，展开季即可看到每一集</span>
       <button class="btn btn-sm" data-action="tree-expand-all">展开全部分组</button>
       <button class="btn btn-sm" data-action="tree-collapse-all">全部折叠</button>
     </div>
@@ -403,7 +404,7 @@ function treeHtml(data) {
 }
 
 function treePagerHtml(data) {
-  const label = data.mode === 'folder' ? '目录树' : '作品 → 季 → 集';
+  const label = '剧集展示（作品 → 季 → 集）';
   return `<span>${esc(label)} · 当前筛选 <b>${num(data.total)}</b> 个文件 ·
       <b>${num(data.group_count)}</b> 个分组（不受每页条数限制，节点按需展开）</span>
     <button class="btn btn-sm" data-action="file-flat">切回平铺列表</button>`;
@@ -445,14 +446,12 @@ async function loadFileList() {
   if (mode === 'flat') {
     treeState.data = null;
     if (pager) pager.innerHTML = fileListPagerHtml(data);
-    if (summary) summary.textContent = '当前是平铺列表，可切换成按季分集的树状展示';
+    if (summary) summary.textContent = '当前是平铺列表，可切换成剧集展示';
     box.innerHTML = fileListRows(data.rows || []);
   } else {
     treeState.data = data;
     if (pager) pager.innerHTML = treePagerHtml(data);
-    if (summary) summary.textContent = data.mode === 'folder'
-      ? '按磁盘目录层级展开，叶子节点可直接点击播放'
-      : '同一部作品归为一组，按第 1 季 / 第 2 季… 展开到每一集';
+    if (summary) summary.textContent = '同一部作品归为一组，按第 1 季 / 第 2 季… 展开到每一集';
     autoExpandHits(data);
     box.innerHTML = treeHtml(data);
   }
@@ -463,12 +462,31 @@ async function renderLibrary() {
   const dirs = await call('get_directories');
   setContent(fileListCard(
     '媒体库 · 按作品分季浏览',
-    '默认按「作品 → 季 → 集」分组：第一季、第二季、第三季各自成组，十几集的动漫展开季就能看到每一集。也可以切换成目录树或原来的平铺列表；搜索、筛选与点击播放三种视图都可用。',
+    '默认按「剧集展示」分组：第一季、第二季、第三季各自成组，十几集的动漫展开季就能看到每一集。也可以切换回原来的平铺列表；搜索、筛选与点击播放两种视图都可用。',
     dirs,
   ));
   await loadFileList();
   const input = document.getElementById('fileSearch');
   if (input) input.focus();
+}
+
+// 双击进入编辑后，Enter / 点保存 / 光标移开三条路径共用同一套保存逻辑
+let watchedSaving = false;
+async function saveWatchedEdit(rid) {
+  if (watchedSaving) return;
+  const titleEl = document.getElementById('watchedEditTitle');
+  const cnEl = document.getElementById('watchedEditCn');
+  if (!titleEl || !cnEl) return;
+  watchedSaving = true;
+  try {
+    const r = await call('update_watched', Number(rid), titleEl.value, cnEl.value);
+    if (!r.ok) { toast(r.error || '保存失败', false); return; }  // 保留编辑态供重试
+    const i = watchedRows.findIndex(x => Number(x.id) === Number(rid));
+    if (i >= 0) watchedRows[i] = r.row;
+    watchedEditing = 0;
+    renderWatchedRows();
+    toast(r.learned ? '名称已更新，中文名已记住' : '名称已更新');
+  } finally { watchedSaving = false; }
 }
 
 function watchedRowHtml(r) {
@@ -485,7 +503,8 @@ function watchedRowHtml(r) {
     </tr>`;
   }
   return `<tr>
-    <td>${esc(r.title)}</td><td>${esc(r.title_cn || '—')}</td>
+    <td data-edit-watched="${r.id}" data-field="title" title="双击编辑">${esc(r.title)}</td>
+    <td data-edit-watched="${r.id}" data-field="title_cn" title="双击编辑">${esc(r.title_cn || '—')}</td>
     <td><span class="badge ${tone}">${esc(label)}</span></td>
     <td>${r.season_no ? esc(r.season_no) : '—'}</td>
     <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
@@ -546,12 +565,14 @@ function renderWatchedRows() {
 async function renderWatched() {
   watchedRows = await call('get_watched_list', 0);
   watchedEditing = 0;
-  setContent(`<div class="card"><h3>看过的列表</h3>
-    <p class="hint">你手动导入的已观看作品。可直接在下面改名、按名称即时搜索；中文名在导入那一刻已自动匹配，手改后会被记住。</p>
+  setContent(`<div class="card watched-card"><div class="section-head"><h3>看过的列表</h3>
+      <span class="badge blue" id="watchedCount">正在统计…</span></div>
+    <p class="hint">你手动导入的已观看作品。中文名在导入那一刻已自动匹配；<b>双击作品名或中文名单元格即可直接编辑，光标移开自动保存</b>，导入原文始终保留。</p>
     <div class="watched-toolbar">
       <input class="input" id="watchedSearch" placeholder="搜索作品名 / 中文名 / 导入原文 / 备注…" value="${esc(watchedKeyword)}" autocomplete="off">
       <button class="btn btn-sm" data-action="watched-view-mode">${watchedGrouped ? '切换为平铺' : '按作品分组'}</button>
-      <span class="hint" id="watchedCount"></span>
+      <button class="btn btn-sm" data-action="sync-watched-history" title="把播放记录里已看完的作品回补到本列表">从播放记录同步</button>
+      <button class="btn btn-sm" data-action="clean-watched" title="修正旧版导入残留的脏标题与「- 完」垃圾行">清洗脏数据</button>
       <button class="btn btn-sm" data-action="watched-clear-search">清空搜索</button>
     </div>
     <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名</th><th>匹配方式</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
@@ -642,7 +663,7 @@ async function renderScan() {
       <button class="btn" data-action="open-data">打开数据目录</button>
     </div></div>
   ${fileListCard('扫描结果 · 全部文件',
-    '本次及历次扫描到的视频都会列在这里。默认平铺，可搜索、按目录或匹配状态筛选、翻页或一次显示全部；也可以切换成「作品 → 季 → 集」或目录树。点文件名即可调用 PotPlayer 播放。',
+    '本次及历次扫描到的视频都会列在这里。默认平铺，可搜索、按目录或匹配状态筛选、翻页或一次显示全部；也可以切换成「剧集展示（作品 → 季 → 集）」。点文件名即可调用 PotPlayer 播放。',
     dirs)}`);
   await loadFileList();
 }
@@ -796,10 +817,20 @@ function renderPosterCards() {
 function renderCoverStatus() {
   const el = document.getElementById('posterStatus');
   if (!el) return;
+  const bar = document.getElementById('coverProgress');
   const s = posterState.status || {};
-  el.textContent = s.running
-    ? `后台抓取中… ${num(s.done)} / ${num(s.total)}（成功 ${num(s.ok)} · 失败 ${num(s.failed)}）`
-    : `已缓存 ${num(s.cached)} 张封面${s.finished_at ? ` · 上次任务成功 ${num(s.ok)} / ${num(s.total)}` : ''}`;
+  if (s.running) {
+    el.textContent = `后台抓取中… ${num(s.done)} / ${num(s.total)}（成功 ${num(s.ok)} · 失败 ${num(s.failed)}）`
+      + (s.current ? ` · 当前：${s.current}` : '');
+    if (bar) {
+      bar.style.display = '';
+      bar.max = Math.max(1, num(s.total));
+      bar.value = num(s.done);
+    }
+  } else {
+    el.textContent = `已缓存 ${num(s.cached)} 张封面${s.finished_at ? ` · 上次任务成功 ${num(s.ok)} / ${num(s.total)}` : ''}`;
+    if (bar) { bar.style.display = 'none'; bar.value = 0; }
+  }
 }
 
 async function loadPosterWall() {
@@ -834,6 +865,8 @@ async function renderPosters() {
       <button class="btn btn-sm btn-primary" data-action="cover-fetch">后台抓取封面</button>
       <button class="btn btn-sm" data-action="cover-cancel">停止</button>
       <span class="hint" id="posterStatus">检查封面…</span>
+      <progress id="coverProgress" max="100" value="0" title="封面抓取进度"
+        style="width:150px;vertical-align:middle;display:none"></progress>
     </div>
     <div id="posterGrid" class="poster-grid">${empty('正在加载剧集墙', '读取媒体库分组…')}</div>
   </div>
@@ -884,6 +917,9 @@ async function refresh() {
   const [title, subtitle] = VIEW_META[currentView];
   document.getElementById('viewTitle').textContent = title;
   document.getElementById('viewSubtitle').textContent = subtitle;
+  document.title = 'Magic Video · ' + title;
+  // 看过的列表让卡片吃满可用高度、表格内部滚动；其它视图保持整页滚动
+  document.getElementById('content').classList.toggle('content-fill', currentView === 'watched');
   try {
     await RENDERERS[currentView]();
   } catch (err) {
@@ -919,7 +955,7 @@ async function updateDaemonState() {
     const running = !!st.running;
     const dot = document.getElementById('daemonDot');
     dot.className = 'dot' + (running ? '' : ' gray');
-    document.getElementById('daemonText').textContent = running ? '后台记录正在运行' : '后台记录未启动';
+    document.getElementById('daemonText').textContent = running ? '后台记录正在运行' : '后台记录未启动 · 设置里可开启';
   } catch (e) {
     document.getElementById('daemonText').textContent = '后台记录状态未知';
   }
@@ -962,17 +998,19 @@ async function handleAction(action, btn) {
       return;
     }
     case 'cancel-watched': watchedEditing = 0; renderWatchedRows(); return;
-    case 'save-watched': {
-      const rid = Number(id);
-      const title = (document.getElementById('watchedEditTitle') || {}).value || '';
-      const cn = (document.getElementById('watchedEditCn') || {}).value || '';
-      const r = await call('update_watched', rid, title, cn);
-      if (!r.ok) { toast(r.error || '保存失败', false); return; }
-      const i = watchedRows.findIndex(x => Number(x.id) === rid);
-      if (i >= 0) watchedRows[i] = r.row;
-      watchedEditing = 0;
-      renderWatchedRows();
-      toast(r.learned ? '名称已更新，中文名已记住' : '名称已更新');
+    case 'save-watched': await saveWatchedEdit(Number(id)); return;
+    case 'sync-watched-history': {
+      const r = await call('sync_watched_from_history');
+      toast(`已回补 ${r.added} 条已看完作品 · 跳过 ${r.skipped} 条（扫描 ${r.scanned} 条播放记录）`, r.ok);
+      await renderWatched();
+      return;
+    }
+    case 'clean-watched': {
+      const preview = await call('clean_watched_list', true);
+      if (!preview.updated && !preview.deleted) { toast('没有需要清洗的脏数据'); return; }
+      const r = await call('clean_watched_list', false);
+      toast(`已清洗 ${r.updated} 条标题 · 删除 ${r.deleted} 条垃圾行`, r.ok);
+      await renderWatched();
       return;
     }
     case 'watched-view-mode': {
@@ -1146,7 +1184,7 @@ async function handleAction(action, btn) {
     case 'poster-refresh': await loadPosterWall(); toast('剧集墙已刷新'); return;
     case 'cover-fetch': {
       const r = await call('start_cover_fetch', 0, false);
-      toast(r.ok ? `已启动后台抓取（${r.total} 部作品）` : (r.error || '启动失败'), r.ok);
+      toast(r.ok ? `已启动后台抓取（${r.total} 部作品）· 进度条与当前作品名显示在下方工具栏` : (r.error || '启动失败'), r.ok);
       coverPollStart();
       return;
     }
@@ -1237,6 +1275,29 @@ document.addEventListener('input', (ev) => {
   }, 250);
 });
 
+// 双击单元格直接改名：不必先点右侧「改名」；焦点离开整行时自动保存
+document.addEventListener('dblclick', (ev) => {
+  const td = ev.target.closest('[data-edit-watched]');
+  if (!td) return;
+  watchedEditing = Number(td.dataset.editWatched);
+  renderWatchedRows();
+  const el = document.getElementById(td.dataset.field === 'title_cn' ? 'watchedEditCn' : 'watchedEditTitle');
+  if (el) { el.focus(); el.select(); }
+});
+
+document.addEventListener('focusout', (ev) => {
+  if (!watchedEditing) return;
+  if (ev.target.id !== 'watchedEditTitle' && ev.target.id !== 'watchedEditCn') return;
+  const rid = watchedEditing;
+  setTimeout(() => {
+    if (!watchedEditing || watchedEditing !== rid) return;
+    const active = document.activeElement;
+    // 焦点仍在编辑行内（切到另一个输入框 / 点保存 / 点取消）时不提前保存
+    if (active && active.closest && active.closest('.watched-edit')) return;
+    saveWatchedEdit(rid);
+  }, 0);
+});
+
 // 改名行内编辑：Enter 保存、Esc 取消
 document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && ev.target.id === 'esSearch') {
@@ -1293,6 +1354,12 @@ async function init() {
   setInterval(updateDaemonState, 15000);
   setInterval(() => { if (currentView === 'home' && !playerStageActive) refresh(); }, 12000);
 }
+
+// 关掉 PotPlayer 切回软件窗口时立即重查断点 / 历史，不必等 12 秒的首页轮询
+window.addEventListener('focus', () => {
+  if ((currentView === 'home' || currentView === 'continue')
+      && !watchedEditing && !playerStageActive) refresh();
+});
 
 // 窗口缩放 / DPI 变化时把原生播放器重新摆回舞台矩形
 window.addEventListener('resize', () => {

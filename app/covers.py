@@ -54,6 +54,7 @@ _JOB = {
     "done": 0,
     "ok": 0,
     "failed": 0,
+    "current": "",          # 当前正在抓取的作品名，供界面显示实时进度
     "source_hits": {},
     "started_at": "",
     "finished_at": "",
@@ -379,7 +380,7 @@ def start_job(limit: int = 0, force: bool = False) -> dict:
         if _JOB["running"]:
             return {"ok": False, "error": "已有抓取任务在运行", **status()}
         titles = cover_titles(limit)
-        _JOB.update(running=True, total=len(titles), done=0, ok=0, failed=0,
+        _JOB.update(running=True, total=len(titles), done=0, ok=0, failed=0, current="",
                     source_hits={}, started_at=db.now(), finished_at="", error="", cancel=False)
 
     def work():
@@ -387,6 +388,7 @@ def start_job(limit: int = 0, force: bool = False) -> dict:
             with _job_lock:
                 if _JOB["cancel"]:
                     break
+                _JOB["current"] = title
             try:
                 result = fetch_one(title, force=force)
             except Exception as exc:  # 单个作品失败不能拖垮整批
@@ -404,6 +406,7 @@ def start_job(limit: int = 0, force: bool = False) -> dict:
         with _job_lock:
             _JOB["running"] = False
             _JOB["finished_at"] = db.now()
+            _JOB["current"] = ""
 
     threading.Thread(target=work, name="mv-cover-fetch", daemon=True).start()
     return {"ok": True, "started": True, "total": len(titles)}

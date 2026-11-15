@@ -161,6 +161,8 @@ class StartScriptTests(unittest.TestCase):
         self.assertIn('.venv/Scripts/python.exe', text)
         self.assertIn('MAGIC_VIDEO_DATA_DIR', text)
         self.assertIn('Magic Video', text)
+        self.assertIn('D:\\magicvideo', text)
+        self.assertNotIn('%APPDATA%', text)
         self.assertIn('run.py', text)
         self.assertNotIn('dev.py', text)
 

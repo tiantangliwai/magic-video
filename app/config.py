@@ -1,8 +1,8 @@
 """全局路径与默认配置（不依赖数据库，可安全被任何模块导入）。
 
-源码版：资源与数据都在项目根目录（``data/``）。
-打包版：资源在 PyInstaller 解压目录（只读），数据在用户目录（可写），
-        避免升级/重装时把播放记录写进临时目录后丢失。
+源码版/打包版：资源在源码根 / PyInstaller 解压目录，数据统一放在
+``D:\\magicvideo``（用户指定，避免 C 盘增长、便于备份）。
+``MAGIC_VIDEO_DATA_DIR`` 优先级最高，绿色版 ``portable.txt`` 次之。
 """
 from __future__ import annotations
 
@@ -12,6 +12,10 @@ from pathlib import Path
 
 APP_PACKAGE_DIR = Path(__file__).resolve().parent
 SOURCE_ROOT = APP_PACKAGE_DIR.parent
+
+# 用户指定：播放记录、封面、日志统一放 D 盘，不再写 %APPDATA%。
+# 两种运行形态共用一个默认值，守护进程 / 开机自启（不继承环境变量）才不会写错库。
+DEFAULT_DATA_DIR = Path("D:/magicvideo")
 
 
 def resolve_layout(
@@ -23,30 +27,27 @@ def resolve_layout(
     data_override: str = "",
     portable: bool = False,
     source_root: str | Path | None = None,
+    default_data_dir: str | Path | None = None,
 ) -> tuple[Path, Path]:
     """纯函数：返回 ``(资源根目录, 数据目录)``，方便单元测试直接验证。
 
-    - 源码版：资源根 = 源码根；数据目录默认 ``源码根/data``，
-      也可用 ``MAGIC_VIDEO_DATA_DIR`` 覆盖（本地调试指向真实库副本）。
-    - 打包版：资源根 = ``sys._MEIPASS``；数据目录优先级为
-      ``MAGIC_VIDEO_DATA_DIR`` > 绿色版标记 ``portable.txt``（exe 同级 ``data/``）
-      > ``%APPDATA%/Magic Video``（安装版默认）。
+    数据目录优先级（源码版与打包版一致）：
+    ``MAGIC_VIDEO_DATA_DIR`` > 绿色版 ``portable.txt``（仅打包版）> ``DEFAULT_DATA_DIR``。
+    ``appdata_dir`` 仅为兼容旧调用保留，不再参与默认值计算。
     """
     src = Path(source_root or SOURCE_ROOT)
+    default_dir = Path(default_data_dir or DEFAULT_DATA_DIR)
     if not frozen:
-        data_dir = Path(data_override).expanduser() if data_override else src / "data"
+        data_dir = Path(data_override).expanduser() if data_override else default_dir
         return src, data_dir
 
     bundle = Path(bundle_dir or src)
-    appdata = Path(appdata_dir) if appdata_dir else Path(
-        os.environ.get("APPDATA") or (Path.home() / "AppData" / "Roaming")
-    )
     if data_override:
         data_dir = Path(data_override).expanduser()
     elif portable:
         data_dir = Path(exe_dir or src) / "data"
     else:
-        data_dir = appdata / "Magic Video"
+        data_dir = default_dir
     return bundle, data_dir
 
 
@@ -61,7 +62,6 @@ RESOURCE_DIR, DATA_DIR = resolve_layout(
     frozen=FROZEN,
     bundle_dir=BUNDLE_DIR,
     exe_dir=EXE_DIR,
-    appdata_dir=APPDATA_DIR,
     data_override=DATA_OVERRIDE,
     portable=PORTABLE,
     source_root=SOURCE_ROOT,

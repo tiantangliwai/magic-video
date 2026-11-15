@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Magic Video 一键启动（Git Bash）：在项目根目录执行 ./start
-# 默认连接「真实数据库」= %APPDATA%\Magic Video\library.db（C 盘）。
+# Magic Video 默认连接真实数据库 D:\magicvideo\library.db（与 config.DEFAULT_DATA_DIR 一致）。
 # 可选：./start --local  改用项目内 data/ 的调试库；./start --debug 打开 DevTools。
+# 显式 export 是为了让自动拉起的托盘守护继承同一个数据目录。
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -20,7 +21,7 @@ done
 if [[ "$use_local" == 1 ]]; then
   export MAGIC_VIDEO_DATA_DIR="$(cygpath -w "$(pwd)/data")"
 else
-  export MAGIC_VIDEO_DATA_DIR="$(cygpath -w "${APPDATA:-$(cygpath -u "$USERPROFILE")/AppData/Roaming}/Magic Video")"
+  export MAGIC_VIDEO_DATA_DIR='D:\magicvideo'
 fi
 
 echo "[start] 数据目录 : $MAGIC_VIDEO_DATA_DIR"

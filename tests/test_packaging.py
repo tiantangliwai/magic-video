@@ -27,18 +27,28 @@ class LayoutTests(unittest.TestCase):
     def test_source_layout_uses_repo_root(self):
         resource, data = config.resolve_layout(frozen=False, source_root=self.tmp)
         self.assertEqual(resource, self.tmp)
-        self.assertEqual(data, self.tmp / "data")
+        self.assertEqual(data, config.DEFAULT_DATA_DIR)
 
-    def test_frozen_default_uses_appdata_not_bundle(self):
+    def test_frozen_default_uses_shared_data_dir_not_bundle(self):
         bundle = self.tmp / "bundle"
-        appdata = self.tmp / "appdata"
         resource, data = config.resolve_layout(
             frozen=True, bundle_dir=bundle, exe_dir=self.tmp / "Program Files",
-            appdata_dir=appdata,
+            appdata_dir=self.tmp / "appdata",
         )
         self.assertEqual(resource, bundle)
-        self.assertEqual(data, appdata / "Magic Video")
+        self.assertEqual(data, config.DEFAULT_DATA_DIR)
         self.assertNotEqual(data.parent, bundle)  # 数据绝不写进解压目录
+
+    def test_default_data_dir_can_be_overridden_for_tests(self):
+        custom = self.tmp / "isolated"
+        _, data = config.resolve_layout(frozen=False, source_root=self.tmp,
+                                        default_data_dir=custom)
+        self.assertEqual(data, custom)
+        _, data_frozen = config.resolve_layout(
+            frozen=True, bundle_dir=self.tmp / "bundle", exe_dir=self.tmp,
+            default_data_dir=custom,
+        )
+        self.assertEqual(data_frozen, custom)
 
     def test_frozen_portable_uses_exe_sibling_data(self):
         exe_dir = self.tmp / "portable"
@@ -70,7 +80,7 @@ class LayoutTests(unittest.TestCase):
         self.assertFalse(config.FROZEN)
         self.assertTrue((config.WEB_DIR / "index.html").is_file())
         self.assertTrue(config.BUILTIN_ALIAS_FILE.is_file())
-        self.assertEqual(config.DATA_DIR, config.SOURCE_ROOT / "data")
+        self.assertEqual(config.DATA_DIR, config.DEFAULT_DATA_DIR)
 
 
 class RuntimeCommandTests(unittest.TestCase):

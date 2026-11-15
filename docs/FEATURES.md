@@ -327,7 +327,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 不卡启动 | `Api()` 只做一次 `init_db()` + 内置词典装载；`js_api` 不公开持有 pywebview Window；`create_window` 不传 `background_color`；`webview.start(..., private_mode=True)` |
 | 不弹 COM 报错 | 不在非 UI 线程访问 `window.native` 的 WebView2 控件树；播放器消息用 `SendMessageTimeoutW(SMTO_ABORTIFHUNG, 300ms)` |
 | 只有一个窗口 | `app/single_instance.py::guard()` 用命名互斥锁；第二实例只 `ShowWindow(SW_RESTORE)` + `SetForegroundWindow` 后退出 |
-| 一键启动 | `./start` 从源码启动并连 `%APPDATA%\Magic Video\library.db`（真实库）；`--local` 用调试库；打印数据目录与 `.db` 路径 |
+| 一键启动 | `./start` 从源码启动并连 `D:\magicvideo\library.db`（真实库）；`--local` 用调试库；打印数据目录与 `.db` 路径 |
 
 数据流：`./start` → `run.py` → `main.create_window()` → `single_instance.guard()` → `Api()` → `webview.create_window()` → `webview.start()` →（窗口关闭）`embedded_player.cleanup()`。
 
@@ -422,7 +422,39 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 15. 尚未实现（明确边界，避免误判为缺陷）
+## 15. 界面与数据体验（0.1.4 日常迭代，11 项）
+
+### 需求与验收标准
+
+| # | 验收标准 |
+|---|---|
+| 15-1 | 默认数据目录 `D:\magicvideo`（`config.DEFAULT_DATA_DIR`）；源码版、打包版、守护、开机自启一致；`MAGIC_VIDEO_DATA_DIR` / `portable.txt` 优先级更高 |
+| 15-2 | 旧 `%APPDATA%\Magic Video` 数据用 SQLite `backup()` 一致性快照迁移，旧目录保留可回滚，7 张表行数逐一对齐 |
+| 15-3 | 窗口标题为软件名 `Magic Video`，网页 `document.title` 跟随当前视图；`single_instance.WINDOW_TITLE` 与 `main.create_window` 完全一致 |
+| 15-4 | 媒体库「展示方式」只有「剧集展示（作品 → 季 → 集）」与「平铺列表」；旧的 `folder` 状态归一到 `series`，后端 `library_tree` 的 folder 分支保留 |
+| 15-5 | 看过的列表卡片随窗口高度撑满、表格内部滚动、表头 `position: sticky`；计数移到卡片右上角 badge |
+| 15-6 | 双击作品名/中文名单元格直接编辑，焦点离开整行或 Enter 自动保存；切到另一输入框/点取消不误触发 |
+| 15-7 | 顶栏背景用互斥的 `html[data-theme=light/dark] .topbar` 显式规则，切主题当场重绘，无需点别处 |
+| 15-8 | 关闭 PotPlayer 且窗口句柄消失时，`Watcher._close_session()` 用本次 `max_ms` 兜底写 `watch_progress`，不让断点停在 0；切回软件窗口立即刷新首页/继续观看 |
+| 15-9 | 播放记录与看过的列表是两条独立数据流；「从播放记录同步」按钮幂等回补 `completed=1` 的作品，区间覆盖判重，不改手动导入行 |
+| 15-10 | 「清洗脏数据」按钮幂等修正旧版解析器残留标题、删纯 `- 完` 垃圾行，保留 `raw_text`/季/集/备注与用户手改中文名 |
+| 15-11 | 封面任务状态含 `current`，剧集墙工具栏显示进度条与当前作品名；轮询仍只在任务运行期存在，非常驻定时任务 |
+
+### 数据流
+
+```
+播放 -> watcher -> watch_progress / watch_sessions
+                     └─(点「从播放记录同步」)→ importer.sync_watched_from_progress()
+                                              └→ watched_list(source='playback')
+导入 -> importer.commit(source='manual') ─────→ watched_list(source='manual')
+                     └─(点「清洗脏数据」)→ importer.clean_watched_rows()
+```
+
+对应测试：`tests/test_watched_cleanup.py`（32 个用例：解析防再犯、清洗幂等与用户改名保护、同步回补与区间判重、守护断点兜底、前端静态契约）、`tests/test_packaging.py`、`tests/test_startup.py`。隐藏窗口冒烟实测顶栏浅色 `rgb(255,255,255)` → 深色 `rgb(30,34,43)` 同步切换、表头 sticky、卡片撑满。
+
+---
+
+## 16. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、封面人工确认与多站点兜底。
 - 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。

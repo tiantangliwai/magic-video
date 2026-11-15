@@ -18,7 +18,7 @@ def create_window(debug: bool = False) -> None:
     settings = db.all_settings()
 
     window = webview.create_window(
-        "Magic Video · 播放历史",
+        "Magic Video",
         str(config.WEB_DIR / "index.html"),
         js_api=api,
         width=int(settings.get("window_width", 1180)),

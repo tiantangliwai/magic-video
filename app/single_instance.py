@@ -13,7 +13,7 @@ import sys
 from ctypes import wintypes
 
 MUTEX_NAME = "Local\\MagicVideo_SingleInstance_v1"
-WINDOW_TITLE = "Magic Video · 播放历史"
+WINDOW_TITLE = "Magic Video"  # 必须与 app/main.py::create_window 的窗口标题完全一致
 ERROR_ALREADY_EXISTS = 183
 SW_RESTORE = 9
 SMTO_ABORTIFHUNG = 0x0002

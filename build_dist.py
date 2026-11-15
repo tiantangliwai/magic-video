@@ -7,7 +7,7 @@
 
 产物（dist/ 与 build/ 已在 .gitignore 中，不入库）：
     dist/MagicVideo-<version>-win64-portable.zip   绿色版，数据写在解压目录 data/
-    dist/MagicVideo-<version>-win64.msi           安装版，数据写在 %APPDATA%/Magic Video
+    dist/MagicVideo-<version>-win64.msi           安装版，数据写在 D:\\magicvideo
 """
 from __future__ import annotations
 
@@ -118,8 +118,8 @@ def build_exe() -> Path:
 def make_portable_zip(app_dir: Path) -> Path:
     marker = app_dir / "portable.txt"
     marker.write_text(
-        "绿色版标记：存在本文件时，播放记录写入解压目录下的 data/，不写 %APPDATA%。\n"
-        "删除本文件则改为写入 %APPDATA%/Magic Video。\n",
+        "绿色版标记：存在本文件时，播放记录写入解压目录下的 data/，不写 D:\\magicvideo。\n"
+        "删除本文件则改为写入 D:\\magicvideo。\n",
         encoding="utf-8",
     )
     DIST.mkdir(parents=True, exist_ok=True)
@@ -135,7 +135,7 @@ def make_portable_zip(app_dir: Path) -> Path:
 def make_msi(app_dir: Path) -> Path:
     marker = app_dir / "portable.txt"
     if marker.exists():
-        marker.unlink()  # 安装版不带便携标记，数据写 %APPDATA%
+        marker.unlink()  # 安装版不带便携标记，数据写 D:\magicvideo
     WIX_WORK.mkdir(parents=True, exist_ok=True)
     components = WIX_WORK / "components.wxs"
     run([

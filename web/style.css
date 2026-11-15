@@ -113,6 +113,10 @@ html[data-theme="dark"] .nav-item.active .nav-icon { color: #14171d; }
 .main { flex: 1; min-width: 0; display: flex; flex-direction: column; position: relative; }
 .topbar { height: 74px; flex: none; background: var(--surface); border-bottom: 1px solid var(--border);
   display: flex; align-items: center; justify-content: space-between; padding: 0 26px; }
+/* WebView2 对「:root 变量变化 + 祖先容器 background 简写」paint 失效不彻底：
+   互斥的显式规则让每次切主题都发生选择器命中变化，顶栏当场重绘，不用再点别处。 */
+html[data-theme="light"] .topbar { background: #ffffff; border-bottom-color: #e5e8ef; }
+html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #333a47; }
 .topbar-title h2 { margin: 0; font-size: 17px; font-weight: 600; }
 .topbar-title p { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
 .topbar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
@@ -200,6 +204,19 @@ th, td { text-align: left; padding: 9px 10px; border-bottom: 1px solid var(--bor
 th { color: var(--muted); font-weight: 500; background: var(--surface-2); }
 td { color: var(--text); }
 .table-wrap { border: 1px solid var(--border); border-radius: 8px; overflow: auto; max-height: 340px; }
+/* 看过的列表：卡片吃满可用高度，表格内部滚动、表头固定；其它视图仍是整页滚动。
+   只作用于 .watched-card，不污染被多个视图复用的 .card / .table-wrap。 */
+.content.content-fill { overflow: hidden; display: flex; flex-direction: column; padding-bottom: 22px; }
+.watched-card { display: flex; flex-direction: column; }
+.content-fill > .watched-card { flex: 1 1 auto; min-height: 0; margin-bottom: 0; }
+.content-fill > .watched-card > :not(.table-wrap) { flex: none; }
+.watched-card > .table-wrap { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+/* border-collapse: collapse 时 th 的 border-bottom 不跟随 sticky，用 box-shadow 补线；
+   z-index 保证表头盖住带背景的分组行。 */
+.table-wrap thead th { position: sticky; top: 0; z-index: 2;
+  background: var(--surface-2); box-shadow: inset 0 -1px 0 var(--border); }
+td[data-edit-watched] { cursor: text; }
+td[data-edit-watched]:hover { background: var(--primary-soft); }
 .switch-row { display: flex; align-items: center; justify-content: space-between; padding: 11px 0;
   border-bottom: 1px solid var(--border); }
 .switch-row:last-child { border-bottom: 0; }

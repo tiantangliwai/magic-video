@@ -18,6 +18,7 @@
 | 中文名补全不要每天定时，只在导入时自动完成 | ✅ 已按此重构 | v0.1.1 删除定时任务与待补全队列，改为动作内同步匹配 |
 | 结合本地 Obsidian，自动记录开发流程与结果，方便后续优化补齐 | ✅ 已完成 | v0.1.3 同步 6 类笔记 + 按天日志到 vault 独立目录，保留手写批注 |
 | 扫描出的文件要有完整列表，能搜索、能直接点击播放 | ✅ 已完成 | v0.1.4「扫描结果 / 媒体库」共用全量列表，可一次显示全部、按目录/匹配状态筛选、点击文件名播放 |
+| 继续观看/看过的列表/主题/数据目录等体验打磨（11 项） | ✅ 已完成 | 0.1.4 日常迭代：数据目录迁到 `D:\magicvideo`、看过的列表脏数据清洗与「从播放记录同步」、双击即改并失焦保存、列表撑满与表头固定、顶栏主题即时切换、封面进度条、剧集展示、窗口标题与切回窗口即时刷新 |
 | 媒体库不要平铺全部视频，要按第一季/第二季、每部作品的十几集做树状展示 | ✅ 已完成 | 媒体库默认「作品 → 季 → 集」，可切换「目录树」或「平铺列表」；节点按需展开、显示已看/在看数量并支持一键续播 |
 | 启动不要卡、任务栏重复点击不要开出多个窗口 | ✅ 已完成 | 单实例互斥 + 已有窗口置前、主线程精简初始化、`SendMessageTimeout` 防界面被播放器挂住 |
 | 剧集展示参考 SeedHub / AGE动漫，最好有对应动漫图片 | ✅ 已完成 | 「剧集墙」卡片墙 + 一次性后台封面抓取（AGE动漫为主、SeedHub 为备），封面只落在软件自己的数据目录 |
@@ -54,19 +55,20 @@ python -m venv .venv
 | 产物 | 位置 | 播放记录存哪 |
 |---|---|---|
 | 绿色版 ZIP | `dist/MagicVideo-<版本>-win64-portable.zip` | 解压目录内 `Magic Video/data/`（靠 `portable.txt` 标记） |
-| MSI 安装版 | `dist/MagicVideo-<版本>-win64.msi` | `%APPDATA%\Magic Video` |
+| MSI 安装版 | `dist/MagicVideo-<版本>-win64.msi` | `D:\magicvideo`（默认，可用 `MAGIC_VIDEO_DATA_DIR` 覆盖） |
 
 - 绿色版解压即用；删掉 `portable.txt` 就切换到「安装版」的数据位置。MSI 为 **perUser 安装**（`%LOCALAPPDATA%\Programs\Magic Video`），双击即可安装、不需要管理员，带开始菜单快捷方式与卸载入口。
 - 两种形态都只有 `Magic Video.exe` 一个可执行文件：主窗口、托盘守护（`--daemon`）、构建自检（`--selftest`）复用它；开机自启和托盘菜单会自动选择源码版或打包版的启动命令。
 - **资源与数据分离**：网页、内置词典、文档随程序分发（只读），数据库单独放用户可写目录，升级或重装不会丢播放记录。可用环境变量 `MAGIC_VIDEO_DATA_DIR` 显式指定数据目录。
 - 首次构建需联网下载 WiX 3.14 工具包（约 40 MB，落在 `build/tools/`），`build/` 与 `dist/` 均不入库。
-- **升级安装**：直接双击新版 MSI 即可自动替换旧版；数据库在 `%APPDATA%\Magic Video`（不在安装目录），播放记录完整保留。新版已关闭 WebView2 持久缓存并给 `app.js` 加版本串，避免升级后仍显示旧界面。
+- **升级安装**：直接双击新版 MSI 即可自动替换旧版；数据库在 `D:\magicvideo`（不在安装目录），播放记录完整保留。新版已关闭 WebView2 持久缓存并给 `app.js` 加版本串，避免升级后仍显示旧界面。
+- **数据目录默认值**：源码版与打包版统一为 `D:\magicvideo`（`app/config.py::DEFAULT_DATA_DIR`），守护进程与开机自启也走同一默认值；`./start` 会显式 export 同一路径以便守护继承。旧 `%APPDATA%\Magic Video` 目录保留未删除，可随时回滚。
 
 ### 启动
 
 | 操作 | 效果 |
 |---|---|
-| **`./start`（Git Bash，项目根目录）** | **推荐**：一键从源码打开主窗口，直接连**真实数据库**（C 盘 `%APPDATA%\Magic Video\library.db`） |
+| **`./start`（Git Bash，项目根目录）** | **推荐**：一键从源码打开主窗口，直接连**真实数据库**（`D:\magicvideo\library.db`） |
 | `./start --local` | 改用项目内 `data/library.db` 的调试库，不碰真实记录 |
 | `./start --debug` | 附带打开 DevTools |
 | 双击 `dev.bat` | 调试入口：默认复制真实库成 `data/dev/library.db` 安全副本后启动；`dev.bat --real` 直接连真实库 |
@@ -77,8 +79,9 @@ python -m venv .venv
 
 > **两个开关不一样**：`daemon_auto_start` 管「每次打开本软件时拉起守护」（默认开），`autostart` 管「登录 Windows 时自启」（默认关），`recording_enabled` 管「守护是否写历史」。三者互不覆盖。
 
-> **数据库在哪**：`./start` / `start.bat --real` / 绿色版（无 `portable.txt`）用的是
-> `%APPDATA%\Magic Video\library.db`（C 盘）。`./start` 启动时会把数据目录和 `.db` 完整路径打印出来。
+> **数据库在哪**：`./start` / `start.bat` / 安装版默认用的是
+> `D:\magicvideo\library.db`（D 盘，用户指定）。`./start` 启动时会把数据目录和 `.db` 完整路径打印出来。
+> 绿色版若带 `portable.txt` 仍写解压目录下的 `data/`。
 > 只有 `./start --local`、`dev.bat` 默认模式、`data/dev/` 才是调试副本；调试副本里导入/播放不会写进真实记录。
 > 封面在 `<数据目录>\covers\`，日志在 `<数据目录>\logs\`，全部**只在本机**。
 > 重复点任务栏图标不会再开第二个窗口：互斥锁检测到已有实例后只把旧窗口置前。
@@ -201,7 +204,9 @@ python -m venv .venv
 
 ## 4. 数据存储
 
-单文件 SQLite（WAL 模式），8 张表。**源码版调试默认 `data/library.db`；`./start` 与安装版实际用的是 `%APPDATA%\Magic Video\library.db`（C 盘），封面在同级 `covers\`，日志在 `logs\`。** 可用 `MAGIC_VIDEO_DATA_DIR` 覆盖。
+单文件 SQLite（WAL 模式），8 张表。**默认数据目录统一为 `D:\magicvideo`（`library.db` 在根下，封面在 `covers\`，日志在 `logs\`）**；只有 `./start --local` 用项目内 `data/library.db`、`dev.bat` 默认用 `data/dev/library.db` 安全副本。可用 `MAGIC_VIDEO_DATA_DIR` 覆盖。
+
+> **两条独立的数据流**：`watch_progress` / `watch_sessions` 由托盘守护自动累积；`watched_list` 是你手动导入的清单快照，二者没有外键关联。想让已看完的播放记录出现在「看过的列表」，点该页的「从播放记录同步」按钮（幂等、只补 `completed=1`、不改写手动导入的行）。旧版解析器残留的脏标题（如《…》（ 年， ）。- 完）用同页「清洗脏数据」按钮一键修正。
 
 | 表 | 用途 |
 |---|---|
@@ -262,7 +267,7 @@ v0.1.3 起，软件可以把**开发流程、自测结果、优化路线图、�
 python run_tests.py
 ```
 
-- **338 个单元测试**，覆盖数据层与迁移、文件名解析、清单导入（含真实清单）、中文匹配、PotPlayer 桥接与子窗口 HWND 回查、守护会话与**后台记录默认自动启动 / 停止 / 前端契约**、js_api、全量文件浏览与树状分组、单实例与启动链路、黑白主题、Everything 降级、封面解析/缓存/一次性任务、Win32 内嵌播放与降级、Obsidian 同步安全边界、端到端串联、文档版本一致性。
+- **371 个单元测试**，覆盖数据层与迁移、文件名解析、清单导入（含真实清单）、中文匹配、PotPlayer 桥接与子窗口 HWND 回查、守护会话（含关闭播放器断点兜底）与**后台记录默认自动启动 / 停止 / 前端契约**、js_api、全量文件浏览与剧集分组、单实例与启动链路、黑白主题（含顶栏即时重绘）、Everything 降级、封面解析/缓存/一次性任务与进度状态、Win32 内嵌播放与降级、Obsidian 同步安全边界、**看过的列表脏数据清洗 / 播放记录同步 / 默认数据目录 / 前端交互契约**、端到端串联、文档版本一致性。
 - 全部用例在**临时目录的独立 SQLite** 中运行，并屏蔽真实网络请求，**绝不读写你的真实播放记录**。
 - 版本一致性由 `tests/test_docs.py` 守护：代码版本、README、AGENTS、CHANGELOG 任一漂移，测试立即失败。
 - 详细自测结果见 `docs/TESTING.md`。

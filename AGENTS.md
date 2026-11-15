@@ -39,6 +39,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 19 | 一键 `./start` 直接连**真实数据库**；要能明确告知 `.db` 位置与 C 盘工作数据 | 用户要求（0.1.4 日常迭代） |
 | 20 | 用户给的真实「看过的列表」（含 `S1/S2`、`（完）`、剧场版、番号等噪声）必须能正确解析入库 | 用户要求（0.1.4 日常迭代） |
 | 21 | **后台记录默认自动启动**，不要再在左下角/总览让用户点「启动」，但可以在设置里关闭；左下角只留状态指示 | 用户明确要求（0.1.4 日常迭代） |
+| 22 | 界面与数据体验 11 项：默认数据目录迁到 `D:\magicvideo`、窗口标题改软件名、媒体库树状改「剧集展示」、双击输入框即改并失焦自动保存、看过的列表脏数据清洗 + 从播放记录同步、列表撑满与表头固定、计数移到卡片右上角、顶栏主题即时切换、封面进度可见、切回窗口即时刷新、关闭播放器断点兜底 | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -68,7 +69,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - **双进程模型**：主窗口只读为主，托盘守护负责轮询写入；两者不共享内存状态，只通过数据库通信。
 - **不修改用户文件**：扫描、解析、刮削一律只读视频文件，绝不重命名、移动、删除或写入同目录 `.nfo`。
 - **数据本地优先**：`data/` 不入库；元数据结果落库，不写回视频目录。
-- **打包版资源/数据分离**：源码版资源与数据都在项目根；打包版资源取 `sys._MEIPASS`（只读），数据默认 `%APPDATA%\Magic Video`，绿色版由 exe 同级 `portable.txt` 改为同级 `data/`，可用 `MAGIC_VIDEO_DATA_DIR` 覆盖。**禁止把数据库写进临时解压目录**。`config.resolve_layout()` 是路径唯一真源，`app/runtime.py` 负责两种形态的启动命令。
+- **资源/数据分离**：源码版与打包版数据目录**统一默认 `D:\magicvideo`**（用户指定，`config.DEFAULT_DATA_DIR`）；打包版资源取 `sys._MEIPASS`（只读），绿色版由 exe 同级 `portable.txt` 改为同级 `data/`，`MAGIC_VIDEO_DATA_DIR` 优先级最高。守护/开机自启不继承环境变量，所以必须改默认值而非只靠 `start` 脚本 export。**禁止把数据库写进临时解压目录**。`config.resolve_layout()` 是路径唯一真源，`app/runtime.py` 负责两种形态的启动命令。
 - **前端无框架**：原生 HTML/CSS/JS，通过 `window.pywebview.api.*` 调后端；新增后端方法需同步加前端 `call(...)`。
 - **pywebview Window 必须私有**：`Api._window` 下划线开头，绝不改成公开属性，也不要在非 UI 线程访问 `window.native`（会遍历 .NET 控件树并抛 `E_NOINTERFACE`，同时拖慢启动）。要拿主窗口 HWND 用 `app/embedded_player.py::find_main_window()` 的 PID + 标题枚举。
 - **内嵌播放的跨进程契约**：PotPlayer 变成子窗口后 `FindWindowW` 找不到它，必须把 HWND 写进 `settings.embed_hwnd`，`potplayer.find_window()` 从那里回查；主窗口关闭前必须 `detach()` 还原，否则会留下孤儿子窗口。
@@ -150,7 +151,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 自测与测试报告 | `docs/TESTING.md` | 命令 + 实测结果 + 覆盖矩阵 | ✅ |
 | Obsidian 集成契约 | `docs/OBSIDIAN.md` | 笔记结构 + 安全边界 + 同步入口 | ✅ |
 | 单元测试 | `tests/test_*.py` | `unittest`，继承 `tests.base.IsolatedDbTestCase` | ✅ |
-| 测试入口 | `run_tests.py` | 零第三方依赖；写 `data/test_last.json` | ✅ |
+| 测试入口 | `run_tests.py` | 零第三方依赖；写 `<默认数据目录>/test_last.json`（现为 `D:\magicvideo\test_last.json`） | ✅ |
 | 内置离线词典 | `app/data/aliases_builtin.json` | `{"items":[{"cn","orig","aliases","bgm","season"}]}` | ✅ |
 | 构建脚本 | `build_dist.py` | 一键生成 PyInstaller onedir + 绿色 ZIP + WiX MSI | ✅ |
 | MSI 安装包定义 | `installer/product.wxs` | WiX v3，版本由 candle `-dProductVersion` 注入 | ✅ |
@@ -179,6 +180,8 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。
 - 启动 / 单实例改动：`tests/test_startup.py` 必须覆盖互斥锁、已有窗口置前、js_api 反射安全与 `./start` 脚本；主题改动必须同时跑 `tests/test_theme.py` 与 `tests/test_theme_native.py`（DWM 原生标题栏、降级路径、CSS `color-scheme` 契约）。
+- 默认数据目录改动：`tests/test_packaging.py` 的布局断言与 `tests/test_startup.py` 的 `start` 脚本契约必须同步；**改真实库前先用 `sqlite3.backup()` 做一致性快照、旧目录保留不删除**。
+- 看过的列表解析 / 清洗 / 同步改动：`tests/test_watched_cleanup.py` 必须覆盖解析防再犯、清洗幂等与 `match_by='user'` 保护、区间覆盖判重、守护断点兜底与前端静态契约；清洗函数**只改 `title/title_cn/match_by`**，保留 `raw_text`、季、集、备注。
 - 守护自动启动改动：`tests/test_daemon_autostart.py` 必须覆盖默认值、自动拉起 / 已运行不重复 / 关闭不启动、`stop_daemon()`、设置保存的即时生效、源码版与打包版进程识别、前端不再有 `start-daemon` 按钮；**禁止在 `Api.__init__` 拉起进程**，所有 `subprocess.Popen` / `psutil.process_iter` / `proc.terminate()` 一律 mock，绝不真的启停本机托盘守护。
 - 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务。
 - 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
@@ -209,7 +212,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | `app/*.py` / `run.py` / SQL | 关掉窗口，重跑 `dev.bat`（Python 不热重载） |
 | 看报错、调样式 | `--debug` 默认打开 DevTools（`F12` / 右键检查） |
 
-- `dev.bat` 默认调 `dev.py` 把 `%APPDATA%\Magic Video\library.db` 复制成 `data/dev/library.db` **安全副本**：能看到全部 2104 条扫描结果，调试期间的播放/导入/扫描不会写进真实记录。
+- `dev.bat` 默认调 `dev.py` 把 `D:\magicvideo\library.db` 复制成 `data/dev/library.db` **安全副本**：能看到全部 2105 条扫描结果，调试期间的播放/导入/扫描不会写进真实记录。
 - 参数：`dev.bat --real` 直接连真实库（调试写入会进真实历史）；`dev.bat --nodevtools` 不弹 DevTools；两者可组合。
 - **必须用 `.venv`**：系统 Python 缺 `psutil` / `pywebview` 等依赖。
 - **别用已安装的 exe 验证源码改动**：exe 内的前端在 `_internal`，与源码无关，只有显式发版重新构建才会更新。
@@ -241,7 +244,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 原生标题栏 | 由 DWM 绘制、CSS 管不到；`app/theme_native.py::apply()` 用 `DWMWA_USE_IMMERSIVE_DARK_MODE=20`（旧系统回退 19）同步，实测可设可读回 `dark=1`；`DWMWA_CAPTION_COLOR=35` 本机返回失败，静默忽略即可 |
 | Everything | `D:\tool\Everything\Everything.exe` 存在，**没有 `es.exe`**；全盘检索需用户自行补 `es.exe` 或启用 HTTP 服务 |
 | 封面源 | AGE动漫 `www.agedm.io/search?query=` 中文名命中稳定；SeedHub `seeduck.cc` 搜索被 Cloudflare 拦，首页/分类页可按 title 配对；本机 Python 需 `verify=False` |
-| 数据目录 | `./start` / 安装版 = `%APPDATA%\Magic Video`（C 盘，真实库）；`data/dev` 是 `dev.bat` 的安全副本，别把封面/记录只写进副本 |
+| 数据目录 | `./start` / 安装版 / 守护 / 开机自启 = `D:\magicvideo`（D 盘，真实库，2026-11-15 由 `%APPDATA%\Magic Video` 迁移，旧目录保留）；`data/dev` 是 `dev.bat` 的安全副本，别把封面/记录只写进副本 |
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
 | git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.4` |
 | 打包工具链 | `.venv`（PyInstaller 6.22 / pywebview 6.2 / pythonnet 3.2）、WiX 3.14.1 在 `build/tools/wix/tools`（NuGet 镜像下载）；GitHub Release 直连 SSL 握手失败，改用 NuGet 镜像 |

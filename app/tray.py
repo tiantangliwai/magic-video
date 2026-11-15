@@ -66,5 +66,5 @@ class Tray:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("退出", self._quit),
         )
-        self.icon = pystray.Icon("MagicVideo", make_icon(), "Magic Video · 播放历史", menu)
+        self.icon = pystray.Icon("MagicVideo", make_icon(), "Magic Video", menu)
         self.icon.run()

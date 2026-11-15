@@ -6,7 +6,7 @@ setlocal
 rem Local debug launcher: run from SOURCE, never from the installed exe.
 rem Usage: dev.bat [--real] [--nodevtools]
 rem   default      -> safe copy of the real database, DevTools enabled
-rem   --real       -> use %APPDATA%\Magic Video directly (writes real history)
+rem   --real       -> use D:\magicvideo directly (writes real history)
 rem   --nodevtools -> do not open the DevTools window
 
 set "PY=.venv\Scripts\python.exe"
@@ -26,8 +26,8 @@ if /I "%~1"=="--nodevtools" set "DEBUG_FLAG="
 if /I "%~2"=="--nodevtools" set "DEBUG_FLAG="
 
 if "%USE_REAL%"=="1" (
-  set "MAGIC_VIDEO_DATA_DIR=%APPDATA%\Magic Video"
-  echo [dev] DATA = real db: %APPDATA%\Magic Video\library.db
+  set "MAGIC_VIDEO_DATA_DIR=D:\magicvideo"
+  echo [dev] DATA = real db: D:\magicvideo\library.db
   echo [dev] WARNING: debug actions WILL write into your real watch history
 ) else (
   "%PY%" dev.py

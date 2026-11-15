@@ -235,6 +235,15 @@ class Api:
         db.execute("DELETE FROM watched_list WHERE id = ?", (int(item_id),))
         return {"ok": True}
 
+    def clean_watched_list(self, dry_run: bool = False) -> dict:
+        """手动清洗旧版解析器留下的脏标题；dry_run=True 只预览不写库。"""
+        flag = dry_run in (True, 1, "1", "true", "on")
+        return importer.clean_watched_rows(dry_run=flag)
+
+    def sync_watched_from_history(self) -> dict:
+        """手动把「已看完」的播放记录回补进看过的列表；幂等，非定时任务。"""
+        return importer.sync_watched_from_progress()
+
     def get_media_files(self, keyword: str = "", limit: int = 300) -> list[dict]:
         like = f"%{keyword.strip()}%"
         return db.rows(
