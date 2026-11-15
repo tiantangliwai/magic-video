@@ -79,6 +79,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 48 | 新增**网页搜索**视图：集成 `agedm.io` 与 `seeduck.cc` 的搜索，把两站结果渲染成本地卡片并**标明来源**；不做内嵌浏览器，点开走系统默认浏览器（`open_url` 只放行 `http/https`） | 用户明确要求（0.1.4 日常迭代） |
 | 49 | 从剧集墙（以及追剧 / 看过的列表）跳进媒体库后，媒体库顶部要有**返回入口**，点了回到来源页，不用重新跳一遍；直接点左侧导航进媒体库**不显示**返回 | 用户明确要求（0.1.4 日常迭代，2026-11-15「从剧情集跳转到媒体库里后需要一个返回按钮」） |
 | 50 | 剧集墙每张卡片要有**是否看过**的标记：本地全部集看完 = `已看完`、看过一部分 = `已看 3/12`、看了一半 = `在看`、只在「看过的列表」里 = `看过`、都没有 = `未看`。两路数据合并判定（`watch_progress` 精确到集 + `watched_list` 作品级），状态由后端算好后端字符串下发，前端只渲染 | 用户明确要求（0.1.4 日常迭代，2026-11-15「剧集墙中增加是否已经看过的标记」） |
+| 51 | 安装包必须让**选定的安装路径真的生效**，并且**升级时自动读回上次的路径**：向导里选 `D:\...` 就装到那里；已经装过的，下次升级默认装回同一位置，不用每次重选 | 用户明确要求（2026-11-15「已经安装要进行版本更新时需要自动读到历史安装路径进行相关更新，而且我重新选择了路径为什么还是会安装到了c盘」） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -273,6 +274,12 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 播放控制改动：`tests/test_player_controls.py` 必须覆盖按键消息码（WM_KEYDOWN/WM_KEYUP 与 VK）、无窗口 / 非 Windows / PostMessage 失败降级、键位白名单与非法值回退、倍速步进的精确与不精确分支、上下相邻集排序与边界、设置页保存白名单、前端三文件静态契约。**所有 Win32 调用一律 mock，绝不启动真实播放器**；控制条必须放在 `#playerHost` 之外的 HTML 层，否则会被原生子窗口盖住。
   - **播放类动作必须走 PotPlayer 官方指令通道**：`potplayer.control()` 优先 `WM_COMMAND`（`play_pause=10014 / play=20001 / pause=20000 / stop=20002 / prev=10123 / next=10124`），再用 `POT_SET_PLAY_STATUS(0x5007)` 兜底，最后才投按键；三条通道**必须按需逐条发送并复查 `POT_GET_PLAY_STATUS(0x5006)`**。**禁止同时发**（一次点击会被连切三次，画面看着毫无变化）。用例必须覆盖「指令生效即返回」「状态没变继续换下一条」「三条全失败要报错」。
   - 倍速 / 全屏这类没有菜单命令号的动作走 `POT_SEND_VIRTUAL_KEY(0x5010)`（wParam=命令码、lParam=VK，不需要窗口焦点），被拒再投 `WM_KEYDOWN/WM_KEYUP`；返回里必须带 `via` 说明走了哪条通道。
+- 安装包定义改动（`installer/product.wxs` / `build_dist.py`）：`tests/test_packaging.py::InstallerDefinitionTests` 必须覆盖以下五条，任何一条不满足都算缺陷：
+  - **安装目录的 Directory Id 必须全大写**（`APPFOLDER`）。MSI 规定只有全大写属性才是 public property，值才能从 UI 序列传到执行序列；写成 `AppInstallFolder` 这类含小写的 Id，向导里选的路径会被静默丢弃、仍旧装到默认目录（0.1.4 用户原话「重新选择了路径为什么还是会安装到了c盘」就是这个）。
+  - 目录属性要标 `Secure="yes"`（本机安装实测提权运行 `Privileged=1`，只有 `SecureCustomProperties` 里的属性会跨序列传递；**不能手写 `SecureCustomProperties` 属性**，WiX 会报 CNDL0070）。
+  - `WIXUI_INSTALLDIR`、`heat -dr`、快捷方式 `Target`/`WorkingDirectory` 三处必须指向同一个 Id。
+  - 升级记忆：安装时写 `HKCU\Software\Magic Video\InstallPath`，升级时用 `RegistrySearch` 读回；`ARPINSTALLLOCATION` 用 Type 51（`After="CostFinalize"`）赋值，**属性表不做格式化，直接写 `[APPFOLDER]` 会存成字面量**。
+  - 端到端验证用 `installer/verify_install_flow.py`：它构建独立 `UpgradeCode`/组件 GUID 的测试包，真装真卸（指定路径 → 记住路径 → 不传路径升级仍在原位置 → 卸载无残留）。**禁止拿真实 MSI 反复静默装卸**，那会把用户实际安装升级/删除。
 
 - 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务；改 `app/textmatch.py` 或 `app/covers.py` 还要连带跑 `tests/test_watchlist.py`（关键词变体、两源共享索引、代理断连重试、非 200 换源）与 `tests/test_manual_cover.py`。站点搜索**不能只试完整长标题**。
   - **三条硬约束**：① AGE 候选**只取 `data-original`**（可从百度代理 `src=` 解出原始 CDN），`src` 是所有结果共用的占位图，绝不能进候选；② `_blocks()` 必须以字符串末尾兜底，不能丢最后一块（精确匹配常是最后一块）；③ 匹配按 `exact_pick()` 精确/去季精确 → `strict_pick()`（0.90 + 差值只能是季/续作后缀），**禁止退回 0.62 模糊凑数**，宁可返回未找到也不拿别的作品的图。Seeduck 优先用 `/s/<kw>/` 搜索页 `<h2>` 短标题，不用固定首页池凑数。
@@ -373,6 +380,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
 | git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.5` |
 | 打包工具链 | `.venv`（PyInstaller 6.22 / pywebview 6.2 / pythonnet 3.2）、WiX 3.14.1 在 `build/tools/wix/tools`（NuGet 镜像下载）；GitHub Release 直连 SSL 握手失败，改用 NuGet 镜像。**打包前必须先把 `build/pyi-dist/Magic Video` 改成 `Magic Video.prev`**：`COLLECT` 会先删旧目录，该操作被安全删除策略拦下（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`）导致构建失败 |
+| MSI 安装上下文 | 本机即使 `InstallScope="perUser"` 也会以提权方式执行（日志 `MsiRunningElevated=1`、`Privileged=1`），ARP 注册落在 `HKLM\Software\WOW6432Node\...\Uninstall`。因此：① 向导里的公共属性必须 `Secure="yes"` 才会传到执行序列；② 新旧包作用域一致，`MajorUpgrade` 能正常发现并卸载旧版 |
 | Obsidian | `%APPDATA%\obsidian\obsidian.json` 注册 2 个 vault；主库 `C:\Users\Administrator\Documents\Obsidian Vault`，另一个是装修项目专用库（不写） |
 | 同步产物 | `data/test_last.json`（测试结果）、`data/obsidian_history.json`（结果时间线）；均在 `.gitignore` 内 |
 

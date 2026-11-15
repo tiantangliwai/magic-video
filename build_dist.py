@@ -140,7 +140,7 @@ def make_msi(app_dir: Path) -> Path:
     components = WIX_WORK / "components.wxs"
     run([
         str(WIX_TOOLS / "heat.exe"), "dir", str(app_dir),
-        "-cg", "AppFiles", "-dr", "AppInstallFolder",
+        "-cg", "AppFiles", "-dr", "APPFOLDER",
         "-srd", "-sreg", "-ag", "-var", "var.SourceDir", "-nologo",
         "-out", str(components),
     ], timeout=600)

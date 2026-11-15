@@ -910,7 +910,27 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 25. 尚未实现（明确边界，避免误判为缺陷）
+## 25. 安装包：路径选择、记忆与升级（2026-11-15 修复）
+
+用户反馈两件事：一是「已经装过了，升级时应该自动读回上次的安装路径」，二是「重新选了路径为什么还是装到 C 盘」。两者都出在 `installer/product.wxs`。
+
+| # | 验收标准 |
+|---|---|
+| 25-1 | **安装目录属性必须全大写**。MSI 规定只有全大写属性才是 public property，值才能在 UI 序列 → 执行序列之间传递。原来写成 `AppInstallFolder`（含小写）会退化成私有属性，向导里改的路径在切到执行序列时被丢弃，最终仍按 `Directory` 表的默认值安装 —— 这就是「选了 D 盘还是装 C 盘」的根因。现统一为 `APPFOLDER` |
+| 25-2 | 目录属性必须标 `Secure="yes"`。本机实测安装以提权方式运行（`Privileged=1`），此时只有 `SecureCustomProperties` 里的公共属性会传给执行序列；实测构建产物里 `SecureCustomProperties = APPFOLDER;WIX_DOWNGRADE_DETECTED;WIX_UPGRADE_DETECTED` |
+| 25-3 | 三处引用必须指向同一个 Id：`WIXUI_INSTALLDIR`（向导绑定）、`build_dist.py` 的 `heat -dr`（组件归属）、快捷方式 `Target="[APPFOLDER]Magic Video.exe"` 与 `WorkingDirectory` |
+| 25-4 | **升级继承上次路径**：组件安装时把实际路径写进 `HKCU\Software\Magic Video\InstallPath`，下一版由 `AppSearch` 的 `RegistrySearch` 在 `CostFinalize` 之前填回 `APPFOLDER`；用户在向导里重新选则覆盖它 |
+| 25-5 | 「应用和功能」的安装位置不再空白：`ARPINSTALLLOCATION` 用 Type 51 自定义动作（`After="CostFinalize"`）赋值 —— 属性表本身不做格式化，直接写 `[APPFOLDER]` 会存成字面量（WiX 也会报 CNDL1077） |
+| 25-6 | 0.1.4 及更早版本没写过 `InstallPath`，所以**从旧版升级的第一次**仍会落回默认目录，从这一版起才开始记住；默认目录仍是 `%LOCALAPPDATA%\Programs\Magic Video`，因此旧版升级不会意外换位置 |
+| 25-7 | 升级语义不变：`MajorUpgrade` 先卸载旧版再装新版，数据库在 `D://magicvideo`、不在安装目录，播放记录与封面不受影响 |
+
+**验证方式（真装真卸，不靠推断）**：`installer/verify_install_flow.py` 把 `product.wxs` 复制一份、替换成测试专用 `UpgradeCode` / 组件 GUID / 注册表键，构建 0.1.5 与 0.1.6 两个测试包：先指定 `APPFOLDER=<临时目录>\CustomPath` 静默安装并确认文件真的落在那里，再确认 `HKCU\...\InstallPath` 记住了它，然后**不传路径**升级到 0.1.6 并确认仍装在原位置，最后卸载并断言注册表值与快捷方式已清理。全程不碰真实安装。
+
+对应测试：`tests/test_packaging.py::InstallerDefinitionTests`（7 个用例：目录 Id 全大写、向导绑定一致、`heat -dr` 一致、快捷方式指向一致、`Secure="yes"`、`InstallPath` 写入与回读、`ARPINSTALLLOCATION` 走自定义动作）。
+
+---
+
+## 26. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、多站点封面兜底自动投票（人工确认已实现，见 §22-B）。
 - 随包捆绑完整版 `Everything.exe` + `es.exe`（合法但属打包/授权层改动，需单独确认）；把开源全盘索引内核编译进本软件。

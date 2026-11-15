@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -172,6 +173,79 @@ class FrozenIntegrationTests(unittest.TestCase):
                 mock.patch.object(run, "create_window") as window_mock:
             run.main()
         window_mock.assert_called_once_with(debug=False)
+
+
+class InstallerDefinitionTests(unittest.TestCase):
+    """安装包定义（installer/product.wxs）的硬约束。
+
+    背景：v0.1.5 用户反馈「重新选了安装路径，还是装到 C 盘」。根因是安装目录的
+    Directory Id 写成了 `AppInstallFolder`（含小写）——MSI 规定只有**全大写**的属性
+    才是 public property，值才能在 UI 序列 → execute 序列之间传递。小写属性的中文名
+    只在 UI 序列里生效，execute 序列读不到，最终仍按默认路径安装。
+
+    这些断言把「属性必须全大写、向导绑定与 heat 引用必须指向同一个 Id、升级要记住
+    上次路径」固定下来，避免以后改安装包时重犯。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        root = Path(__file__).resolve().parent.parent
+        cls.wxs = (root / "installer" / "product.wxs").read_text(encoding="utf-8")
+        cls.build = (root / "build_dist.py").read_text(encoding="utf-8")
+
+    def _install_dir_id(self) -> str:
+        found = re.findall(r'<Directory Id="([^"]+)" Name="Magic Video" />', self.wxs)
+        found = [i for i in found if i.isupper()]
+        self.assertTrue(found, "找不到安装目录的 Directory 节点")
+        return found[0]
+
+    def test_install_directory_property_is_all_uppercase(self):
+        """目录 Id 必须全大写，否则它在 MSI 里是私有属性，向导选的路径传不过去。"""
+        ids = re.findall(r'<Directory Id="([^"]*)" Name="(?:Programs|Magic Video)"', self.wxs)
+        self.assertTrue(ids)
+        for directory_id in ids:
+            self.assertRegex(directory_id, r"^[A-Z][A-Z0-9_]*$",
+                             f"目录属性 {directory_id} 含小写，会退化成私有属性")
+        self.assertNotIn('Id="AppInstallFolder"', self.wxs)
+
+    def test_wizard_binds_to_the_same_directory(self):
+        directory_id = self._install_dir_id()
+        match = re.search(r'<Property Id="WIXUI_INSTALLDIR" Value="([^"]+)"', self.wxs)
+        self.assertIsNotNone(match, "缺少 WIXUI_INSTALLDIR，向导不会显示目录选择页")
+        self.assertEqual(match.group(1), directory_id)
+
+    def test_heat_references_the_same_directory(self):
+        directory_id = self._install_dir_id()
+        match = re.search(r'"-dr",\s*"([^"]+)"', self.build)
+        self.assertIsNotNone(match, "build_dist.py 里找不到 heat 的 -dr 参数")
+        self.assertEqual(match.group(1), directory_id)
+
+    def test_shortcut_points_at_the_same_directory(self):
+        directory_id = self._install_dir_id()
+        self.assertIn(f'Target="[{directory_id}]Magic Video.exe"', self.wxs)
+        self.assertIn(f'WorkingDirectory="{directory_id}"', self.wxs)
+
+    def test_upgrade_remembers_previous_install_path(self):
+        """安装时写 HKCU InstallPath，升级时由 AppSearch 读回来，避免每次都回默认路径。"""
+        self.assertIn("<MajorUpgrade", self.wxs)
+        self.assertRegex(self.wxs, r'<RegistrySearch[^>]*Root="HKCU"[^>]*Name="InstallPath"')
+        self.assertRegex(self.wxs, r'<RegistryValue[^>]*Name="InstallPath"[^>]*Value="\[[A-Z][A-Z0-9_]*\]"')
+
+    def test_install_dir_property_is_secure(self):
+        """提权安装时，只有 SecureCustomProperties 里的公共属性会从 UI 序列传到执行序列。
+
+        本机实测安装以提权方式运行（Privileged=1）；不标 Secure，向导里选的路径会被丢掉。
+        """
+        directory_id = self._install_dir_id()
+        match = re.search(r'<Property Id="([A-Z][A-Z0-9_]*)"[^>]*Secure="yes"', self.wxs)
+        self.assertIsNotNone(match, "安装目录属性没有标 Secure，提权安装时选的路径会丢失")
+        self.assertEqual(match.group(1), directory_id)
+
+    def test_arp_install_location_is_set_by_custom_action(self):
+        """Property 表不做格式化，ARPINSTALLLOCATION 必须用 Type 51 动作赋值。"""
+        self.assertIn('Property="ARPINSTALLLOCATION"', self.wxs)
+        self.assertIn('After="CostFinalize"', self.wxs)
+        self.assertNotIn('<Property Id="ARPINSTALLLOCATION" Value="[', self.wxs)
 
 
 if __name__ == "__main__":

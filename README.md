@@ -79,6 +79,8 @@ python -m venv .venv
 - **资源与数据分离**：网页、内置词典、文档随程序分发（只读），数据库单独放用户可写目录，升级或重装不会丢播放记录。可用环境变量 `MAGIC_VIDEO_DATA_DIR` 显式指定数据目录。
 - 首次构建需联网下载 WiX 3.14 工具包（约 40 MB，落在 `build/tools/`），`build/` 与 `dist/` 均不入库。
 - **升级安装**：直接双击新版 MSI 即可自动替换旧版；数据库在 `D:\magicvideo`（不在安装目录），播放记录完整保留。新版已关闭 WebView2 持久缓存并给 `app.js` 加版本串，避免升级后仍显示旧界面。
+- **安装路径会被记住**：安装向导里的目标是默认的 `%LOCALAPPDATA%\Programs\Magic Video`，可以改成任意目录（例如 `D:\Apps\Magic Video`）；装好后实际路径写进 `HKCU\Software\Magic Video\InstallPath`，下次升级自动装回同一位置，不用每次重选。**旧版本（0.1.5 之前）没有记这个值**，所以第一次升级仍落到默认目录，之后开始生效。
+- **「应用和功能」里的安装位置**会显示真实目录（`ARPINSTALLLOCATION` 由安装包写入），不再是空白。
 - **数据目录默认值**：源码版与打包版统一为 `D:\magicvideo`（`app/config.py::DEFAULT_DATA_DIR`），守护进程与开机自启也走同一默认值；`./start` 会显式 export 同一路径以便守护继承。旧 `%APPDATA%\Magic Video` 目录保留未删除，可随时回滚。
 
 ### 启动

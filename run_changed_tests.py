@@ -57,6 +57,7 @@ IMPACT: dict[str, tuple[str, ...]] = {
     "app/watchlist.py": ("tests.test_watchlist", "tests.test_watched_folders",
                          "tests.test_watchlist_top", "tests.test_blacklist"),
     "app/textmatch.py": ("tests.test_watchlist", "tests.test_covers"),
+    "installer/product.wxs": ("tests.test_packaging",),
     "app/everything.py": ("tests.test_everything", "tests.test_quicksearch",
                           "tests.test_everything_open"),
     "app/embedded_player.py": ("tests.test_embedded_player", "tests.test_potplayer"),
@@ -155,6 +156,9 @@ def modules_for(path: str) -> set[str]:
         found = {f"tests.test_{stem}"}
         found.update(IMPACT.get(path, ()))
         return found
+    # 非 app/ 下但登记了影响面的文件（如 installer/product.wxs）
+    if path in IMPACT:
+        return set(IMPACT[path])
     return set()
 
 

@@ -3,7 +3,16 @@
   Magic Video 安装包定义（WiX v3）。
   ProductVersion / SourceDir 由 build_dist.py 通过 candle 的 -d 参数注入，
   版本号唯一真源仍然是 app/__init__.py 的 __version__。
-  安装范围 perUser：装到 %LOCALAPPDATA%\Programs\Magic Video，双击即可安装，无需管理员。
+  安装范围 perUser：默认装到 %LOCALAPPDATA%\Programs\Magic Video，双击即可安装，无需管理员。
+
+  两条硬约束（2026-11-15 用户反馈「重新选了路径还是装到 C 盘」后修正）：
+
+  1. **目录属性必须全大写**。MSI 规定只有全大写的属性才是 public property，值才能在
+     UI 序列 → execute 序列之间传递。原来写成 `AppInstallFolder`（含小写），安装向导里
+     改的路径只落在 UI 序列的私有属性上，execute 序列读不到，于是永远装回默认路径。
+     现在统一为 `APPFOLDER`，`heat -dr`、快捷方式 Target、WIXUI_INSTALLDIR 必须同步。
+  2. **升级要继承上次选的路径**。安装时把实际路径写进 HKCU\Software\Magic Video\InstallPath，
+     下次升级由 AppSearch 的 RegistrySearch 读回 APPFOLDER；用户在向导里重新选则覆盖它。
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*"
@@ -18,28 +27,41 @@
     <MajorUpgrade DowngradeErrorMessage="A newer version of Magic Video is already installed." />
     <MediaTemplate EmbedCab="yes" />
 
+    <!-- 让「应用和功能」显示真实安装位置。属性表不做格式化，必须用 Type 51 动作赋值 -->
+    <CustomAction Id="SetArpInstallLocation" Property="ARPINSTALLLOCATION" Value="[APPFOLDER]" />
+
+    <!-- 继承上一次的安装路径：AppSearch 在 CostFinalize 之前把值填进 APPFOLDER，
+         CostFinalize 不会覆盖已有值的目录属性，因此默认路径被历史路径替换。 -->
+    <Property Id="APPFOLDER" Secure="yes">
+      <RegistrySearch Id="PreviousInstallFolder" Root="HKCU"
+                      Key="Software\Magic Video" Name="InstallPath" Type="raw" />
+    </Property>
+
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="LocalAppDataFolder">
         <Directory Id="INSTALLFOLDER" Name="Programs">
-          <Directory Id="AppInstallFolder" Name="Magic Video" />
+          <Directory Id="APPFOLDER" Name="Magic Video" />
         </Directory>
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="AppMenuFolder" Name="Magic Video" />
+        <Directory Id="APPMENUFOLDER" Name="Magic Video" />
       </Directory>
     </Directory>
 
     <!-- 开始菜单快捷方式：Target 用属性路径，避免依赖 heat 生成的不稳定组件 ID -->
-    <DirectoryRef Id="AppMenuFolder">
+    <DirectoryRef Id="APPMENUFOLDER">
       <Component Id="StartMenuShortcut" Guid="{2D9B4E6A-7C13-4F58-B0A2-91E5D3C7F648}">
         <Shortcut Id="AppStartMenuShortcut"
                   Name="Magic Video"
                   Description="Local playback history and resume"
-                  Target="[AppInstallFolder]Magic Video.exe"
-                  WorkingDirectory="AppInstallFolder" />
-        <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+                  Target="[APPFOLDER]Magic Video.exe"
+                  WorkingDirectory="APPFOLDER" />
+        <RemoveFolder Id="RemoveAPPMENUFOLDER" On="uninstall" />
         <RegistryValue Root="HKCU" Key="Software\Magic Video" Name="installed"
                        Type="integer" Value="1" KeyPath="yes" />
+        <!-- 记录实际安装路径，供下一次升级的 RegistrySearch 读取 -->
+        <RegistryValue Root="HKCU" Key="Software\Magic Video" Name="InstallPath"
+                       Type="string" Value="[APPFOLDER]" />
       </Component>
     </DirectoryRef>
 
@@ -48,7 +70,16 @@
       <ComponentRef Id="StartMenuShortcut" />
     </Feature>
 
-    <Property Id="WIXUI_INSTALLDIR" Value="AppInstallFolder" />
+    <Property Id="WIXUI_INSTALLDIR" Value="APPFOLDER" />
     <UIRef Id="WixUI_InstallDir" />
+
+    <!-- 提权安装时，UI 序列的公共属性只把 SecureCustomProperties 里的值传给执行序列。
+         本机实测安装以提权方式运行（Privileged=1），APPFOLDER 不标 Secure 的话，
+         向导里选的路径会在传到执行序列时被丢掉，最终还是装回默认目录。 -->
+
+    <!-- CostFinalize 之后 APPFOLDER 才是完整路径，此时再把它写进 ARP 的安装位置 -->
+    <InstallExecuteSequence>
+      <Custom Action="SetArpInstallLocation" After="CostFinalize" />
+    </InstallExecuteSequence>
   </Product>
 </Wix>

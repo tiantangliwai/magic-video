@@ -71,7 +71,7 @@
 
 ### Docs
 
-- README 功能表与「版本输出一览」、AGENTS 需求基线（累计 50 条）与测试门禁、`docs/FEATURES.md`（章节 10 → 25，新增 §11~§24 十四节）、`docs/TESTING.md`、`docs/OBSIDIAN.md` 同步到 0.1.5。
+- README 功能表与「版本输出一览」、AGENTS 需求基线（累计 50 条）与测试门禁、`docs/FEATURES.md`（新增 §11~§24 十四节）、`docs/TESTING.md`、`docs/OBSIDIAN.md` 同步到 0.1.5。
 - ZIP 与 MSI 随版本重新构建。
 
 ---
