@@ -374,6 +374,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 抓到就能显示 | 封面按标题哈希落盘，所以 `cover_titles()` **第一优先级就是剧集墙卡片标题**（`poster_labels()` 复用 `library_tree.build_tree(rows,"series")`）；`cover_key()` 去季标记 + 去尾集号，逐集分组共用一张；卡片标题与抓取标题仍不一致时 `resolve_cover()` 按 `subjects` 精确/去季/包含回退，`get_poster_wall()` 再用分组内文件 `title_cn/title_guess` 兜底 |
 | 优先抓能抓到的 | 卡片标题之后依次是导入清单中文名、媒体库中文名、其余英文标题；技术标签 / 番号编号 /「（完）」残行 / 零宽字符先过滤 |
 | Everything 快搜 | `app/everything.py`：`es.exe` → Everything HTTP 服务 → **自动降级为媒体库检索**；能力探测与提示写进「设置」页 |
+| 全盘快搜独立入口 | 左侧导航「全盘快搜」→ 独立视图 `quicksearch`（搜索框 / 结果 / 当前通道徽标 / 设置跳转）；剧集墙只保留封面卡片，不再内嵌搜索框；`VIEW_META` / `RENDERERS` 与导航项一一对应，由 `tests/test_quicksearch.py` 守护 |
 
 ### 数据流
 
@@ -390,7 +391,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
            -> 播放按钮 -> Api.play_embedded_path() 或 Api.play_external()
 ```
 
-对应测试：`tests/test_covers.py`、`tests/test_everything.py`。本机 `D:\tool\Everything` 只有 `Everything.exe`，要启用全盘需用户补官方 `es.exe` 或在 Everything 里开 HTTP 服务。
+对应测试：`tests/test_covers.py`、`tests/test_everything.py`、`tests/test_quicksearch.py`（独立入口与导航 / 视图一致性）。本机 `D:\tool\Everything` 只有 `Everything.exe`，要启用全盘需用户补官方 `es.exe` 或在 Everything 里开 HTTP 服务。
 
 ---
 

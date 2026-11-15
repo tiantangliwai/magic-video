@@ -35,6 +35,7 @@ const VIEW_META = {
   history: ['历史记录', '每次观看的时间与进度'],
   library: ['媒体库', '扫描到的本地视频文件'],
   posters: ['剧集墙', '按作品展示封面、季数与续播'],
+  quicksearch: ['全盘快搜', '整台电脑的视频文件，一搜即播'],
   watched: ['看过的列表', '你导入的已观看作品'],
   import: ['导入列表', '把看过的动漫一次性记录到数据库'],
   scan: ['扫描目录', '添加已下载视频的存放位置'],
@@ -730,7 +731,7 @@ async function renderSettings() {
       <div class="field"><label>Everything HTTP 服务地址（可选）</label>
         <input class="input" id="set-everything_http_url" value="${esc(s.everything_http_url || '')}" placeholder="例如 http://127.0.0.1:8080">
         <div class="tip">需在 Everything 选项里启用 HTTP 服务并设定端口。</div></div>
-      <div class="btn-row"><button class="btn btn-sm" data-action="goto" data-view="posters">去全盘快搜 / 剧集墙</button></div>
+      <div class="btn-row"><button class="btn btn-sm" data-action="goto" data-view="quicksearch">去全盘快搜</button></div>
     </div></div>
     <div class="card"><h3>Obsidian 知识沉淀</h3>
       <div class="notice">把<b>开发流程、自测结果、优化路线图、功能缺口</b>自动写进 vault 下独立的
@@ -872,19 +873,37 @@ async function renderPosters() {
     </div>
     <div id="posterGrid" class="poster-grid">${empty('正在加载剧集墙', '读取媒体库分组…')}</div>
   </div>
-  <div class="card"><h3>全盘快搜（Everything）</h3>
-    <p class="hint">关键词直接搜整台电脑的视频文件；本机未装 es.exe / 未开 HTTP 服务时，自动降级为媒体库检索。</p>
+  </div>`);
+  await loadPosterWall();
+  const input = document.getElementById('posterSearch');
+  if (input) input.focus();
+}
+
+// 全盘快搜是左侧独立入口，不再挂在剧集墙下面：搜索框、结果、通道状态都在自己这一页
+async function renderQuickSearch() {
+  setContent(`<div class="card"><div class="section-head"><h3>全盘快搜（Everything）</h3>
+      <span class="badge blue" id="esSourceBadge">检测检索通道…</span></div>
+    <p class="hint">按文件名关键词搜整台电脑的视频，结果可直接「播放 / 续播」。优先用 es.exe，其次 Everything 的 HTTP 服务；
+      两者都没启用时<b>自动降级为媒体库检索</b>，功能始终可用。通道在「设置 → 全盘快搜」里配置。</p>
     <div class="watched-toolbar">
       <input class="input" id="esSearch" placeholder="输入文件名关键词，回车检索…" value="${esc(esState.keyword)}" autocomplete="off">
       <button class="btn btn-sm btn-primary" data-action="es-search">检索</button>
+      <button class="btn btn-sm" data-action="goto" data-view="settings">检索设置</button>
       <span class="hint" id="esHint"></span>
     </div>
     <div id="esResults" class="list"></div>
   </div>`);
-  await loadPosterWall();
   renderEsResults();
-  const input = document.getElementById('posterSearch');
+  const input = document.getElementById('esSearch');
   if (input) input.focus();
+  try {
+    const cap = await call('everything_capabilities');
+    const badge = document.getElementById('esSourceBadge');
+    if (!badge) return;
+    badge.textContent = cap.es_available ? 'es.exe · 全盘检索'
+      : cap.http_configured ? 'Everything HTTP · 全盘检索'
+        : '媒体库检索（降级）';
+  } catch (e) { /* 能力探测失败不影响检索 */ }
 }
 
 function renderEsResults() {
@@ -893,7 +912,9 @@ function renderEsResults() {
   const hint = document.getElementById('esHint');
   if (hint) hint.textContent = esState.hint ? `来源：${esState.source} · ${esState.hint}` : '';
   if (!esState.rows.length) {
-    box.innerHTML = esState.keyword ? empty('没有结果', '换个关键词试试') : '';
+    box.innerHTML = esState.keyword
+      ? empty('没有结果', '换个关键词试试，或确认 Everything 通道是否已启用')
+      : empty('输入关键词开始检索', '例如：进击的巨人 / Sono Bisque / .mkv');
     return;
   }
   box.innerHTML = esState.rows.slice(0, 200).map(r => `<div class="item">
@@ -910,8 +931,8 @@ function renderEsResults() {
 
 const RENDERERS = {
   home: renderHome, continue: renderContinue, history: renderHistory, library: renderLibrary,
-  posters: renderPosters, watched: renderWatched, import: renderImport, scan: renderScan,
-  settings: renderSettings,
+  posters: renderPosters, quicksearch: renderQuickSearch, watched: renderWatched,
+  import: renderImport, scan: renderScan, settings: renderSettings,
 };
 
 async function refresh() {

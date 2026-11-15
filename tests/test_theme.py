@@ -69,8 +69,9 @@ class ThemeFrontendContractTests(unittest.TestCase):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('data-theme="light"', html)
         self.assertIn('data-action="toggle-theme"', html)
-        self.assertEqual(html.count("<svg"), 9)  # 8 个原有视图 + 剧集墙
+        self.assertEqual(html.count("<svg"), 10)  # 9 个原有视图 + 全盘快搜
         self.assertIn('data-view="posters"', html)
+        self.assertIn('data-view="quicksearch"', html)
         self.assertNotIn("ic-home", html)
 
     def test_js_applies_and_persists_theme(self):

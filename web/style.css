@@ -89,6 +89,7 @@ button, input, textarea, select { font-family: inherit; font-size: 13px; }
 .ni-clock  { --ic-bg: #fff0e2; --ic-color: #ea8b32; }
 .ni-grid   { --ic-bg: #e4f6f2; --ic-color: #12a58c; }
 .ni-poster { --ic-bg: #ffe9f0; --ic-color: #e0558a; }
+.ni-search { --ic-bg: #e8f0ff; --ic-color: #3f6fd8; }
 .ni-check  { --ic-bg: #e5f6e9; --ic-color: #1da35a; }
 .ni-import { --ic-bg: #e6f1ff; --ic-color: #2f83d6; }
 .ni-folder { --ic-bg: #fff4d9; --ic-color: #d79b12; }
@@ -98,6 +99,7 @@ html[data-theme="dark"] .ni-play   { --ic-bg: #332a52; --ic-color: #b599ff; }
 html[data-theme="dark"] .ni-clock  { --ic-bg: #463422; --ic-color: #f5ad6b; }
 html[data-theme="dark"] .ni-grid   { --ic-bg: #1e3d38; --ic-color: #55d6be; }
 html[data-theme="dark"] .ni-poster { --ic-bg: #4a2334; --ic-color: #ff8fb8; }
+html[data-theme="dark"] .ni-search { --ic-bg: #223552; --ic-color: #82aeff; }
 html[data-theme="dark"] .ni-check  { --ic-bg: #1e3a29; --ic-color: #63d995; }
 html[data-theme="dark"] .ni-import { --ic-bg: #22344d; --ic-color: #71b6f5; }
 html[data-theme="dark"] .ni-folder { --ic-bg: #413318; --ic-color: #f2c563; }
