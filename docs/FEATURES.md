@@ -627,6 +627,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 跳转的是作品所在目录，不是扫描根目录概览 | 取命中文件最多的**发布目录**；文件直接放在扫描根里时才原样打开该根 |
 | 目录被移走/改名也不误开整个盘 | `_existing_folder()` 最多向上退 2 层到仍存在、仍在扫描根内的一级作品目录；**回退时不会退到扫描根本身**，也不跨出扫描根 |
 | 不能借这个入口打开任意路径 | 前端只传 `watched_list.id`；后端按 id 重新算目录并二次校验（绝对路径 / 真实存在 / 非系统目录黑名单 / 在 `directories` 登记的扫描根内），再用 `os.startfile` 打开 |
+| 「从播放记录同步」会一次写很多条 | 同步按集写入且 `title_cn` 回退成 `title`：`watched_folders()` 整批只建一次媒体索引、`title == title_cn` 去重、一次调用内按 `(title, title_cn)` 复用结果；同步后前端重新取映射，新条目按钮当场出现 |
 
 ### 数据流与边界
 
@@ -635,7 +636,9 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 - 打开动作**只读**：`os.startfile(folder)`，不拼 `explorer` 命令、不写库、不改磁盘；`startfile` 抛 `OSError` 时返回错误文案而不冒泡。
 - 与「人工删除」共用 `app/file_ops.py` 的系统目录黑名单，但 `is_safe_directory()` 是**目录**校验（不检查视频后缀、要求真实存在、要求在扫描根内），和 `is_safe_video_path()` 互不复用。
 
-对应测试：`tests/test_watched_folders.py`（19 个用例，含目录白名单、只传 id、失效目录回退与边界、`startfile` 全程 mock、前端双视图与失败降级）；`run_changed_tests.py` 的 `web/app.js` / `app/api.py` / `app/file_ops.py` / `app/watchlist.py` 映射已连带加入 `tests.test_watched_list` 与 `tests.test_watched_folders`。
+- 大量同步条目的性能：`media_index()` 整批只建一次（不是每行一次）；`_watched_folder_for()` 用 `dict.fromkeys` 保序去重标题；`watched_folders()` 的 `by_title` 缓存**只在本次调用内有效**，因此改名 / 删除 / 重新扫描后下次调用自然重算，不会出现指向旧目录的陈旧按钮。同步链路：`sync_watched_from_progress()` 写完 → 前端 `case 'sync-watched-history'` 调 `renderWatched()` → 重新取 `watched_folders()`。隔离库模拟 3000 条同步记录 / 100 部作品 / 600 个媒体文件，匹配耗时 **0.09s**。
+
+对应测试：`tests/test_watched_folders.py`（22 个用例，含目录白名单、只传 id、失效目录回退与边界、同步后整条链路、同名条目只匹配一次、不同作品不串目录、`startfile` 全程 mock、前端双视图与失败降级）；`run_changed_tests.py` 的 `web/app.js` / `app/api.py` / `app/file_ops.py` / `app/watchlist.py` 映射已连带加入 `tests.test_watched_list` 与 `tests.test_watched_folders`。
 
 ---
 

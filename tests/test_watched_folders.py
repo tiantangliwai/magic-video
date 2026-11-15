@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from app import db, file_ops
+from app import db, file_ops, importer, watchlist
 from app.api import Api
 from tests.base import IsolatedDbTestCase
 
@@ -177,6 +177,75 @@ class WatchedFolderApiTests(IsolatedDbTestCase):
             result = self.api.open_watched_folder(self.matched_id)
         self.assertFalse(result["ok"])
         self.assertIn("资源管理器不可用", result["error"])
+
+
+class WatchedSyncScaleTests(IsolatedDbTestCase):
+    """「从播放记录同步」会按集写很多条：匹配要正确、且不能随条数线性变慢。"""
+
+    def setUp(self):
+        super().setUp()
+        self.api = Api()
+        self.root = self.tmp / "Anime"
+        self.folder = self.root / "[DBD-Raws] 葬送的芙莉莲"
+        self.folder.mkdir(parents=True)
+        db.execute("INSERT INTO directories(path) VALUES (?)", (str(self.root),))
+        for ep in (1, 2, 3):
+            filename = f"Frieren - {ep:02d}.mkv"
+            media = self.media(filename, path=str(self.folder / filename),
+                               title_guess="Frieren", title_cn="葬送的芙莉莲", episode_no=ep)
+            db.execute(
+                "INSERT INTO watch_progress(file_id, position_ms, duration_ms, percent, completed) "
+                "VALUES (?, ?, ?, ?, 1)",
+                (media["id"], 1_140_000, 1_200_000, 95.0),
+            )
+
+    def _add_manual_rows(self, title, count):
+        for _ in range(count):
+            db.execute(
+                "INSERT INTO watched_list(title, title_cn, source, status) "
+                "VALUES (?, ?, 'manual', 'watched')", (title, title),
+            )
+
+    def test_synced_playback_rows_all_get_a_folder_button(self):
+        """同步 → 打开文件夹整条链路：每一条 playback 行都能跳到自己那部剧。"""
+        result = importer.sync_watched_from_progress()
+        self.assertEqual((result["scanned"], result["added"]), (3, 3))
+        rows = db.rows("SELECT id FROM watched_list WHERE source = 'playback'")
+        self.assertEqual(len(rows), 3)
+        folders = self.api.watched_folders()["folders"]
+        for row in rows:
+            self.assertEqual(folders.get(row["id"]), str(self.folder))
+        with mock.patch.object(os, "startfile", create=True) as start:
+            opened = self.api.open_watched_folder(rows[0]["id"])
+        self.assertTrue(opened["ok"], opened.get("error"))
+        start.assert_called_once_with(str(self.folder))
+
+    def test_many_same_title_rows_only_match_once(self):
+        """一整部剧几十集同步成几十行同名记录，也只扫一次索引。"""
+        self.assertEqual(importer.sync_watched_from_progress()["added"], 3)
+        self._add_manual_rows("葬送的芙莉莲", 60)
+        with mock.patch.object(watchlist, "match_files",
+                               side_effect=watchlist.match_files) as matched:
+            folders = self.api.watched_folders()["folders"]
+        self.assertEqual(len(folders), 63)
+        self.assertEqual(matched.call_count, 1)   # title == title_cn 去重 + 按标题复用
+
+    def test_distinct_titles_are_each_matched_once(self):
+        """不同作品各算一次；不能因为共用缓存把 A 的目录套到 B 上。"""
+        self.assertEqual(importer.sync_watched_from_progress()["added"], 3)
+        other = self.root / "[DBD-Raws] 间谍过家家"
+        other.mkdir()
+        self.media("Spy x Family - 01.mkv", path=str(other / "Spy x Family - 01.mkv"),
+                   title_guess="Spy x Family", title_cn="间谍过家家")
+        self._add_manual_rows("间谍过家家", 2)
+        with mock.patch.object(watchlist, "match_files",
+                               side_effect=watchlist.match_files) as matched:
+            folders = self.api.watched_folders()["folders"]
+        self.assertEqual(matched.call_count, 2)
+        self.assertEqual(len(folders), 5)
+        self.assertEqual(folders[
+            db.scalar("SELECT MIN(id) FROM watched_list WHERE title = '间谍过家家'")
+        ], str(other))
 
 
 class WatchedFolderFrontendTests(unittest.TestCase):

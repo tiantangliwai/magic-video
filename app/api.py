@@ -300,8 +300,11 @@ class Api:
         复用追剧列表同一套「关键词优先级首个命中即停」匹配，避免另写一套搜索。
         一部剧偶尔散在多个目录，取命中文件最多的那个。
         """
-        for title in (str(row.get("title") or "").strip(),
-                      str(row.get("title_cn") or "").strip()):
+        # dict.fromkeys 保序去重：从播放记录同步的条目 title_cn 会回退成 title，
+        # 两者相同；不去重就会对每一行白跑一整轮全库匹配。
+        titles = dict.fromkeys((str(row.get("title") or "").strip(),
+                                str(row.get("title_cn") or "").strip()))
+        for title in titles:
             if not title:
                 continue
             _count, files, _keyword = watchlist.match_files(title, media)
@@ -329,11 +332,19 @@ class Api:
         ``open_watched_folder`` 按 id 重新计算并二次校验，**前端不传路径**。
         """
         rows = db.rows("SELECT id, title, title_cn FROM watched_list")
-        media = watchlist.media_index()
+        media = watchlist.media_index()          # 整批只建一次索引，不是每行一次
         roots = self._scan_roots()
-        folders = {}
+        folders: dict[int, str] = {}
+        # 「从播放记录同步」按集写入，一整部剧可能有几十条同名/同中文名记录。
+        # 一次调用内按 (title, title_cn) 复用匹配结果，避免 N 条重复扫全库；
+        # 只缓存在本次调用里，数据变更后下次调用自然重算，不会有陈旧按钮。
+        by_title: dict[tuple[str, str], str] = {}
         for row in rows:
-            folder = self._watched_folder_for(row, media, roots)
+            key = (str(row.get("title") or "").strip(),
+                   str(row.get("title_cn") or "").strip())
+            if key not in by_title:
+                by_title[key] = self._watched_folder_for(row, media, roots)
+            folder = by_title[key]
             if folder:
                 folders[int(row["id"])] = folder
         return {"ok": True, "folders": folders}
