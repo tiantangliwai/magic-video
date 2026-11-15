@@ -580,6 +580,10 @@ const fileListState = {
 // 树状视图：只缓存当前分组结果 + 已展开节点，展开/折叠不重复查库
 const treeState = { data: null, open: new Set() };
 
+// 「查看分集 / 媒体库搜索」带着关键词跳过来时记下来源视图，媒体库顶部就能返回；
+// 直接点左侧导航进媒体库不记（那是正常浏览，没有「上一页」可回）。
+let viewReturn = null;
+
 function fileViewModeHandler(value) {
   const mode = ['cards', 'series', 'flat', 'folder'].includes(value) ? value : 'flat';
   if (mode !== fileListState.view_mode) treeState.open.clear();
@@ -591,6 +595,16 @@ function option(value, label, current) {
   return `<option value="${esc(value)}" ${String(value) === String(current) ? 'selected' : ''}>${esc(label)}</option>`;
 }
 
+// 从剧集墙 / 看过的列表带关键词跳进媒体库时，顶部给一个返回入口
+function backRow() {
+  if (currentView !== 'library' || !viewReturn) return '';
+  return `<div class="btn-row back-row" style="margin:2px 0 10px">
+    <button class="btn btn-sm" data-action="goto-back"
+      title="回到刚才那一页，不用再重新找一遍">← 返回${esc(viewReturn.label)}</button>
+    <span class="hint">当前带搜索词「${esc(fileListState.keyword)}」；返回后原页面的状态不变</span>
+  </div>`;
+}
+
 function fileListCard(title, hint, directories) {
   const s = fileListState;
   const dirs = ['<option value="0">全部目录</option>']
@@ -598,6 +612,7 @@ function fileListCard(title, hint, directories) {
   return `<div class="card"><div class="section-head">
       <h3>${esc(title)}</h3><span class="badge blue" id="fileListCount">正在统计…</span></div>
     <p class="hint">${hint}</p>
+    ${backRow()}
     <div class="file-toolbar">
       <input class="input" id="fileSearch" placeholder="搜索文件名 / 中文名 / 原名 / 路径…" value="${esc(s.keyword)}">
       <select class="input" id="fileDir">${dirs.join('')}</select>
@@ -1724,6 +1739,7 @@ async function refresh() {
 
 function switchView(view, opts = {}) {
   if (!VIEW_META[view]) return;
+  const prev = currentView;
   // 「查看分集 / 媒体库搜索」带搜索词过来：把作品名带进媒体库并自动展开命中分组，
   // 否则跳过去面对几千个文件就忘了自己要点哪部。
   if (view === 'library' && typeof opts.keyword === 'string' && opts.keyword.trim()) {
@@ -1732,6 +1748,11 @@ function switchView(view, opts = {}) {
     fileListState.view_mode = 'series';
     fileListState.mode_touched = true;
     treeState.open.clear();
+    // 记住来源页：媒体库顶部出「返回剧集墙」，不用再点导航重新找一遍
+    viewReturn = (prev && prev !== view && VIEW_META[prev])
+      ? { view: prev, label: VIEW_META[prev][0] } : null;
+  } else {
+    viewReturn = null;
   }
   currentView = view;
   document.querySelectorAll('.nav-item').forEach(b => b.classList.toggle('active', b.dataset.view === view));
@@ -1814,6 +1835,14 @@ async function handleAction(action, btn) {
       if (playerStageActive) await stopEmbedded(true);
       switchView(btn.dataset.view, { keyword: btn.dataset.keyword });
       return;
+    case 'goto-back': {
+      // 先清掉来源再切：否则 switchView 会把它当成一次新的跳转重新记录
+      const target = viewReturn && viewReturn.view;
+      viewReturn = null;
+      if (!target) { toast('没有可返回的页面', false); return; }
+      switchView(target);
+      return;
+    }
     case 'toggle-embed': {
       const r = await call('set_embed_player', !embeddedMode);
       embeddedMode = !!r.enabled;

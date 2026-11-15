@@ -77,6 +77,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 46 | 看过的列表卡片墙**不能挤成一堆、不能丢标题**：外层普通块 + 内层 `poster-grid`，禁止整块铺满时把卡片压扁 | 用户明确要求（0.1.4 日常迭代） |
 | 47 | 黑名单必须**彻底生效**：`FC2-PPV-1288` 要被 `FC2PPV` 挡住（两侧去连接符归一化再比），目录名派生出的大卡片标题也要过滤 | 用户明确要求（0.1.4 日常迭代） |
 | 48 | 新增**网页搜索**视图：集成 `agedm.io` 与 `seeduck.cc` 的搜索，把两站结果渲染成本地卡片并**标明来源**；不做内嵌浏览器，点开走系统默认浏览器（`open_url` 只放行 `http/https`） | 用户明确要求（0.1.4 日常迭代） |
+| 49 | 从剧集墙（以及追剧 / 看过的列表）跳进媒体库后，媒体库顶部要有**返回入口**，点了回到来源页，不用重新跳一遍；直接点左侧导航进媒体库**不显示**返回 | 用户明确要求（0.1.4 日常迭代，2026-11-15「从剧情集跳转到媒体库里后需要一个返回按钮」） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -258,6 +259,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。**无季标记的文件直接挂作品组，禁止再生成「未标注季」节点**；分组改名只写 `settings.work_labels_json` 展示映射，绝不 `UPDATE media_files`，树 / 剧集墙 / 整剧树三处必须同源。
 - 展示视图改动：`tests/test_watched_cleanup.py` 必须覆盖卡片墙 / 表格切换、看过的列表默认平铺与单作品名、四种文件视图（cards/series/folder/flat）与扫描页默认 folder、设置页 sticky 工具条、作品改名两端接线；看过的列表取封面只能调 `cover_data_uris` 读缓存，**不得触发后台抓取任务**。
   - **卡片墙结构固定为「外层普通块 + 内层 `.poster-grid`」**：看过的列表卡片模式**禁止再挂 `content-fill`**，也禁止给 `.watched-cards` 加 `flex: 1` 之类的铺满规则——那会把卡片压扁成一堆、标题被挤没。CSS 断言要盯住 `.watched-cards { display: block` 与 `.watched-cards .poster-grid`。
+  - **跨视图跳转必须留返回入口**：带 `keyword` 跳进媒体库时记 `viewReturn = {view, label}`（来源视图取跳转前的 `currentView` 的 `VIEW_META` 名，**不要写死「剧集墙」**），媒体库顶部由 `backRow()` 渲染「← 返回X」；`case 'goto-back'` 要**先清 `viewReturn` 再 `switchView`**，否则会被当成一次新跳转重新记录。直接点导航进媒体库或无关键词跳转一律不显示返回。
 - 本地目录跳转改动：`tests/test_watched_folders.py` 必须覆盖目录白名单（绝对路径 / 真实存在 / 非系统目录 / 在扫描根内）、匹配与未匹配分支、文件直接在扫描根内、失效发布目录向上回退 2 层（但**不退到扫描根本身 / 不跨出扫描根**）、只传 `id` 不传路径、`os.startfile` 全程 mock 且失败不抛异常、前端两种视图共用按钮与接口失败降级。**前端绝不把 path 传给后端**；打开动作只允许 `os.startfile`，禁止 `explorer` 命令拼接；`get_watched_list` 返回结构不得为此改动；目录匹配必须复用 `watchlist.media_index()` + `match_files()`，不得另写一套搜索 SQL。
 - 「从播放记录同步」联动：`sync_watched_from_progress()` **按 `(作品名, 季)` 聚合**，同一作品同季只允许一行（区间为 `episode_from`~`episode_to`），并顺带合并历史遗留的 `source='playback'` 每集一条记录（`match_by='user'` 行优先保留）。用例必须覆盖「12 集 → 1 行」「第二次同步 `added=0`」「既有区间被扩展而非新增」「整部行（NULL 区间）覆盖一切」「不同季各自一行」「手动行不动」「同步 → `watched_folders()` 每行都有按钮 → `open_watched_folder(id)` 能打开」整条链路、`title == title_cn` 只匹配一次、不同作品不串目录。**禁止退回「每集调一次 `commit()`」的写法**（判重键含集号，必然刷重复）。`watched_folders()` 的标题缓存**只允许本次调用内有效**，禁止跨调用进程级缓存（改名 / 删除 / 重扫后必须自然重算）。
 - 历史去重改动：`tests/test_continue_dismiss.py` 必须覆盖「同一作品不同集只留最新一条会话、不同作品各留一条、无标题会话按 `file_id` 独立保留、旧会话零删除、人工删最新后露出次新」。`get_history()` 分组键必须是作品标题（中文名 > 推断名），**不得退回按 `file_id` 分组**（那样一部剧每集一条会刷屏）；只收拢展示，不新增 `DELETE FROM watch_sessions`（全项目仍只有 1 处）。

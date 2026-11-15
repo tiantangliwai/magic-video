@@ -182,3 +182,19 @@ class FrontendFileListTests(unittest.TestCase):
     def test_file_name_is_clickable_to_play(self):
         self.assertIn('class="link-btn" data-action="play"', self.js)
         self.assertIn(".link-btn", self.css)
+
+    def test_library_shows_back_button_after_keyword_jump(self):
+        """从剧集墙「查看分集」跳进媒体库后要能一键返回，不用重新找一遍。"""
+        js = self.js
+        self.assertIn("let viewReturn = null", js)
+        self.assertIn("function backRow", js)
+        self.assertIn("${backRow()}", js)             # 列表卡片里真的插入了这一行
+        self.assertIn('data-action="goto-back"', js)
+        self.assertIn("case 'goto-back'", js)
+        # 只有带关键词的跳转才记录来源；直接点导航进媒体库不显示
+        self.assertIn("viewReturn = (prev && prev !== view && VIEW_META[prev])", js)
+        self.assertIn("currentView !== 'library' || !viewReturn", js)
+        # 来源名取 VIEW_META，不写死「剧集墙」
+        self.assertLess(js.index("function backRow"), js.index("function fileListCard"))
+        back = js[js.index("case 'goto-back'"):]
+        self.assertLess(back.index("viewReturn = null"), back.index("switchView(target)"))
