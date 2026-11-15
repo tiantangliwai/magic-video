@@ -23,6 +23,11 @@ function applyTheme(theme) {
   if (label) label.textContent = currentTheme === 'dark' ? '浅色' : '深色';
 }
 
+// 封面 data URI 进程内缓存：同一作品名只向 Python 要一次。
+// 后端也有按文件 mtime 失效的缓存，这里是第二层——切视图时不必把
+// 几百张 base64 重新跨进程搬一遍，这是媒体库/剧集墙切换卡顿的主要来源。
+const coverUriCache = new Map();
+
 // 看过的列表：一次载入全量后本地即时过滤，行内改名只局部刷新表格
 let watchedRows = [];
 let watchedKeyword = '';
@@ -96,6 +101,24 @@ function toast(message, ok) {
 }
 
 function setContent(html) { document.getElementById('content').innerHTML = html; }
+
+// 批量取封面 data URI：只请求缓存里没有的标题，返回 {title: dataURI}。
+// 人工设定 / 恢复自动封面后调用 invalidateCoverCache() 让旧图不再命中。
+async function coverUris(titles) {
+  const list = [...new Set((titles || []).map(t => String(t || '').trim()).filter(Boolean))];
+  const need = list.filter(t => !coverUriCache.has(t));
+  if (need.length) {
+    try {
+      const got = await call('cover_data_uris', need);
+      Object.entries(got || {}).forEach(([k, v]) => coverUriCache.set(k, v));
+    } catch (e) { /* 降级为占位图 */ }
+  }
+  const out = {};
+  list.forEach(t => { if (coverUriCache.has(t)) out[t] = coverUriCache.get(t); });
+  return out;
+}
+
+function invalidateCoverCache() { coverUriCache.clear(); }
 
 function empty(text, sub) {
   return `<div class="empty"><div class="big">${esc(text)}</div><div>${esc(sub || '')}</div></div>`;
@@ -218,7 +241,7 @@ function coverDialog({ title }) {
       }
       if (e.target.closest('#coverClear')) {
         const r = await call('clear_cover', title).catch(() => ({ ok: false }));
-        if (r.ok) { toast('已恢复自动封面，可重新抓取'); done({ clear: true }); }
+        if (r.ok) { invalidateCoverCache(); toast('已恢复自动封面，可重新抓取'); done({ clear: true }); }
         else toast(r.error || '撤销失败', false);
       }
     });
@@ -362,7 +385,7 @@ async function playSmart(kind, value, fromStart) {
     const r = byPath
       ? await call('play_external', value)
       : await call('play_file', Number(value), fromStart);
-    if (r.ok) currentPlaying = started;
+    if (r.ok) { currentPlaying = started; syncPlayerBar(true); }
     toast(r.ok ? (r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放` : '已开始播放')
       : (r.error || '播放失败'), r.ok);
     return;
@@ -386,6 +409,7 @@ async function playSmart(kind, value, fromStart) {
     return;
   }
   currentPlaying = { ...started, title: r.title || started.title };
+  syncPlayerBar(true);
   const titleEl = document.getElementById('playerStageTitle');
   if (titleEl) titleEl.textContent = currentPlaying.title || '正在播放';
   const hintEl = document.getElementById('playerEpisodeHint');
@@ -420,7 +444,13 @@ async function setPlayerSpeed(value) {
 
 function toggleStageZoom() {
   const stage = document.getElementById('playerStage');
-  if (!stage || stage.hidden) return;
+  if (!stage) return;
+  // 独立窗口播放时没有内嵌舞台：直接把全屏键投给 PotPlayer。
+  // 之前这里直接 return，导致顶栏全屏按钮在独立窗口模式下点了没反应。
+  if (stage.hidden) {
+    if (!embeddedMode) call('player_control', 'fullscreen').catch(() => {});
+    return;
+  }
   // 内嵌时 PotPlayer 是子窗口，触发它自身全屏会脱离父窗口并破坏布局。
   // 因此只把播放区放大到整个窗口；独立窗口模式才把全屏键投给播放器。
   const zoomed = stage.classList.toggle('stage-zoom');
@@ -730,17 +760,21 @@ async function loadFileList() {
     const covers = data.covers || {};
     const titles = Object.keys(covers);
     // 只把已缓存的封面转成 data URI，绝不在这里触发后台抓取任务
-    if (titles.length) {
-      try { data.covers = await call('cover_data_uris', titles); } catch (e) { /* 降级为占位图 */ }
-    }
+    if (titles.length) data.covers = await coverUris(titles);
     if (count) count.textContent = `${num(data.total)} 部作品 · 已有封面 ${Object.keys(data.covers || {}).length} 张`;
     if (pager) pager.innerHTML = `<span>封面墙 · <b>${num(data.shown || data.total)}</b> 部作品（一次最多 300 张卡片）</span>
       <button class="btn btn-sm" data-action="file-flat">切回平铺列表</button>`;
     if (summary) summary.textContent = '每部作品一张封面卡片，只显示一个作品名；点「查看分集」带搜索词进入剧集展示';
     const cards = data.cards || [];
-    box.innerHTML = cards.length
-      ? `<div class="poster-grid">${cards.map(c => posterCardHtml(c, (data.covers || {})[c.title])).join('')}</div>`
-      : empty('还没有作品卡片', '先扫描目录；封面可在「后台进程」页抓取');
+    // 两段式渲染：先用占位卡片画出整面墙（立刻有画面），封面 data URI 到位后再补一次。
+    // 之前是「等几百张 base64 全部转换完才首次渲染」，切到媒体库的卡顿主要来自这里。
+    const paint = (coverMap) => {
+      box.innerHTML = cards.length
+        ? `<div class="poster-grid">${cards.map(c => posterCardHtml(c, (coverMap || {})[c.title])).join('')}</div>`
+        : empty('还没有作品卡片', '先扫描目录；封面可在「后台进程」页抓取');
+    };
+    paint({});
+    if (titles.length) paint(await coverUris(titles));
     return;
   }
   if (count) count.textContent =
@@ -761,9 +795,20 @@ async function loadFileList() {
   }
 }
 
+// 目录列表变动不频繁：短 TTL 复用，避免每次切媒体库 / 扫描页都等一次查询
+let dirsCache = { at: 0, rows: [] };
+async function getDirectoriesCached() {
+  if (dirsCache.rows.length && Date.now() - dirsCache.at < 8000) return dirsCache.rows;
+  const dirs = await call('get_directories');
+  dirsCache = { at: Date.now(), rows: dirs || [] };
+  return dirsCache.rows;
+}
+
 async function renderLibrary() {
   if (!fileListState.mode_touched) fileListState.view_mode = 'cards';
-  const dirs = await call('get_directories');
+  // 先给即时反馈：点导航立刻出画面，不等「查目录 + 全库分组 + 封面转换」三步串行返回
+  setContent(`<div class="card">${empty('正在打开媒体库…', '读取作品分组与封面缓存')}</div>`);
+  const dirs = await getDirectoriesCached();
   setContent(fileListCard(
     '媒体库 · 按作品浏览',
     '默认是「封面墙」：每部作品一张封面卡片、只显示一个作品名；可随时切换成剧集展示（作品 → 季 → 集）、目录结构或平铺列表。搜索、筛选与点击播放四种视图都可用。',
@@ -944,9 +989,7 @@ async function renderWatched() {
   const titles = [...new Set(watchedRows.flatMap(r => [r.title, r.title_cn])
     .map(v => String(v || '').trim()).filter(Boolean))];
   watchedCovers = {};
-  if (titles.length) {
-    try { watchedCovers = (await call('cover_data_uris', titles)) || {}; } catch (e) { /* 降级为占位图 */ }
-  }
+  if (titles.length) watchedCovers = await coverUris(titles);
   const cards = watchedViewMode === 'cards';
   setContent(`<div class="card watched-card"><div class="section-head"><h3>看过的列表</h3>
       <span class="badge blue" id="watchedCount">正在统计…</span></div>
@@ -1160,6 +1203,18 @@ async function renderSettings() {
         <button class="btn btn-sm" data-action="goto" data-view="quicksearch">去全盘快搜</button>
       </div>
     </div></div>
+    <div class="card"><h3>视频黑名单</h3>
+      <div class="notice">名称包含任一关键词的视频，会在<b>媒体库、剧集墙、扫描结果、看过的列表、
+        播放历史、继续观看、追剧列表的本地匹配与全盘快搜</b>里默认不展示（不区分大小写）。
+        它只是展示层过滤：<b>不删本地文件、不删播放记录、也不删追剧清单条目</b>，
+        关掉开关后所有位置立刻恢复展示全部视频。</div>
+      ${switchHtml('blacklist_enabled', isOn(s.blacklist_enabled), '启用黑名单过滤',
+        '默认开启；关闭后所有位置正常展示全部视频')}
+      <div class="field"><label>黑名单关键词（逗号 / 顿号 / 分号 / 换行分隔，不区分大小写）</label>
+        <textarea class="input" id="set-video_blacklist" placeholder="例如：daas,sone,三上悠亚">${esc(s.video_blacklist || '')}</textarea>
+        <div class="tip">按「名称包含」匹配：短英文词（如 jul / ipx / ure）可能误伤正常片名，
+          发现误伤把它从词表里删掉即可。改完点上方「保存设置」，切换页面即生效。</div></div>
+    </div>
     <div class="card"><h3>Obsidian 知识沉淀</h3>
       <div class="notice">把<b>开发流程、自测结果、优化路线图、功能缺口</b>自动写进 vault 下独立的
         <span class="mono">${esc(o.folder || 'Magic Video')}</span> 文件夹。只读你已有的笔记、只写这个文件夹；
@@ -1273,7 +1328,7 @@ async function loadPosterWall() {
     posterState.status = data.cover_status || {};
     // 有缓存的封面用 data URI 补齐（后端一次性返回，避免 file:// 跨域）
     const titles = Object.keys(posterState.covers);
-    if (titles.length) posterState.covers = await call('cover_data_uris', titles);
+    if (titles.length) posterState.covers = await coverUris(titles);
     renderPosterCards();
     renderCoverStatus();
   } catch (err) {
@@ -1383,14 +1438,15 @@ function watchlistRowHtml(r, idx) {
       ${files}
     </div>
     <div class="wl-ops">
-      <button class="btn btn-sm" data-action="watchlist-up" data-id="${r.id}" title="上移">↑</button>
-      <button class="btn btn-sm" data-action="watchlist-down" data-id="${r.id}" title="下移">↓</button>
+      <button class="btn btn-sm btn-icon" data-action="watchlist-top" data-id="${r.id}" title="置顶（移到同栏最上面）">⇈</button>
+      <button class="btn btn-sm btn-icon" data-action="watchlist-up" data-id="${r.id}" title="上移">↑</button>
+      <button class="btn btn-sm btn-icon" data-action="watchlist-down" data-id="${r.id}" title="下移">↓</button>
       <button class="btn btn-sm" data-action="watchlist-toggle" data-id="${r.id}"
         data-to="${r.downloaded ? 0 : 1}">${r.downloaded ? '移回未下载' : '标记已下载'}</button>
       ${matched ? `<button class="btn btn-sm" data-action="watchlist-files" data-id="${r.id}">${open ? '收起' : '本地文件'}</button>
         <button class="btn btn-sm" data-action="goto" data-view="library"
           data-keyword="${esc(r.search_keyword || r.title)}">媒体库搜索</button>` : ''}
-      <button class="btn btn-sm btn-danger" data-action="watchlist-remove" data-id="${r.id}" title="从追剧列表移除">×</button>
+      <button class="btn btn-sm btn-danger btn-icon" data-action="watchlist-remove" data-id="${r.id}" title="从追剧列表移除">×</button>
     </div>
   </div>`;
 }
@@ -1430,7 +1486,8 @@ async function loadWatchlist() {
 async function renderWatchlist() {
   setContent(`<div class="card"><div class="section-head"><h3>追剧列表</h3>
       <span class="badge blue" id="wlCount">正在统计…</span></div>
-    <p class="hint">按你粘贴的书写顺序展示，↑ / ↓ 可调整；「标记已下载」只在两栏间移动，不删除、不改顺序。
+    <p class="hint">按你粘贴的书写顺序展示，↑ / ↓ 逐条调整，⇈ 一下移到同栏最上面；
+      「标记已下载 / 移回未下载」只在两栏间移动，不删除、不改顺序。
       扫描到的本地剧集会显示匹配数，可就地展开点播，或带着搜索词跳到媒体库。</p>
     <div class="watched-toolbar">
       <input class="input" id="wlSearch" placeholder="搜索清单…" value="${esc(watchlistState.keyword)}" autocomplete="off">
@@ -1587,6 +1644,14 @@ function switchView(view, opts = {}) {
   refresh();
 }
 
+// 顶栏常驻控制条的显隐：有正在播的条目或 PotPlayer 在运行就显示。
+// 内嵌舞台里的控制条只有内嵌成功时可见，独立窗口模式下必须靠这条。
+function syncPlayerBar(available) {
+  const bar = document.getElementById('playerBar');
+  if (!bar) return;
+  bar.hidden = !(available || (currentPlaying && currentPlaying.fileId));
+}
+
 async function updatePlayerChip() {
   if (!apiReady()) return;
   try {
@@ -1594,11 +1659,21 @@ async function updatePlayerChip() {
     const chip = document.getElementById('playerChip');
     if (!st.available) {
       chip.innerHTML = '<span class="dot gray"></span><span>PotPlayer 未运行</span>';
+      syncPlayerBar(false);
       return;
+    }
+    // 软件重启后 PotPlayer 还在播、但前端没经过 playSmart 时，用状态里的
+    // file_id 补上「当前条目」，这样上一集 / 下一集按钮立刻可用。
+    if (st.file_id && !(currentPlaying && currentPlaying.fileId)) {
+      currentPlaying = {
+        fileId: Number(st.file_id), path: null,
+        title: st.title_cn || st.media_name || '',
+      };
     }
     const label = st.state === 'playing' ? '播放中' : st.state === 'paused' ? '已暂停' : '已停止';
     chip.innerHTML = `<span class="dot ${st.state === 'playing' ? '' : 'amber'}"></span>
       <span><b>${esc(st.title_cn || st.media_name)}</b> · ${label} · ${fmtMs(st.position_ms)} / ${fmtMs(st.duration_ms)}</span>`;
+    syncPlayerBar(true);
   } catch (e) { /* 静默 */ }
 }
 
@@ -1691,7 +1766,11 @@ async function handleAction(action, btn) {
     case 'save-watched': await saveWatchedEdit(Number(id)); return;
     case 'sync-watched-history': {
       const r = await call('sync_watched_from_history');
-      toast(`已回补 ${r.added} 条已看完作品 · 跳过 ${r.skipped} 条（扫描 ${r.scanned} 条播放记录）`, r.ok);
+      const extra = [];
+      if (r.updated) extra.push(`扩展 ${r.updated} 条区间`);
+      if (r.merged) extra.push(`合并 ${r.merged} 条旧重复`);
+      toast(`已回补 ${r.added} 部作品 · 跳过 ${r.skipped} 条${extra.length ? ' · ' + extra.join(' · ') : ''}`
+        + `（扫描 ${r.scanned} 条播放记录）`, r.ok);
       await renderWatched();
       return;
     }
@@ -1833,6 +1912,7 @@ async function handleAction(action, btn) {
       if (!picked) return;                       // 取消 / Esc
       const r = await call('set_cover', name, picked.data, picked.srcType);
       if (!r.ok) { toast(r.error || '设定封面失败', false); return; }
+      invalidateCoverCache();                    // 旧 data URI 不能让新封面被缓存挡住
       toast('封面已更新，之后自动抓取不会再覆盖它');
       if (currentView === 'posters') await loadPosterWall();
       else if (currentView === 'watched') await renderWatched();
@@ -1917,6 +1997,7 @@ async function handleAction(action, btn) {
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
         'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url',
         'everything_http_user', 'everything_http_pass', 'everything_app_path',
+        'video_blacklist',
         'pot_key_play_pause', 'pot_key_stop', 'pot_key_faster', 'pot_key_slower',
         'pot_key_reset_speed', 'pot_key_fullscreen', 'pot_speed_step'];
       const data = {};
@@ -2024,6 +2105,13 @@ async function handleAction(action, btn) {
       const r = await call('watchlist_add', title, false);
       toast(r.ok ? '已加入未下载清单' : (r.error || '新增失败'), !!r.ok);
       if (r.ok && el) el.value = '';
+      await loadWatchlist();
+      return;
+    }
+    case 'watchlist-top': {
+      const r = await call('watchlist_top', Number(id));
+      if (!r.ok) { toast(r.error || '置顶失败', false); return; }
+      toast(r.already_top ? '已经在最上面了' : '已置顶');
       await loadWatchlist();
       return;
     }
@@ -2205,7 +2293,7 @@ document.addEventListener('keydown', (ev) => {
 
 document.addEventListener('change', (ev) => {
   const el = ev.target;
-  if (el.id === 'playerSpeed') { setPlayerSpeed(el.value); return; }
+  if (el.id === 'playerSpeed' || el.id === 'topPlayerSpeed') { setPlayerSpeed(el.value); return; }
   const handlers = {
     fileDir: () => { fileListState.directory_id = Number(el.value) || 0; },
     fileMatch: () => { fileListState.match_state = el.value; },

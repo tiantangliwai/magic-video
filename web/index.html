@@ -37,6 +37,21 @@
     <header class="topbar">
       <div class="topbar-title"><h2 id="viewTitle">总览</h2><p id="viewSubtitle">你的播放进度一目了然</p></div>
       <div class="topbar-right">
+        <!-- 常驻播放控制条：内嵌与独立窗口两种模式都能用。
+             之前只在 #playerStage 里放控制条，独立窗口播放时用户完全看不到倍速/上下集。 -->
+        <div class="player-bar" id="playerBar" hidden>
+          <button class="pbtn" data-action="player-prev" title="上一集">⏮</button>
+          <button class="pbtn" data-action="player-play-pause" title="播放 / 暂停">⏯</button>
+          <button class="pbtn" data-action="player-stop" title="停止">■</button>
+          <button class="pbtn" data-action="player-next" title="下一集">⏭</button>
+          <select class="input pbar-speed" id="topPlayerSpeed" aria-label="播放倍速" title="播放倍速">
+            <option value="1">1.0×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2.0×</option>
+          </select>
+          <button class="pbtn" data-action="player-fullscreen" title="全屏 / 还原">⛶</button>
+        </div>
         <div class="player-chip" id="playerChip"><span class="dot gray"></span><span>正在检测播放器…</span></div>
         <button class="embed-btn" id="embedToggle" data-action="toggle-embed" title="切换「软件内播放 / 独立窗口播放」">
           <span class="embed-dot" id="embedDot"></span><span id="embedLabel">内嵌播放</span>

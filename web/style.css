@@ -125,13 +125,23 @@ html[data-theme="light"] .topbar { background: #ffffff; border-bottom-color: #e5
 html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #333a47; }
 .topbar-title h2 { margin: 0; font-size: 17px; font-weight: 600; }
 .topbar-title p { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
-.topbar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.topbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 常驻播放控制条：紧凑圆角胶囊，不抢顶栏空间；无播放任务时整条隐藏 */
+.player-bar { display: flex; align-items: center; gap: 2px; flex: none; padding: 3px 5px;
+  border: 1px solid var(--border); border-radius: 20px; background: var(--surface-2); }
+.player-bar[hidden] { display: none; }
+.player-bar .pbtn { border: 0; background: transparent; color: var(--text); cursor: pointer;
+  padding: 4px 6px; border-radius: 12px; font-size: 13px; line-height: 1; }
+.player-bar .pbtn:hover { background: var(--primary-soft); color: var(--primary); }
+.player-bar .pbar-speed { width: 72px !important; padding: 3px 5px !important;
+  font-size: 11px !important; border-radius: 12px; }
 .theme-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 8px 12px;
   border: 1px solid var(--border); border-radius: 20px; background: var(--surface-2);
   color: var(--text); cursor: pointer; font-size: 12px; white-space: nowrap; }
 .theme-btn:hover { border-color: var(--primary); color: var(--primary); }
 .theme-btn #themeIcon { font-size: 14px; line-height: 1; }
-.player-chip { display: flex; align-items: center; gap: 8px; max-width: 420px; padding: 8px 13px;
+.player-chip { display: flex; align-items: center; gap: 8px; flex: 1 1 150px; min-width: 0;
+  max-width: 320px; padding: 8px 13px;
   border: 1px solid var(--border); border-radius: 20px; background: var(--surface-2); color: var(--muted);
   font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .player-chip b { color: var(--text); font-weight: 600; }
@@ -234,10 +244,14 @@ td { color: var(--text); }
 .content.content-fill { overflow: hidden; display: flex; flex-direction: column; padding-bottom: 22px; }
 .watched-card { display: flex; flex-direction: column; }
 .content-fill > .watched-card { flex: 1 1 auto; min-height: 0; margin-bottom: 0; }
-.content-fill > .watched-card > :not(.table-wrap) { flex: none; }
+.content-fill > .watched-card > :not(.table-wrap):not(.watched-cards) { flex: none; }
 .watched-card > .table-wrap { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
 /* 卡片墙与表格互斥：作者样式的 display 会盖过 UA 的 [hidden]，必须显式关掉 */
 .watched-card > [hidden] { display: none !important; }
+/* 卡片墙自己滚动：`:not(.table-wrap)` 那条会把 .watched-cards 也设成 flex: none，
+   高度塌陷后内容溢出被 .content-fill 的 overflow:hidden 裁掉，整页无法下拉。
+   这里用同特异性但更晚声明的规则把 flex 抢回来。 */
+.content-fill > .watched-card > .watched-cards,
 .watched-card > .watched-cards { flex: 1 1 auto; min-height: 0; overflow: auto;
   align-content: start; padding: 4px 2px 12px; }
 /* border-collapse: collapse 时 th 的 border-bottom 不跟随 sticky，用 box-shadow 补线；
@@ -387,8 +401,13 @@ html[data-theme="dark"] .modal-warning { background: rgba(248, 113, 113, .12); }
 .wl-main { flex: 1; min-width: 0; }
 .wl-title { font-weight: 600; font-size: 12.5px; line-height: 1.45; word-break: break-word; }
 .wl-sub { color: var(--muted); font-size: 11px; margin-top: 3px; }
-.wl-ops { flex: none; display: flex; gap: 3px; align-items: center; }
-.wl-ops .btn { padding: 3px 6px; font-size: 10.5px; line-height: 1.2; }
+/* 操作按钮组：固定高度 + 图标按钮等宽，↑↓⇈ 与文字按钮纵向基线一致；
+   窗口变窄时整组换行右对齐，不把按钮压扁或挤出容器。 */
+.wl-ops { flex: 0 0 auto; display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+  justify-content: flex-end; max-width: 46%; }
+.wl-ops .btn { padding: 3px 7px; font-size: 10.5px; line-height: 1.2; height: 24px;
+  display: inline-flex; align-items: center; justify-content: center; }
+.wl-ops .btn-icon { width: 26px; padding: 3px 0; font-size: 12px; }
 .wl-files { margin: 7px 0 2px 35px; padding: 7px 9px; background: var(--surface-2);
   border: 1px solid var(--border); border-radius: 7px; }
 .wl-file { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 11.5px; }

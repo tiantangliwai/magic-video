@@ -483,22 +483,64 @@ def clean_watched_rows(dry_run: bool = False) -> dict:
     }
 
 
+def _merge_playback_duplicates() -> int:
+    """合并旧版「每集一条」的 playback 记录，返回删除的重复行数（幂等）。
+
+    旧版同步对**每个已看完文件**插一行，一部 12 集番会在看过的列表里刷出
+    12 条同作品记录。这里只处理 ``source='playback'``：按 (作品名, 季) 分组，
+    组内保留一条（``match_by='user'`` 优先，其次最早写入），区间取并集，
+    其余行删除。手动导入行（source != 'playback'）一律不动。
+    """
+    rows = db.rows(
+        "SELECT id, title, season_no, episode_from, episode_to, match_by "
+        "FROM watched_list WHERE source = 'playback' "
+        "ORDER BY (match_by = 'user') DESC, id ASC"
+    )
+    groups: dict[tuple[str, int], list[dict]] = {}
+    for r in rows:
+        key = (str(r.get("title") or "").strip().lower(), int(r.get("season_no") or 0))
+        groups.setdefault(key, []).append(r)
+    removed = 0
+    for items in groups.values():
+        if len(items) < 2:
+            continue
+        keep = items[0]
+        starts = [int(i["episode_from"]) for i in items if i.get("episode_from") is not None]
+        ends = [int(i["episode_to"]) for i in items if i.get("episode_to") is not None]
+        db.execute(
+            "UPDATE watched_list SET episode_from = ?, episode_to = ? WHERE id = ?",
+            (min(starts) if starts else None, max(ends) if ends else None, keep["id"]),
+        )
+        for extra in items[1:]:
+            db.execute("DELETE FROM watched_list WHERE id = ?", (extra["id"],))
+            removed += 1
+    return removed
+
+
 def sync_watched_from_progress() -> dict:
-    """手动把「已看完」的播放记录回补进看过的列表；幂等，不改手动导入行。
+    """手动把「已看完」的播放记录回补进看过的列表；**按作品合并**，幂等。
 
     播放记录（``watch_progress`` / ``watch_sessions``）与看过的列表原本是两条
     互不相交的数据流，这个函数是它们之间唯一的桥。只在用户点按钮时执行一次，
     **不是定时任务、不随启动运行**。
+
+    2026-11-15 修复：旧版对每个文件插一条 ``episode_from=ep, episode_to=ep``，
+    而 ``commit()`` 的判重键含集号，所以整部番会变成「每集一条」。现在先按
+    (作品名, 季) 聚合成一条区间行，再与既有行取并集；同时把历史遗留的
+    ``source='playback'`` 重复行合并掉，所以第一次点就能把旧重复清干净。
     """
     db.init_db()
     metadata.ensure_builtin_loaded()
+    merged = _merge_playback_duplicates()
     completed = db.rows(
         "SELECT f.title_guess, f.title_raw, f.title_cn, f.filename, "
         "f.season_no, f.episode_no "
         "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
         "WHERE p.completed = 1"
     )
-    added = skipped = 0
+    # 第一遍：按 (作品, 季) 聚合，得到本批的最小/最大集号
+    buckets: dict[tuple[str, int], dict] = {}
+    skipped = 0
     for item in completed:
         base = (item.get("title_cn") or item.get("title_guess")
                 or item.get("title_raw") or item.get("filename") or "")
@@ -506,42 +548,59 @@ def sync_watched_from_progress() -> dict:
         if not title or _JUNK_TITLE_RE.match(title):
             skipped += 1
             continue
-        season = item.get("season_no") or 0
+        season = int(item.get("season_no") or 0)
         ep = item.get("episode_no")
-        cn = (item.get("title_cn") or "").strip() or title
-        title_key = "(lower(title) = lower(?) OR lower(COALESCE(title_cn,'')) = lower(?))"
-        # 区间覆盖判重：手动导入的「1-25」或整部（区间为 NULL）行覆盖单集，
-        # 不产生重复行。ep 为空时只有「整部」行算已覆盖。
-        if ep:
-            covered = db.scalar(
-                f"SELECT COUNT(*) FROM watched_list WHERE {title_key} "
-                "AND COALESCE(season_no,0) = ? AND "
-                "(episode_from IS NULL OR episode_from <= ?) AND "
-                "(episode_to IS NULL OR episode_to >= ?)",
-                (title, cn, season, ep, ep),
-            )
-        else:
-            covered = db.scalar(
-                f"SELECT COUNT(*) FROM watched_list WHERE {title_key} "
-                "AND COALESCE(season_no,0) = ? AND "
-                "episode_from IS NULL AND episode_to IS NULL",
-                (title, cn, season),
-            )
-        if covered:
-            skipped += 1
+        cn = (item.get("title_cn") or "").strip()
+        key = (title.lower(), season)
+        bucket = buckets.get(key)
+        if bucket is None:
+            buckets[key] = {
+                "title": title, "cn": cn or title, "has_cn": bool(cn),
+                "season": season, "ep_min": ep, "ep_max": ep,
+            }
             continue
-        rec = {
-            "raw_text": None,
-            "title": title,
-            "title_cn": cn,
-            "match_by": "native" if item.get("title_cn") else "none",
-            "cn_edited": False,
-            "season_no": item.get("season_no"),
-            "episode_from": ep,
-            "episode_to": ep,
-            "note": "",
-        }
-        result = commit([rec], source="playback")
-        added += int(result.get("inserted", 0))
-        skipped += int(result.get("skipped", 0))
-    return {"ok": True, "scanned": len(completed), "added": added, "skipped": skipped}
+        if cn and not bucket["has_cn"]:
+            bucket["cn"], bucket["has_cn"] = cn, True
+        if ep is not None:
+            bucket["ep_min"] = ep if bucket["ep_min"] is None else min(bucket["ep_min"], ep)
+            bucket["ep_max"] = ep if bucket["ep_max"] is None else max(bucket["ep_max"], ep)
+
+    # 第二遍：与既有行合并区间（整部行覆盖一切；部分重叠则扩展，不新增）
+    added = updated = covered = 0
+    for bucket in buckets.values():
+        title, cn, season = bucket["title"], bucket["cn"], bucket["season"]
+        lo, hi = bucket["ep_min"], bucket["ep_max"]
+        existing = db.rows(
+            "SELECT id, episode_from, episode_to FROM watched_list "
+            "WHERE (lower(title) = lower(?) OR lower(COALESCE(title_cn,'')) = lower(?)) "
+            "AND COALESCE(season_no, 0) = ? ORDER BY id ASC",
+            (title, cn, season),
+        )
+        if existing:
+            target = existing[0]
+            old_lo, old_hi = target.get("episode_from"), target.get("episode_to")
+            if old_lo is None and old_hi is None:      # 整部行已覆盖
+                covered += 1
+                continue
+            new_lo = lo if old_lo is None else (old_lo if lo is None else min(int(old_lo), int(lo)))
+            new_hi = hi if old_hi is None else (old_hi if hi is None else max(int(old_hi), int(hi)))
+            if new_lo == old_lo and new_hi == old_hi:
+                covered += 1
+                continue
+            db.execute(
+                "UPDATE watched_list SET episode_from = ?, episode_to = ? WHERE id = ?",
+                (new_lo, new_hi, target["id"]),
+            )
+            updated += 1
+            continue
+        db.execute(
+            "INSERT INTO watched_list(raw_text, title, title_cn, match_by, season_no, "
+            "episode_from, episode_to, source, note) VALUES (NULL, ?, ?, ?, ?, ?, ?, 'playback', '')",
+            (title, cn, "native" if bucket["has_cn"] else "none",
+             season or None, lo, hi),
+        )
+        added += 1
+    return {
+        "ok": True, "scanned": len(completed), "added": added,
+        "updated": updated, "merged": merged, "skipped": skipped + covered,
+    }

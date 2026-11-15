@@ -180,7 +180,7 @@ class WatchedFolderApiTests(IsolatedDbTestCase):
 
 
 class WatchedSyncScaleTests(IsolatedDbTestCase):
-    """「从播放记录同步」会按集写很多条：匹配要正确、且不能随条数线性变慢。"""
+    """「从播放记录同步」按作品合并：整部番只留一行，匹配要正确且不能随行数线性变慢。"""
 
     def setUp(self):
         super().setUp()
@@ -206,33 +206,33 @@ class WatchedSyncScaleTests(IsolatedDbTestCase):
                 "VALUES (?, ?, 'manual', 'watched')", (title, title),
             )
 
-    def test_synced_playback_rows_all_get_a_folder_button(self):
-        """同步 → 打开文件夹整条链路：每一条 playback 行都能跳到自己那部剧。"""
+    def test_synced_playback_row_gets_a_folder_button(self):
+        """同步 → 打开文件夹整条链路：3 集合并成 1 条区间行，仍能跳到那部剧的目录。"""
         result = importer.sync_watched_from_progress()
-        self.assertEqual((result["scanned"], result["added"]), (3, 3))
-        rows = db.rows("SELECT id FROM watched_list WHERE source = 'playback'")
-        self.assertEqual(len(rows), 3)
+        self.assertEqual((result["scanned"], result["added"]), (3, 1))
+        rows = db.rows("SELECT id, episode_from, episode_to FROM watched_list WHERE source = 'playback'")
+        self.assertEqual(len(rows), 1, "同一部作品同季只能有一行")
+        self.assertEqual((rows[0]["episode_from"], rows[0]["episode_to"]), (1, 3))
         folders = self.api.watched_folders()["folders"]
-        for row in rows:
-            self.assertEqual(folders.get(row["id"]), str(self.folder))
+        self.assertEqual(folders.get(rows[0]["id"]), str(self.folder))
         with mock.patch.object(os, "startfile", create=True) as start:
             opened = self.api.open_watched_folder(rows[0]["id"])
         self.assertTrue(opened["ok"], opened.get("error"))
         start.assert_called_once_with(str(self.folder))
 
     def test_many_same_title_rows_only_match_once(self):
-        """一整部剧几十集同步成几十行同名记录，也只扫一次索引。"""
-        self.assertEqual(importer.sync_watched_from_progress()["added"], 3)
+        """一整部剧几十集只同步成一行；手动行再多，同一标题也只扫一次索引。"""
+        self.assertEqual(importer.sync_watched_from_progress()["added"], 1)
         self._add_manual_rows("葬送的芙莉莲", 60)
         with mock.patch.object(watchlist, "match_files",
                                side_effect=watchlist.match_files) as matched:
             folders = self.api.watched_folders()["folders"]
-        self.assertEqual(len(folders), 63)
+        self.assertEqual(len(folders), 61)        # 1 条 playback + 60 条手动行
         self.assertEqual(matched.call_count, 1)   # title == title_cn 去重 + 按标题复用
 
     def test_distinct_titles_are_each_matched_once(self):
         """不同作品各算一次；不能因为共用缓存把 A 的目录套到 B 上。"""
-        self.assertEqual(importer.sync_watched_from_progress()["added"], 3)
+        self.assertEqual(importer.sync_watched_from_progress()["added"], 1)
         other = self.root / "[DBD-Raws] 间谍过家家"
         other.mkdir()
         self.media("Spy x Family - 01.mkv", path=str(other / "Spy x Family - 01.mkv"),
@@ -242,7 +242,7 @@ class WatchedSyncScaleTests(IsolatedDbTestCase):
                                side_effect=watchlist.match_files) as matched:
             folders = self.api.watched_folders()["folders"]
         self.assertEqual(matched.call_count, 2)
-        self.assertEqual(len(folders), 5)
+        self.assertEqual(len(folders), 3)         # 芙莉莲 1 + 间谍过家家 2
         self.assertEqual(folders[
             db.scalar("SELECT MIN(id) FROM watched_list WHERE title = '间谍过家家'")
         ], str(other))

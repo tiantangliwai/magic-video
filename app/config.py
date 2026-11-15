@@ -114,6 +114,15 @@ DEFAULTS = {
     "everything_http_user": "",
     "everything_http_pass": "",
     "everything_app_path": "",
+    # 视频黑名单（用户 2026-11-15 要求）：名称包含任一关键词的视频在所有展示位置
+    # 默认隐藏；「启用黑名单」默认开启，关闭后正常展示全部。只是展示层过滤，
+    # 不删库、不改 media_files、不影响播放记录与追剧清单本身。
+    "blacklist_enabled": 1,
+    "video_blacklist": (
+        "daas,sone,ssis,三上悠亚,FC2PPV,fsdss,dass,cjod,mizd,ipx,jul,北野未奈,mdb,"
+        "冲田杏梨,春菜,miaa,mida,mvsd.naiad,小早川,mmpk,n房间,pakx,pfes,potplayer,"
+        "未步奈奈,pred,rctd.rki,royd,same,sone,sps,ssni,stars-,start-,suji,tysf,ure,waaa,ymdd"
+    ),
 }
 
 

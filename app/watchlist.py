@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 
-from . import db, textmatch
+from . import blacklist, db, textmatch
 
 _SECTION_RE = re.compile(r"^\s*(已下载|未下载)\s*[:：]\s*$")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -104,8 +104,13 @@ def import_text(text: str, replace: bool = False) -> dict:
 
 
 def _media_haystacks() -> list[dict]:
-    """一次读全库，构建归一化检索串；避免每个标题都发一轮 SQL。"""
-    rows = db.rows(
+    """一次读全库，构建归一化检索串；避免每个标题都发一轮 SQL。
+
+    黑名单里的视频不参与匹配：追剧清单条目本身保留（那是用户手写的待办），
+    但「本地 N 个文件」不应把被隐藏的视频算进去。
+    """
+    clause, params = blacklist.sql_clause("f")
+    sql = (
         "SELECT f.id, f.filename, f.path, f.title_raw, f.title_guess, f.title_cn, "
         "f.season_no, f.episode_no, "
         "COALESCE(f.title_cn, f.title_guess, f.filename) AS display_title, "
@@ -113,6 +118,9 @@ def _media_haystacks() -> list[dict]:
         "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
         "WHERE COALESCE(f.deleted_at, '') = ''"
     )
+    if clause:
+        sql += " AND " + clause
+    rows = db.rows(sql, tuple(params))
     for r in rows:
         titles = " ".join(str(r.get(k) or "") for k in ("filename", "title_raw", "title_guess", "title_cn"))
         r["_title_hay"] = textmatch.normalize(titles)
@@ -219,6 +227,28 @@ def move(item_id, delta: int) -> dict:
                (other["sort_order"], now, row["id"]))
     db.execute("UPDATE watchlist SET sort_order = ?, updated_at = ? WHERE id = ?",
                (row["sort_order"], now, other["id"]))
+    return {"ok": True, "moved": True}
+
+
+def move_top(item_id) -> dict:
+    """置顶：把该条同栏 sort_order 改成「同栏最小 - 1」，一下移到最上面。
+
+    不重排全表、不改其它行，也不跨栏移动（「未下载 / 已下载」各自排序）。
+    反复置顶只会让数值继续变小，整数范围完全够用，且 ``ORDER BY sort_order``
+    的语义始终正确。
+    """
+    row = db.row("SELECT id, downloaded, sort_order FROM watchlist WHERE id = ?", (item_id,))
+    if not row:
+        return {"ok": False, "error": "条目不存在"}
+    top = db.scalar(
+        "SELECT MIN(sort_order) FROM watchlist WHERE downloaded = ?", (row["downloaded"],)
+    )
+    if top is None or int(row["sort_order"]) <= int(top):
+        return {"ok": True, "moved": False, "already_top": True}
+    db.execute(
+        "UPDATE watchlist SET sort_order = ?, updated_at = ? WHERE id = ?",
+        (int(top) - 1, db.now(), row["id"]),
+    )
     return {"ok": True, "moved": True}
 
 

@@ -12,9 +12,9 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, config, covers, db, embedded_player, everything, file_ops,
-    importer, library_tree, metadata, obsidian, potplayer, runtime, scanner, textmatch,
-    theme_native, watchlist,
+    __version__, autostart, blacklist, config, covers, db, embedded_player, everything,
+    file_ops, importer, library_tree, metadata, obsidian, potplayer, runtime, scanner,
+    textmatch, theme_native, watchlist,
 )
 
 
@@ -33,6 +33,11 @@ _CARD_NOISE_WORDS = (
     "字幕", "中字", "双语", "国配", "粤配", "无修", "高清", "合集",
     "下载", "预览", "未删减", "完整版", "先行", "特典",
 )
+
+# 封面 data URI 缓存：key 是缓存文件名，值为 (mtime_ns, size, data_uri)。
+# 切视图时同一批封面不必重复读盘 + base64 编码，这是「切到媒体库卡顿」的主因之一；
+# 文件被人工封面覆盖后 mtime 变化会自动失效，不需要手动清。
+_COVER_URI_CACHE: dict[str, tuple[int, int, str]] = {}
 
 # 文件浏览的排序白名单：用户输入只能选键，绝不直接拼进 SQL
 _MEDIA_SORTS = {
@@ -97,13 +102,19 @@ class Api:
             return {"ok": False, "error": str(exc)}
 
     def get_stats(self) -> dict:
+        ban_sql, ban_params = blacklist.sql_clause("f")
+        files_where = f" WHERE {ban_sql}" if ban_sql else ""
+        prog_where = f" AND {ban_sql}" if ban_sql else ""
         return db.row(
             "SELECT "
-            "(SELECT COUNT(*) FROM media_files) AS files, "
+            f"(SELECT COUNT(*) FROM media_files f{files_where}) AS files, "
             "(SELECT COUNT(*) FROM watched_list) AS watched, "
             "(SELECT COUNT(*) FROM watch_sessions) AS sessions, "
-            "(SELECT COUNT(*) FROM watch_progress WHERE completed = 0 AND position_ms > 0) AS in_progress, "
-            "(SELECT COUNT(*) FROM watch_progress WHERE completed = 1) AS completed"
+            "(SELECT COUNT(*) FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
+            f"WHERE p.completed = 0 AND p.position_ms > 0{prog_where}) AS in_progress, "
+            "(SELECT COUNT(*) FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
+            f"WHERE p.completed = 1{prog_where}) AS completed",
+            tuple(ban_params) * 3,
         ) or {}
 
     def get_player_status(self) -> dict:
@@ -119,7 +130,7 @@ class Api:
         return status
 
     def get_continue_watching(self, limit: int = 50) -> list[dict]:
-        return db.rows(
+        rows = db.rows(
             "SELECT p.*, f.filename, f.path, f.title_guess, f.deleted_at, "
             "COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "f.season_no, f.episode_no "
@@ -128,10 +139,11 @@ class Api:
             "ORDER BY p.last_played_at DESC LIMIT ?",
             (int(limit),),
         )
+        return blacklist.filter_rows(rows, keys=("display_title", "filename", "title_guess"))
 
     def get_completed(self, limit: int = 50) -> list[dict]:
         """已看完的条目，供「继续观看」页做纠错（标记未看 / 重看）。"""
-        return db.rows(
+        rows = db.rows(
             "SELECT p.*, f.filename, f.path, f.title_guess, f.deleted_at, "
             "COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "f.season_no, f.episode_no "
@@ -139,6 +151,7 @@ class Api:
             "WHERE p.completed = 1 ORDER BY p.last_played_at DESC LIMIT ?",
             (int(limit),),
         )
+        return blacklist.filter_rows(rows, keys=("display_title", "filename", "title_guess"))
 
     def dismiss_continue_watching(self, file_id: int, restore: bool = False) -> dict:
         """「继续观看」人工移除 / 恢复：**软删除，只 UPDATE 标记**。
@@ -204,21 +217,24 @@ class Api:
         （中文名 > 推断名），同一部剧的不同集因此只留最新一条；没有标题
         的（如外部播放）退回 ``file_id`` / ``-id``，避免彼此被误合并。
         """
-        return db.rows(
-            "SELECT s.*, f.filename, "
-            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
-            "f.season_no, f.episode_no, f.path "
-            "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
-            "WHERE s.id IN ("
-            "  SELECT MAX(t.id) FROM ("
-            "    SELECT s2.id AS id, COALESCE("
-            "      NULLIF(TRIM(COALESCE(f2.title_cn, f2.title_guess)), ''),"
-            "      'file::' || COALESCE(CAST(s2.file_id AS TEXT), CAST(-s2.id AS TEXT))"
-            "    ) AS work_key"
-            "    FROM watch_sessions s2 LEFT JOIN media_files f2 ON f2.id = s2.file_id"
-            "  ) t GROUP BY t.work_key"
-            ") ORDER BY s.started_at DESC LIMIT ?",
-            (int(limit),),
+        return blacklist.filter_rows(
+            db.rows(
+                "SELECT s.*, f.filename, "
+                "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+                "f.season_no, f.episode_no, f.path "
+                "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
+                "WHERE s.id IN ("
+                "  SELECT MAX(t.id) FROM ("
+                "    SELECT s2.id AS id, COALESCE("
+                "      NULLIF(TRIM(COALESCE(f2.title_cn, f2.title_guess)), ''),"
+                "      'file::' || COALESCE(CAST(s2.file_id AS TEXT), CAST(-s2.id AS TEXT))"
+                "    ) AS work_key"
+                "    FROM watch_sessions s2 LEFT JOIN media_files f2 ON f2.id = s2.file_id"
+                "  ) t GROUP BY t.work_key"
+                ") ORDER BY s.started_at DESC LIMIT ?",
+                (int(limit),),
+            ),
+            keys=("display_title", "filename"),
         )
 
     def delete_history_session(self, session_id) -> dict:
@@ -241,6 +257,8 @@ class Api:
         """看过的列表：按作品名 / 中文名 / 导入原文 / 备注搜索；limit <= 0 表示全部。
 
         LIKE 的 % / _ / \\ 一律按字面量处理，避免关键词把列表放大成全表。
+        黑名单在 Python 侧过滤（这张表只有几百行）：命中名称的条目不展示，
+        但**不删行**——关掉开关立刻全部回来。
         """
         try:
             size = int(limit)
@@ -259,10 +277,10 @@ class Api:
             )
             params.extend([like] * 4)
         sql = "SELECT * FROM watched_list WHERE " + " AND ".join(conditions) + " ORDER BY id DESC"
-        if size > 0:
-            sql += " LIMIT ?"
-            params.append(size)
-        return db.rows(sql, tuple(params))
+        rows = blacklist.filter_rows(
+            db.rows(sql, tuple(params)), keys=("title", "title_cn", "raw_text")
+        )
+        return rows[:size] if size > 0 else rows
 
     # ---- 看过的列表 → 本地目录：只读匹配 + 资源管理器跳转 ------------------
     @staticmethod
@@ -463,15 +481,18 @@ class Api:
 
     def get_media_files(self, keyword: str = "", limit: int = 300) -> list[dict]:
         like = f"%{keyword.strip()}%"
-        return db.rows(
+        ban_sql, ban_params = blacklist.sql_clause("f")
+        sql = (
             "SELECT f.*, COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
-            "WHERE f.filename LIKE ? OR COALESCE(f.title_guess,'') LIKE ? "
-            "OR COALESCE(f.title_cn,'') LIKE ? "
-            "ORDER BY f.id DESC LIMIT ?",
-            (like, like, like, int(limit)),
+            "WHERE (f.filename LIKE ? OR COALESCE(f.title_guess,'') LIKE ? "
+            "OR COALESCE(f.title_cn,'') LIKE ?)"
         )
+        if ban_sql:
+            sql += " AND " + ban_sql
+        sql += " ORDER BY f.id DESC LIMIT ?"
+        return db.rows(sql, (like, like, like, *ban_params, int(limit)))
 
     @staticmethod
     def _media_filters(options: dict | None) -> tuple[str, list]:
@@ -506,6 +527,12 @@ class Api:
             conditions.append("COALESCE(f.title_cn,'') = ''")
         elif match_state == "progress":
             conditions.append("COALESCE(p.position_ms, 0) > 0")
+        # 视频黑名单：媒体库 / 剧集墙 / 剧集展示 / 扫描结果共用这一处筛选，
+        # 因此开关一关就整体恢复，不需要每个视图各写一遍。
+        ban_sql, ban_params = blacklist.sql_clause("f")
+        if ban_sql:
+            conditions.append(ban_sql)
+            params.extend(ban_params)
         return " AND ".join(conditions), params
 
     @staticmethod
@@ -532,7 +559,11 @@ class Api:
             size = int(opt.get("page_size", 200))
         except (TypeError, ValueError):
             size = 200
-        total_all = int(db.scalar("SELECT COUNT(*) FROM media_files") or 0)
+        ban_sql, ban_params = blacklist.sql_clause("f")
+        total_all = int(db.scalar(
+            "SELECT COUNT(*) FROM media_files f" + (f" WHERE {ban_sql}" if ban_sql else ""),
+            tuple(ban_params),
+        ) or 0)
         where, params = self._media_filters(opt)
 
         total = int(db.scalar(
@@ -959,6 +990,8 @@ class Api:
             "everything_es_path", "everything_http_url", "everything_app_path",
             "everything_http_user", "everything_http_pass",
             "embed_player", "daemon_auto_start",
+            # 视频黑名单：名称包含任一关键词的视频默认隐藏，开关关闭后恢复全部
+            "blacklist_enabled", "video_blacklist",
             # 播放快捷键绑定与倍速步进：PotPlayer 各版本键位不同，允许在设置里改
             "pot_key_play_pause", "pot_key_stop", "pot_key_faster", "pot_key_slower",
             "pot_key_reset_speed", "pot_key_fullscreen", "pot_speed_step",
@@ -990,7 +1023,14 @@ class Api:
         return everything.capabilities()
 
     def everything_search(self, keyword: str, limit: int = 200) -> dict:
-        return everything.search(keyword, limit)
+        result = everything.search(keyword, limit)
+        rows = result.get("rows") if isinstance(result, dict) else None
+        if rows:
+            result["rows"] = blacklist.filter_rows(
+                rows, keys=("name", "filename", "title", "display_title", "path")
+            )
+            result["hidden"] = len(rows) - len(result["rows"])
+        return result
 
     def everything_open(self) -> dict:
         """打开本机 Everything 主程序（快捷方式）；路径由后端固定配置，前端不传参。"""
@@ -1016,6 +1056,10 @@ class Api:
     def watchlist_move(self, item_id, delta: int) -> dict:
         """上移 / 下移一条，与同栏相邻条目交换顺序。"""
         return watchlist.move(item_id, int(delta))
+
+    def watchlist_top(self, item_id) -> dict:
+        """置顶：一下移到同栏最上面，不重排其它行、不跨栏、不改状态。"""
+        return watchlist.move_top(item_id)
 
     def watchlist_add(self, title: str, downloaded: bool = False) -> dict:
         return watchlist.add(title, downloaded)
@@ -1052,11 +1096,19 @@ class Api:
                 continue
             path = config.COVER_DIR / name
             try:
-                if not path.is_file() or path.stat().st_size > 3 * 1024 * 1024:
+                stat = path.stat()
+                if not path.is_file() or stat.st_size > 3 * 1024 * 1024:
+                    continue
+                stamp = (int(stat.st_mtime_ns), int(stat.st_size))
+                cached = _COVER_URI_CACHE.get(name)
+                if cached and cached[0] == stamp[0] and cached[1] == stamp[1]:
+                    out[str(title)] = cached[2]
                     continue
                 mime = mimetypes.guess_type(name)[0] or "image/jpeg"
                 encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-                out[str(title)] = f"data:{mime};base64,{encoded}"
+                uri = f"data:{mime};base64,{encoded}"
+                _COVER_URI_CACHE[name] = (stamp[0], stamp[1], uri)
+                out[str(title)] = uri
             except Exception:
                 continue
         return out

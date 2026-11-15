@@ -67,6 +67,11 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 36 | 看过的列表「第几季」也像改名一样**双击即可输入**（失焦/回车保存） | 用户明确要求（0.1.4 日常迭代） |
 | 37 | 全盘快搜降级提示：评估能否彻底集成 / GitHub 有无源码 / 插件化 / 至少加快捷方式 | 用户明确要求（0.1.4 日常迭代，选 A+B） |
 | 38 | **日常迭代只跑增量单元测试**（`run_changed_tests.py`），**不要全量跑**；全量 `run_tests.py` 仅在「用户明确要求推送 / 打 tag 发版 / 改了 `tests/base.py` 或 schema」三种情形下允许，禁止以「改动面大、兜底、收尾确认」为由加跑 | 用户明确要求（0.1.4 日常迭代，2026-11-15 二次纠正「怎么又开始全量跑单元测试了」） |
+| 39 | 「从播放记录同步」**不允许再出现大量重复行**：同一作品同季必须合并成一条区间行（`episode_from`~`episode_to`），幂等且能清理旧的每集一条记录 | 用户明确要求（0.1.4 日常迭代） |
+| 40 | 看过的列表切到卡片墙后**必须能下拉滚动**；媒体库切换**不能明显卡顿** | 用户明确要求（0.1.4 日常迭代） |
+| 41 | 倍速与上一集 / 下一集按钮**必须能看见**（不能只藏在内嵌播放舞台里） | 用户明确要求（0.1.4 日常迭代） |
+| 42 | 追剧列表的上移 / 下移 / 移回未下载等按钮**要对齐**，并新增**一键置顶** | 用户明确要求（0.1.4 日常迭代） |
+| 43 | 新增**视频黑名单**设置（开关默认开启）：名称包含任一关键词（不区分大小写）的视频在**所有位置**默认不展示；关闭后正常展示全部 | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -248,7 +253,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。**无季标记的文件直接挂作品组，禁止再生成「未标注季」节点**；分组改名只写 `settings.work_labels_json` 展示映射，绝不 `UPDATE media_files`，树 / 剧集墙 / 整剧树三处必须同源。
 - 展示视图改动：`tests/test_watched_cleanup.py` 必须覆盖卡片墙 / 表格切换、看过的列表默认平铺与单作品名、四种文件视图（cards/series/folder/flat）与扫描页默认 folder、设置页 sticky 工具条、作品改名两端接线；看过的列表取封面只能调 `cover_data_uris` 读缓存，**不得触发后台抓取任务**。
 - 本地目录跳转改动：`tests/test_watched_folders.py` 必须覆盖目录白名单（绝对路径 / 真实存在 / 非系统目录 / 在扫描根内）、匹配与未匹配分支、文件直接在扫描根内、失效发布目录向上回退 2 层（但**不退到扫描根本身 / 不跨出扫描根**）、只传 `id` 不传路径、`os.startfile` 全程 mock 且失败不抛异常、前端两种视图共用按钮与接口失败降级。**前端绝不把 path 传给后端**；打开动作只允许 `os.startfile`，禁止 `explorer` 命令拼接；`get_watched_list` 返回结构不得为此改动；目录匹配必须复用 `watchlist.media_index()` + `match_files()`，不得另写一套搜索 SQL。
-- 「从播放记录同步」联动：`sync_watched_from_progress()` 会按集写入大量行且 `title_cn` 回退成 `title`，用例必须覆盖「同步 → `watched_folders()` 每一行都有按钮 → `open_watched_folder(id)` 能打开」整条链路、`title == title_cn` 只匹配一次、同名行只匹配一次（`match_files` mock 计数）、不同作品不串目录。`watched_folders()` 的标题缓存**只允许本次调用内有效**，禁止跨调用进程级缓存（改名 / 删除 / 重扫后必须自然重算）。
+- 「从播放记录同步」联动：`sync_watched_from_progress()` **按 `(作品名, 季)` 聚合**，同一作品同季只允许一行（区间为 `episode_from`~`episode_to`），并顺带合并历史遗留的 `source='playback'` 每集一条记录（`match_by='user'` 行优先保留）。用例必须覆盖「12 集 → 1 行」「第二次同步 `added=0`」「既有区间被扩展而非新增」「整部行（NULL 区间）覆盖一切」「不同季各自一行」「手动行不动」「同步 → `watched_folders()` 每行都有按钮 → `open_watched_folder(id)` 能打开」整条链路、`title == title_cn` 只匹配一次、不同作品不串目录。**禁止退回「每集调一次 `commit()`」的写法**（判重键含集号，必然刷重复）。`watched_folders()` 的标题缓存**只允许本次调用内有效**，禁止跨调用进程级缓存（改名 / 删除 / 重扫后必须自然重算）。
 - 历史去重改动：`tests/test_continue_dismiss.py` 必须覆盖「同一作品不同集只留最新一条会话、不同作品各留一条、无标题会话按 `file_id` 独立保留、旧会话零删除、人工删最新后露出次新」。`get_history()` 分组键必须是作品标题（中文名 > 推断名），**不得退回按 `file_id` 分组**（那样一部剧每集一条会刷屏）；只收拢展示，不新增 `DELETE FROM watch_sessions`（全项目仍只有 1 处）。
 - 启动 / 单实例改动：`tests/test_startup.py` 必须覆盖互斥锁、已有窗口置前、js_api 反射安全与 `./start` 脚本；主题改动必须同时跑 `tests/test_theme.py` 与 `tests/test_theme_native.py`（DWM 原生标题栏、降级路径、CSS `color-scheme` 契约）。
 - 默认数据目录改动：`tests/test_packaging.py` 的布局断言与 `tests/test_startup.py` 的 `start` 脚本契约必须同步；**改真实库前先用 `sqlite3.backup()` 做一致性快照、旧目录保留不删除**。
@@ -261,6 +266,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
   - 人工封面：`source='manual'` 优先级最高，`is_manual()` 按**缓存文件名**（哈希）判定（标题含空格/大小写时 `lower(title_cn)` 会对不上）；`fetch_one()` 连 `force=True` 也不能覆盖，`cover_titles()` 要排除人工作品；`set_cover()` 三种来源都必须校验魔数与大小。
 - Everything 改动：`tests/test_everything.py` + `tests/test_everything_open.py` 必须覆盖空串回退默认路径、Error 8 / `-svc` 会话隔离的可操作提示、HTTP Basic Auth、`open_app()` 只用后端固定路径且 `os.startfile` 全 mock。**绝不修改用户 `Everything.ini` 或重启其服务进程**；核心引擎闭源，禁止尝试「下载源码编译集成」。
 - 看过的列表季数编辑：`tests/test_watched_season.py` 必须覆盖 `set_watched_season()` 只改 `season_no`、三种输入格式、留空清空、负数/超范围拒绝、前端 `watchedEditField` 字段分支与失焦保存；**不得复用 `update_watched` 改季数**，改名链路的隐藏中文名域契约必须保留。
+- 视频黑名单改动：`tests/test_blacklist.py` 必须覆盖默认开启、分隔符解析与去重、不区分大小写的包含匹配、`%`/`_` 转义、SQL 片段只含 `filename`/`title_guess`/`title_cn`（**不含 `path`**）、媒体库四种视图 / 剧集墙 / 看过的列表 / 历史 / 继续观看 / 统计 / 追剧本地匹配 / 快搜结果全部被过滤、**只隐藏不删行**、关闭开关后全部恢复、`save_settings` 白名单。新增任何「返回视频名称列表」的 API 都必须接入 `blacklist`，否则视为缺陷。
+- 追剧置顶 / 按钮对齐：`tests/test_watchlist_top.py` 必须覆盖同栏置顶、已置顶不移动、跨栏隔离、连续置顶、未知 id、`downloaded` 不变，以及 `.wl-ops .btn-icon` 等宽 + 整组右对齐 + 窄窗口换行的 CSS 契约。
+- 播放条常驻 / 媒体库性能：控制条必须同时存在于顶栏（`#playerBar`，独立窗口也能用）与内嵌舞台；`get_player_status().file_id` 要能回填 `currentPlaying`；封面 data URI 必须走「后端 mtime 缓存 + 前端 `coverUriCache`」两层，**禁止在每个视图里各写一次 `call('cover_data_uris')`**。
 - 追剧列表 / 后台进程改动：`tests/test_watchlist.py` 必须覆盖解析与编号边界、顺序/状态调整幂等、短英文泛词不误命中、进程状态只读、**新增左侧导航必须同步 `VIEW_META` / `RENDERERS` / nav 三者键集合**；`process_status()` 用例必须显式 mock `daemon_running` 与 `subprocess.Popen`，绝不启停本机守护。
 - 剧集墙改动：「查看分集」必须带 `search_keyword`；脏分组名（如 `1.36G`）要退回组内 `title_cn` 或文件名括号里的中文片名；卡片不得再出现「播放下一集」或封面抓取控件。
 - 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
@@ -313,6 +321,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - ❌ 让自动抓取（含 `force=True`）覆盖用户人工设定的封面；`clear_cover()` 是唯一撤销入口。
 - ❌ 修改用户 `Everything.ini`、重启其 `-svc` 服务进程，或尝试把闭源 Everything 引擎「编译进本软件」。
 - ❌ 用一个长事务同时包住网络请求和数据库写。
+- ❌ 让视频黑名单删除 / 修改任何数据：它只能是展示层过滤，不得 `DELETE FROM watched_list` / `media_files`，不得把 `path` 纳入判定（目录名会连带隐藏整棵子树），不得在开关关闭后仍过滤。
+- ❌ 把播放控制条只放在内嵌舞台里（独立窗口播放时用户完全看不到倍速和上下集）；顶栏必须有常驻控制条。
+- ❌ 在每个视图各写一次 `call('cover_data_uris')` 绕过缓存；封面 data URI 必须走统一 helper。
 - ❌ 提交 `data/*.db`、日志、临时测试产物。
 - ❌ 未经用户明确要求推送 / 打 tag / 发版，或没有改 `tests/base.py` / schema，就跑 `python run_tests.py` 全量测试；**尤其禁止**在增量全绿后以「改动面大 / 兜底 / 收尾确认」为借口补一次全量（见 3.0.1 封闭白名单与文件顶部测试铁律）。
 - ❌ 未经用户明确要求就升版本 / 重出 ZIP、MSI / 打 tag / 自动同步 Obsidian（见 3.0）。
