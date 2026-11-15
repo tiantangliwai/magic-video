@@ -176,6 +176,22 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 ---
 
+### 6.1 本地调试入口（不发版，随时看改动）
+
+双击 `dev.bat`（等价于 `.venv\Scripts\python.exe run.py --debug`）即用**源码**启动窗口，改完代码马上能看，**不需要打包、不需要 tag、不需要重装 MSI**。
+
+| 改了什么 | 怎么看 |
+|---|---|
+| `web/app.js` / `style.css` / `index.html` | 窗口内按 `Ctrl+R` 刷新（debug 模式已开启浏览器快捷键）；没生效就关窗重跑 |
+| `app/*.py` / `run.py` / SQL | 关掉窗口，重跑 `dev.bat`（Python 不热重载） |
+| 看报错、调样式 | `--debug` 默认打开 DevTools（`F12` / 右键检查） |
+
+- `dev.bat` 默认调 `dev.py` 把 `%APPDATA%\Magic Video\library.db` 复制成 `data/dev/library.db` **安全副本**：能看到全部 2104 条扫描结果，调试期间的播放/导入/扫描不会写进真实记录。
+- 参数：`dev.bat --real` 直接连真实库（调试写入会进真实历史）；`dev.bat --nodevtools` 不弹 DevTools；两者可组合。
+- **必须用 `.venv`**：系统 Python 缺 `psutil` / `pywebview` 等依赖。
+- **别用已安装的 exe 验证源码改动**：exe 内的前端在 `_internal`，与源码无关，只有显式发版重新构建才会更新。
+- 源码版现在也认 `MAGIC_VIDEO_DATA_DIR`（`app/config.py::resolve_layout` 2026-11-15 修复），由 `tests/test_packaging.py::test_source_layout_honors_data_override` 守护。
+
 ## 7. 明确禁止
 
 - ❌ 恢复「每日定时中文名补全」或任何待补全队列 / `pending_titles.json`。

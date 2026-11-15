@@ -48,6 +48,16 @@ class LayoutTests(unittest.TestCase):
         )
         self.assertEqual(data, exe_dir / "data")
 
+    def test_source_layout_honors_data_override(self):
+        # 本地调试时用真实库副本：源码版也必须认 MAGIC_VIDEO_DATA_DIR，
+        # 否则调试窗口只能看到项目内 data/ 的空库。
+        override = self.tmp / "dev-data"
+        resource, data = config.resolve_layout(
+            frozen=False, source_root=self.tmp, data_override=str(override),
+        )
+        self.assertEqual(resource, self.tmp)
+        self.assertEqual(data, override)
+
     def test_data_override_has_highest_priority(self):
         override = self.tmp / "custom-data"
         _, data = config.resolve_layout(

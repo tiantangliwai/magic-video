@@ -26,14 +26,16 @@ def resolve_layout(
 ) -> tuple[Path, Path]:
     """纯函数：返回 ``(资源根目录, 数据目录)``，方便单元测试直接验证。
 
-    - 源码版：资源根 = 源码根；数据目录 = ``源码根/data``。
+    - 源码版：资源根 = 源码根；数据目录默认 ``源码根/data``，
+      也可用 ``MAGIC_VIDEO_DATA_DIR`` 覆盖（本地调试指向真实库副本）。
     - 打包版：资源根 = ``sys._MEIPASS``；数据目录优先级为
       ``MAGIC_VIDEO_DATA_DIR`` > 绿色版标记 ``portable.txt``（exe 同级 ``data/``）
       > ``%APPDATA%/Magic Video``（安装版默认）。
     """
     src = Path(source_root or SOURCE_ROOT)
     if not frozen:
-        return src, src / "data"
+        data_dir = Path(data_override).expanduser() if data_override else src / "data"
+        return src, data_dir
 
     bundle = Path(bundle_dir or src)
     appdata = Path(appdata_dir) if appdata_dir else Path(
