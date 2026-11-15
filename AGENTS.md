@@ -50,6 +50,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
 **Obsidian 同步是纯本地文件写入，不是定时任务、不是云同步、不引入账号或插件。**
+**Hy3 限时免费（用户 2026-11-15）**：后续任务优先把可并行的只读诊断 / 机械核对 / 文档一致性检查派给 Hy3 子代理，把免费额度用掉；主模型只做汇总复核与**串行落地改代码**（共用 `app.js` / `api.py`，单测与文档统一收口）。不必再排查模型清单、额度通道或重启 opencode。
 
 ---
 
@@ -94,9 +95,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 1. 改代码 + 补对应单测，**只跑增量 / 受影响用例**：`python run_changed_tests.py`（按 git 改动自动映射），或 `python -m unittest tests.test_xxx`；改了 Python / JS 再补 `compileall` / `node --check`。
 2. 只更新**本次真正受影响**的功能/使用说明；版本号、CHANGELOG 留给发版时统一处理。
-3. 按 3.3 规范提交。
+3. 按 3.3 规范做**本地提交**（`git commit` 即可，**不主动 `git push`**，见 3.0.2）。
 4. 追加当天工作日志。
-5. **`git push` / 打 tag 之前**必须跑一次全量 `python run_tests.py`，全绿才推（见 3.0.1）。
+5. 仅当用户明确要求推送 / 打 tag / 发版时，才跑一次全量 `python run_tests.py`，全绿后再推（见 3.0.1）。
 
 **默认禁止（除非用户明确要求）**：
 
@@ -113,7 +114,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 |---|---|
 | 日常改代码 / 补用例 / 改文档 | `python run_changed_tests.py`（按 git 变更自动挑模块）；精确控制用 `--module tests.test_x` / `--only` / `--list`，已提交想回看用 `--base HEAD~1` |
 | 只改了前端语法 / 纯文案 | `node --check web/app.js` 或对应模块即可，不必跑全量 Python 用例 |
-| **`git push` 之前** | `python run_tests.py` 全量，必须全绿才推 |
+| **用户明确要求 `git push` 时**（见 3.0.2） | `python run_tests.py` 全量，必须全绿才推 |
 | **打 tag / 发版之前** | `compileall` + `node --check` + `run_tests.py` 全量 + 打包链验收 |
 | `tests/base.py` / 数据库 schema 改动 | 基类影响全部用例 → 直接 `--all` 全量 |
 
@@ -122,6 +123,15 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 全量是最终兜底：增量全绿**不能**替代推送前的全量。
 
 **触发完整发版的唯一条件**：用户明确说「发版 / 打包 / 出安装包 / 打个 tag / 发布一个版本 / 升版本」等。此时才一次性走 3.2 清单：升版本 → 补齐累积的 CHANGELOG → 重出 ZIP + MSI → 验收产物 → 打 tag 并推送。
+
+### 3.0.2 推送节奏（用户 2026-11-15 追加，优先级最高）
+
+> 用户原话：「后续不要主动推送」。
+
+- **默认只做本地 `git commit`，绝不主动 `git push` / 推分支 / 推 tag。** 本地工作区保持干净即可，远端是否更新由用户决定。
+- 唯一例外：用户在本轮明确说出「推送 / push / 推到远端 / 同步到 GitHub / 发版并推送」等指令，才执行 `git push origin master`；推之前按 3.0.1 跑全量门禁。
+- 提交信息与回复里要如实区分「本地已提交」和「已推送到远端」，不能把未推送说成已推送。
+- 有未推送的本地提交时，只在回复里列出 commit 号提醒用户，**不要擅自代推**。
 
 **版本号只在发版时变**：两次发版之间的多个需求共用同一个 `__version__`（当前 `0.1.4`），`tests/test_docs.py` 的版本一致性守护不会因日常提交而失败。不要为「记录进度」提前改版本或提前打 tag；已有 `v0.1.0`~`v0.1.4` 保持不动，不回溯、不删除。
 
@@ -158,7 +168,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 变更点 2
 ```
 
-`type` 取 `feat` / `fix` / `refactor` / `test` / `docs` / `chore`。一次提交一个逻辑单元；提交前必须跑 `python run_tests.py` 且全绿。提交身份当前为本地占位 `Magic Video <magic-video@local>`，拿到用户 GitHub 邮箱后再统一改写。
+`type` 取 `feat` / `fix` / `refactor` / `test` / `docs` / `chore`。一次提交一个逻辑单元；**日常本地提交前跑增量门禁**（`run_changed_tests.py`）即可，只有用户明确要求推送 / 打 tag / 发版前才跑 `python run_tests.py` 全量（见 3.0.1）。提交身份当前为本地占位 `Magic Video <magic-video@local>`，拿到用户 GitHub 邮箱后再统一改写。**提交不等于推送**，见 3.0.2。
 
 ---
 
@@ -195,7 +205,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 ## 5. 测试门禁
 
-- 新增/修改任何 `app/` 逻辑 → 必须在 `tests/` 里补对应用例；**日常只跑受影响模块**（`run_changed_tests.py`），**推送 / 打 tag 前**才跑 `run_tests.py` 全量（见 3.0.1）。
+- 新增/修改任何 `app/` 逻辑 → 必须在 `tests/` 里补对应用例；**日常只跑受影响模块**（`run_changed_tests.py`），**仅在用户明确要求推送 / 打 tag 时**才跑 `run_tests.py` 全量（见 3.0.1 / 3.0.2）。
 - 涉及数据库 → 继承 `IsolatedDbTestCase`；**严禁**在测试中连接真实 `data/library.db`。
 - 涉及网络 → 基类的 `search_online` mock 已禁用真实请求；要测在线分支就本地 patch 假数据。
 - 涉及 PotPlayer → mock `read_status` / `resolve_media` / `subprocess.Popen`，不真的启动播放器。
@@ -223,7 +233,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 2. 先写/补测试（允许先红），再改实现，跑到全绿。
 3. 只同步**本次受影响**的功能/使用说明；版本号、CHANGELOG、TESTING 报告留到发版时统一处理（见 3.0）。
 4. 语法检查 + **增量测试**（见 3.0.1）；仅当界面有可见改动才做窗口冒烟。推送前再跑一次全量。
-5. 按 3.3 规范提交；**仅用户明确要求发版**时才走 3.2 清单、构建产物并打 tag。
+5. 按 3.3 规范做**本地提交**（不主动推送，见 3.0.2）；**仅用户明确要求发版**时才走 3.2 清单、构建产物并打 tag。
 6. 把有长期价值的结论追加到 `.workbuddy/memory/YYYY-MM-DD.md`。
 
 ---
