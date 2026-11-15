@@ -1,27 +1,20 @@
 """Windows 开机自启：只写当前用户的 HKCU Run 项，不需要管理员权限。"""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 try:  # 非 Windows 平台导入不报错，相关接口安全降级
     import winreg
 except ImportError:  # pragma: no cover
     winreg = None
 
-from . import config, db
+from . import db, runtime
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 ENTRY_NAME = "MagicVideoDaemon"
 
 
-def _pythonw() -> Path:
-    candidate = Path(sys.executable).with_name("pythonw.exe")
-    return candidate if candidate.exists() else Path(sys.executable)
-
-
 def command() -> str:
-    return f'"{_pythonw()}" "{config.APP_DIR / "daemon.py"}"'
+    """开机自启命令：打包版为 exe --daemon，源码版为 pythonw daemon.py。"""
+    return runtime.command_line(runtime.daemon_command())
 
 
 def is_enabled() -> bool:

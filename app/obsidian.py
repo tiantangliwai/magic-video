@@ -24,7 +24,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from . import __version__, config, db, metadata, potplayer
+from . import __version__, config, db, metadata, potplayer, runtime
 
 DEFAULT_FOLDER = "Magic Video"
 MARKER = "<!-- managed-by: Magic Video v1 -->"
@@ -215,6 +215,13 @@ def _git(*args: str) -> str:
 
 
 def git_info() -> dict:
+    if runtime.is_frozen():
+        # 安装包里没有 .git 目录，用版本号代替提交信息，笔记不留空
+        return {
+            "commit": "", "subject": "打包运行版", "committed_at": "",
+            "branch": "release", "tag": f"v{__version__}",
+            "recent": [], "dirty": False,
+        }
     head = _git("log", "-1", "--format=%h|%s|%ci")
     parts = head.split("|", 2) if head else []
     return {

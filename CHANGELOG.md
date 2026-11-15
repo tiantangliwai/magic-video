@@ -27,11 +27,16 @@
 - 「设置」页新增 **Obsidian 知识沉淀** 卡片：vault 列表与路径、笔记文件夹、自动同步开关、
   「同步到 Obsidian」「打开笔记目录」按钮；`Api` 新增 4 个桥接方法。
 - 新增 `docs/OBSIDIAN.md`（集成契约、笔记结构、安全边界、故障排查）与 `tests/test_obsidian.py`（26 个用例）。
+- 新增 `build_dist.py` 与 `installer/product.wxs`：一键生成 PyInstaller onedir 绿色版 ZIP 与 WiX v3 MSI 安装包（perUser、开始菜单快捷方式、卸载入口）。
+- 新增 `app/runtime.py` / `app/daemon.py`：打包版与源码版共用启动命令，托盘守护通过 `--daemon` 复用同一个 exe；`run.py` 另加 `--selftest` 自检入口。
+- 新增 `tests/test_packaging.py`：覆盖四种路径布局、两种形态启动命令、开机自启、笔记降级、守护/窗口启动分发与自检分发（共 17 个用例）。
 
 ### Changed
 
 - 版本号由 0.1.2 提升至 **0.1.3**；`config.DEFAULTS` 新增 `obsidian_vault` / `obsidian_folder` / `obsidian_auto_sync`。
 - 多个 vault 时**不自动猜**：仅当候选恰好 1 个时自动采用，否则要求显式指定，避免误写错库。
+- `app/config.py` 拆分**资源目录与数据目录**：打包版资源取 `sys._MEIPASS`，数据默认 `%APPDATA%\Magic Video`；绿色版由 `portable.txt` 改为 exe 同级 `data/`；可用 `MAGIC_VIDEO_DATA_DIR` 覆盖。
+- `app/autostart.py` / `app/tray.py` / `app/api.py` 改用 `runtime.*_command()`；`app/obsidian.py` 在打包版用版本号替代 git 信息；`daemon.py` 改为调用共享入口。
 
 ### Safety
 
@@ -43,6 +48,7 @@
 ### Docs
 
 - README / AGENTS / FEATURES / TESTING / OPTIMIZATION 同步 0.1.3；AGENTS 需求基线新增第 10 条与输出/禁止规则。
+- README 新增「打包产物」章节；AGENTS 输出管理补充构建脚本、MSI 定义与 `dist/` / `build/` 约定；`docs/TESTING.md` 追加打包产物验收记录。
 
 ---
 

@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Magic Video 安装包定义（WiX v3）。
+  ProductVersion / SourceDir 由 build_dist.py 通过 candle 的 -d 参数注入，
+  版本号唯一真源仍然是 app/__init__.py 的 __version__。
+  安装范围 perUser：装到 %LOCALAPPDATA%\Programs\Magic Video，双击即可安装，无需管理员。
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Magic Video"
+           Language="1033"
+           Version="$(var.ProductVersion)"
+           Manufacturer="Magic Video"
+           UpgradeCode="{8F3A1C2E-5B47-4D9A-9E21-6C0D7A3B1F84}">
+    <Package InstallerVersion="200" Compressed="yes"
+             InstallScope="perUser" InstallPrivileges="limited"
+             Description="Local playback history and resume tool" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Magic Video is already installed." />
+    <MediaTemplate EmbedCab="yes" />
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="INSTALLFOLDER" Name="Programs">
+          <Directory Id="AppInstallFolder" Name="Magic Video" />
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="AppMenuFolder" Name="Magic Video" />
+      </Directory>
+    </Directory>
+
+    <!-- 开始菜单快捷方式：Target 用属性路径，避免依赖 heat 生成的不稳定组件 ID -->
+    <DirectoryRef Id="AppMenuFolder">
+      <Component Id="StartMenuShortcut" Guid="{2D9B4E6A-7C13-4F58-B0A2-91E5D3C7F648}">
+        <Shortcut Id="AppStartMenuShortcut"
+                  Name="Magic Video"
+                  Description="Local playback history and resume"
+                  Target="[AppInstallFolder]Magic Video.exe"
+                  WorkingDirectory="AppInstallFolder" />
+        <RemoveFolder Id="RemoveAppMenuFolder" On="uninstall" />
+        <RegistryValue Root="HKCU" Key="Software\Magic Video" Name="installed"
+                       Type="integer" Value="1" KeyPath="yes" />
+      </Component>
+    </DirectoryRef>
+
+    <Feature Id="MainFeature" Title="Magic Video" Level="1">
+      <ComponentGroupRef Id="AppFiles" />
+      <ComponentRef Id="StartMenuShortcut" />
+    </Feature>
+
+    <Property Id="WIXUI_INSTALLDIR" Value="AppInstallFolder" />
+    <UIRef Id="WixUI_InstallDir" />
+  </Product>
+</Wix>

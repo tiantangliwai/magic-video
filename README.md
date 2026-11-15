@@ -34,6 +34,26 @@ python -m pip install -r requirements.txt
 依赖仅 6 个：`pywebview`、`pythonnet`、`pystray`、`Pillow`、`requests`、`psutil`。
 本机已实测安装完成（Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157）。
 
+### 打包产物（目标机器无需 Python）
+
+由 `build_dist.py` 一键生成：
+
+```bat
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+.venv\Scripts\python.exe build_dist.py
+```
+
+| 产物 | 位置 | 播放记录存哪 |
+|---|---|---|
+| 绿色版 ZIP | `dist/MagicVideo-<版本>-win64-portable.zip` | 解压目录内 `Magic Video/data/`（靠 `portable.txt` 标记） |
+| MSI 安装版 | `dist/MagicVideo-<版本>-win64.msi` | `%APPDATA%\Magic Video` |
+
+- 绿色版解压即用；删掉 `portable.txt` 就切换到「安装版」的数据位置。MSI 为 **perUser 安装**（`%LOCALAPPDATA%\Programs\Magic Video`），双击即可安装、不需要管理员，带开始菜单快捷方式与卸载入口。
+- 两种形态都只有 `Magic Video.exe` 一个可执行文件：主窗口、托盘守护（`--daemon`）、构建自检（`--selftest`）复用它；开机自启和托盘菜单会自动选择源码版或打包版的启动命令。
+- **资源与数据分离**：网页、内置词典、文档随程序分发（只读），数据库单独放用户可写目录，升级或重装不会丢播放记录。可用环境变量 `MAGIC_VIDEO_DATA_DIR` 显式指定数据目录。
+- 首次构建需联网下载 WiX 3.14 工具包（约 40 MB，落在 `build/tools/`），`build/` 与 `dist/` 均不入库。
+
 ### 启动
 
 | 操作 | 效果 |
@@ -189,7 +209,7 @@ python run_tests.py
 | v0.1.0 | 项目骨架、SQLite 8 表、原生窗口 8 页、PotPlayer 桥接、托盘守护、开机自启、列表导入与目录扫描 |
 | v0.1.1 | 中文名改为**导入时同步匹配**，删除每日定时任务与待补全队列；新增匹配引擎 + 98 部离线词典；数据库平滑迁移 |
 | v0.1.2 | 116 个单元测试与端到端自测、25 项缺陷修复、标记已看/未看/重置进度、CLI 纠错命令、完整文档与版本管理体系 |
-| v0.1.3 | Obsidian 知识沉淀：6 类笔记 + 按天开发日志、测试结果自动留痕、路线图/缺口/ADR 联动、设置页与 CLI 同步入口、新增 26 个单测（合计 144） |
+| v0.1.3 | Obsidian 知识沉淀：6 类笔记 + 按天开发日志、测试结果自动留痕、路线图/缺口/ADR 联动、设置页与 CLI 同步入口、新增 26 个单测（当时合计 144）；后续补入 PyInstaller 绿色版 ZIP 与 WiX MSI 构建链，当前全量 161 个用例全绿 |
 
 > 版本阶段：目前统一停留在 `0.1.x`，功能体系完善后再开 `0.2.0+`（2026-11-15 用户确认；原 0.2.0 / 0.3.0 / 0.4.0 已回溯重编号）。
 

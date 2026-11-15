@@ -53,6 +53,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - **双进程模型**：主窗口只读为主，托盘守护负责轮询写入；两者不共享内存状态，只通过数据库通信。
 - **不修改用户文件**：扫描、解析、刮削一律只读视频文件，绝不重命名、移动、删除或写入同目录 `.nfo`。
 - **数据本地优先**：`data/` 不入库；元数据结果落库，不写回视频目录。
+- **打包版资源/数据分离**：源码版资源与数据都在项目根；打包版资源取 `sys._MEIPASS`（只读），数据默认 `%APPDATA%\Magic Video`，绿色版由 exe 同级 `portable.txt` 改为同级 `data/`，可用 `MAGIC_VIDEO_DATA_DIR` 覆盖。**禁止把数据库写进临时解压目录**。`config.resolve_layout()` 是路径唯一真源，`app/runtime.py` 负责两种形态的启动命令。
 - **前端无框架**：原生 HTML/CSS/JS，通过 `window.pywebview.api.*` 调后端；新增后端方法需同步加前端 `call(...)`。
 - **可测试性**：模块导入不得因平台差异崩溃（`winreg`、`ctypes.windll` 已做安全降级）；纯逻辑与副作用分离，便于 mock。
 
@@ -110,6 +111,11 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 单元测试 | `tests/test_*.py` | `unittest`，继承 `tests.base.IsolatedDbTestCase` | ✅ |
 | 测试入口 | `run_tests.py` | 零第三方依赖；写 `data/test_last.json` | ✅ |
 | 内置离线词典 | `app/data/aliases_builtin.json` | `{"items":[{"cn","orig","aliases","bgm","season"}]}` | ✅ |
+| 构建脚本 | `build_dist.py` | 一键生成 PyInstaller onedir + 绿色 ZIP + WiX MSI | ✅ |
+| MSI 安装包定义 | `installer/product.wxs` | WiX v3，版本由 candle `-dProductVersion` 注入 | ✅ |
+| 打包版路径与启动适配 | `app/config.py::resolve_layout` / `app/runtime.py` | 资源/数据分离、两种形态启动命令 | ✅ |
+| 可执行产物 | `dist/` | `MagicVideo-<版本>-win64-portable.zip` / `.msi` | ❌ `.gitignore: dist/` |
+| 构建中间物与工具 | `build/` | PyInstaller 输出、WiX 3.14 工具、wixobj、自检解包 | ❌ `.gitignore: build/` |
 | 运行数据库 / 封面 / 日志 | `data/` | `library.db`（WAL） | ❌ `.gitignore: /data/` |
 | 测试结果快照 / 同步历史 | `data/` | `test_last.json` / `obsidian_history.json` | ❌ |
 | Obsidian 同步笔记 | vault 内 `Magic Video/` | `00 项目总览.md` 等 6 篇 + `06 开发日志/YYYY-MM-DD.md` | ❌ 仓库外 |
@@ -118,7 +124,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 项目长期笔记 | `.workbuddy/memory/MEMORY.md` | 原地更新，≤3000 字 | ❌ |
 
 **禁止**：在仓库根目录散落临时 `.txt` / `.json` 报告；把 `data/` 整目录加入版本库；把 `.gitignore` 写成裸 `data/`（会连带忽略 `app/data/aliases_builtin.json`）；删除 `.workbuddy/` 目录；在文档里编造未实测的数据或功能；
-在 Obsidian 命名空间之外写任何文件；覆盖没有 `managed-by` 标记的用户笔记；把观看明细 / 视频路径写进笔记；为 Obsidian 引入定时任务或云同步。
+在 Obsidian 命名空间之外写任何文件；覆盖没有 `managed-by` 标记的用户笔记；把观看明细 / 视频路径写进笔记；为 Obsidian 引入定时任务或云同步；把 `dist/` / `build/` / `.venv/` 提交进版本库。
 
 ---
 
@@ -129,6 +135,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 涉及网络 → 基类的 `search_online` mock 已禁用真实请求；要测在线分支就本地 patch 假数据。
 - 涉及 PotPlayer → mock `read_status` / `resolve_media` / `subprocess.Popen`，不真的启动播放器。
 - 发版前：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过。
+- 改打包链 / 发带产物的版本：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
 - 窗口冒烟：`webview.create_window(..., hidden=True)` + 线程内 `evaluate_js` 检查 8 页渲染，完成后 `destroy()`。
 
 ---
@@ -167,7 +174,8 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 续播参数 | `/seek=hh:mm:ss` `/current` `/autoplay`（官方 `CmdLine64.txt`） |
 | WebView2 | Edge WebView2 157 已安装，pywebview `gui="edgechromium"` |
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
-| git | 本地仓库已初始化，无 gh CLI、无 GitHub 凭证；远程仓库待用户授权 |
+| git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.3` |
+| 打包工具链 | `.venv`（PyInstaller 6.22 / pywebview 6.2 / pythonnet 3.2）、WiX 3.14.1 在 `build/tools/wix/tools`（NuGet 镜像下载）；GitHub Release 直连 SSL 握手失败，改用 NuGet 镜像 |
 | Obsidian | `%APPDATA%\obsidian\obsidian.json` 注册 2 个 vault；主库 `C:\Users\Administrator\Documents\Obsidian Vault`，另一个是装修项目专用库（不写） |
 | 同步产物 | `data/test_last.json`（测试结果）、`data/obsidian_history.json`（结果时间线）；均在 `.gitignore` 内 |
 

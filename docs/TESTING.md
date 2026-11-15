@@ -9,14 +9,15 @@
 
 | 项目 | 结果 |
 |---|---|
-| 单元测试 | **144 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，耗时 14.94 秒） |
+| 单元测试 | **161 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，耗时 20.69 秒） |
 | Python 语法 | `compileall` 全通过 |
 | JavaScript 语法 | `node --check web/app.js` 通过 |
 | 原生窗口 | 8 个页面全部渲染成功，`js_api` 暴露 35 个方法；设置页 Obsidian 卡片/按钮/开关齐全 |
+| 打包产物 | 绿色版 ZIP 21.8 MB / MSI 21.9 MB；`exe --selftest` 全部检查通过；主窗口 8 秒冒烟存活；MSI 反编译校验版本与快捷方式 |
 | CLI | `init / status / dict / progress / player / mark / test / obsidian` 全部可用 |
 | 真实数据 | 旧播放记录、会话、断点进度、词典完整保留，未被本轮改动破坏 |
 | Obsidian 真实 vault | 首次同步生成 6 篇笔记 + 当天日志；用户原有 2 篇笔记 md5 前后完全一致；二次同步批注保留、日志去重通过 |
-| 远程推送 | 未执行（无 GitHub 凭证，等待用户授权） |
+| 远程推送 | 已完成：`master` + `v0.1.0`~`v0.1.3` 推送到私有仓库 `tiantangliwai/magic-video`（SSH 通道） |
 
 ---
 
@@ -34,7 +35,8 @@
 | `tests/test_smoke.py` | 2 | 端到端串联（导入 → 扫描 → 播放记录 → 续播 → 纠错 → 历史）、测试库隔离验证 |
 | `tests/test_docs.py` | 10 | 版本语义化、交付文档齐备（含 `docs/OBSIDIAN.md`）、版本一致、gitignore、依赖格式、前端、无定时任务残留、Obsidian 接线与文档版本 |
 | `tests/test_obsidian.py` | 26 | vault 探测与多选不猜、路径穿越防护、首次生成 6 篇笔记、同名用户笔记不覆盖、AUTO 区块外批注保留、frontmatter 用户字段保留、日志事件去重、历史快照去重、命名空间外零改动、路线图解析、结果渲染、状态查询、API 桥接与设置白名单 |
-| **合计** | **144** | v0.1.3 新增 28 项（26 项 Obsidian + 2 项文档守护） |
+| `tests/test_packaging.py` | 17 | 四种路径布局、两种形态启动命令、开机自启、笔记降级、守护/窗口/自检分发 |
+| **合计** | **161** | v0.1.3 相对 116 新增 45 项（26 项 Obsidian + 2 项文档守护 + 17 项打包形态） |
 
 ### 隔离机制
 
@@ -173,7 +175,7 @@ python run_tests.py            :: 或 python cli.py test
 
 - [ ] `compileall` 通过
 - [ ] `node --check web/app.js` 通过
-- [ ] `python run_tests.py` 144 个用例全绿
+- [x] `python run_tests.py` 161 个用例全绿
 - [ ] 旧数据保留已确认
 - [ ] README / AGENTS / CHANGELOG / docs/TESTING.md / docs/OBSIDIAN.md 版本一致（`tests/test_docs.py` 守护）
 - [ ] 真实 vault 同步通过，且用户原有笔记未被改动
@@ -256,3 +258,40 @@ AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0�
 | Obsidian GUI 里实际打开与图谱效果 | 本机 Obsidian 进程未运行，笔记是标准 Markdown 无插件依赖 | 启动 Obsidian 选主库，打开 `Magic Video/00 项目总览` |
 | `cli.py test` 自动同步触发 | `obsidian_auto_sync` 默认关闭（设计如此） | 设置页打开开关后跑一次 `python cli.py test` |
 | 手写批注长期保留 | 单测 + 一次真实二次同步已验证 | 日常使用中随时可再验 |
+
+---
+
+## 9. 打包产物与版本回溯增量自测（0.1.3）
+
+> 本节是第 8 节之后的增量记录：第 8 节里的 `144` 是当时首轮实测值，**当前全量为 161**。
+
+### 9.1 构建链实测
+
+| 步骤 | 命令 / 工具 | 结果 |
+|---|---|---|
+| 依赖环境 | `.venv` + `requirements.txt` + `pyinstaller` | PyInstaller 6.22.3 / pywebview 6.2.1 / pythonnet 3.2.1 / clr_loader 0.3.1 安装成功 |
+| exe | `PyInstaller --onedir --windowed --collect-all webview/clr_loader/pystray` | `Magic Video.exe` 6,656,482 B；onedir 共 217 个文件 |
+| 绿色版 | `build_dist.py` → `zipfile` | `MagicVideo-0.1.3-win64-portable.zip`，21.8 MB / 218 条目 |
+| MSI | WiX 3.14.1 `heat` → `candle` → `light` | `MagicVideo-0.1.3-win64.msi`，21.9 MB / 217 个程序文件 |
+| 工具下载 | GitHub Release 直连 | ❌ `curl(35) schannel` 握手失败；改用 NuGet 镜像 `wix.3.14.1.nupkg` ✅ |
+| MSI 首次编译 | `light.exe` | ❌ `LGHT0311`：中文描述串超出 1252 代码页 → 改为英文描述后重跑 ✅ |
+
+### 9.2 产物验收（真实执行，非推断）
+
+| 检查 | 方法 | 结果 |
+|---|---|---|
+| exe 自检 | `MAGIC_VIDEO_DATA_DIR=<临时目录> "Magic Video.exe" --selftest` | `ok=True` / `version=0.1.3` / `frozen=True`；`webview`、`clr`、`clr_load`、`pystray`、`PIL`、`psutil`、`requests`、网页、词典、数据库 **10 项全通过** |
+| 路径分离 | 自检报告的 `resource_dir` / `data_dir` | 资源 = `...\Magic Video\_internal`，数据 = 临时目录；**未写进解压目录** |
+| 主窗口 | 启动 exe 后 8 秒检查进程 | 进程存活，临时数据目录生成 `library.db`；随后终止，未污染真实库 |
+| ZIP 内容 | `zipfile` 逐项核对 | exe / `portable.txt` / `web/index.html` / `aliases_builtin.json` / `docs/OPTIMIZATION.md` / `CHANGELOG.md` / `_internal/webview/lib/Microsoft.Web.WebView2.*.dll` 齐全 |
+| MSI 内容 | `dark.exe -x` 解包 + 反编译 wxs | `ProductVersion=0.1.3`、固定 `UpgradeCode`、开始菜单 `Shortcut`；主 exe / WebView2 DLL / 词典 / 前端按大小比对均在包内；`portable.txt` 不在 MSI 内（安装版走 `%APPDATA%`） |
+| 单测 | `python run_tests.py` | **161 / 161 全绿**（0 失败 / 0 错误 / 0 跳过，20.69 秒） |
+| 语法 | `compileall` + `node --check` | 全通过 |
+
+### 9.3 未覆盖 / 待人工验证
+
+| 项 | 原因 | 建议 |
+|---|---|---|
+| MSI 实际安装与卸载 | 未在用户机器上执行安装（避免改动系统状态） | 双击 `.msi` 安装 → 开始菜单启动 → 控制面板卸载 |
+| 绿色版跨版本升级不丢数据 | 已在代码层与自检中验证路径分离 | 解压两个版本，把旧 `data/` 放进新目录后确认记录仍在 |
+| 打包版托盘守护长时间记录 | 冒烟只验证主窗口 8 秒 | 运行 `Magic Video.exe --daemon` 后用 PotPlayer 播放一集，检查历史写入 |

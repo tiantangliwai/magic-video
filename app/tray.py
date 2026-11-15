@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 import threading
-from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from . import config, db, scanner
+from . import config, db, runtime, scanner
 
 
 def make_icon(size: int = 64) -> Image.Image:
@@ -30,9 +28,7 @@ class Tray:
     def _open_main(self, icon=None, item=None):
         try:
             subprocess.Popen(
-                [str(Path(sys.executable).with_name("pythonw.exe")) if
-                 Path(sys.executable).with_name("pythonw.exe").exists() else sys.executable,
-                 str(config.APP_DIR / "run.py")],
+                runtime.main_command(),
                 cwd=str(config.APP_DIR), close_fds=True,
             )
         except Exception:

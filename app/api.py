@@ -10,7 +10,7 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, config, db, importer, metadata, obsidian, potplayer, scanner,
+    __version__, autostart, config, db, importer, metadata, obsidian, potplayer, runtime, scanner,
 )
 
 
@@ -265,12 +265,9 @@ class Api:
         state = self.daemon_running()
         if state["running"]:
             return {"ok": True, "already": True}
-        exe = Path(sys.executable).with_name("pythonw.exe")
-        if not exe.exists():
-            exe = Path(sys.executable)
         try:
             subprocess.Popen(
-                [str(exe), str(config.APP_DIR / "daemon.py")],
+                runtime.daemon_command(),
                 cwd=str(config.APP_DIR), close_fds=True,
             )
             return {"ok": True}
