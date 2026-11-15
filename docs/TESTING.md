@@ -16,8 +16,9 @@
 | `tests/base.py` / schema 改动 | `python run_changed_tests.py --all` | 基类影响全部用例，脚本会拒绝只跑增量 |
 
 - 影响面表 = `run_changed_tests.py` 的 `IMPACT`（跨模块依赖）与 `FRONTEND_MODULES`（前端静态契约），契约由 `tests/test_changed_tests.py` 守护。
-- 增量运行不写 `data/test_last.json`；该文件只由全量 `run_tests.py` 更新，供 Obsidian 自测报告笔记读取。
-- 全量是推送前的最终兜底，增量全绿不替代全量。
+- 增量运行不写 `data/test_last.json`；该文件只由全量 `run_tests.py` 更新，供 Obsidian 自测报告笔记读取。日常迭代不刷新该快照是预期行为，**不是补跑全量的理由**。
+- **全量 `python run_tests.py` 的封闭白名单（用户 2026-11-15 二次纠正，仅此三条）**：① 用户本轮明确要求推送 / `git push`；② 用户本轮明确要求打 tag / 发版 / 打包；③ 本轮改了 `tests/base.py` 或数据库 schema。**其余情况一律不得跑全量**。
+- **禁止借口**：「改动面大 / 文件多」「想兜底一下」「收尾再验一遍」「确认总用例数」「增量全绿后顺手再跑一次」全部无效。**增量全绿 = 验收通过**，直接同步文档、记日志、本地提交；日常回复里不报全量数字。完整口径见 `AGENTS.md` 文件顶部测试铁律与 3.0.1，契约由 `tests/test_docs.py::test_incremental_test_policy_is_documented_in_agents` 守护。
 
 ---
 
@@ -190,7 +191,7 @@ python run_tests.py            :: 或 python cli.py test
 
 ## 6. 发版门禁（仅用户明确要求发版时执行）
 
-> 日常需求提交只需 `python run_tests.py` 全绿（改了 Python / JS 再补 `compileall` / `node --check`）。以下清单是发版专属，见 `AGENTS.md` 3.0 —— 不要每个需求都打包、打 tag。
+> 日常需求提交**只需 `python run_changed_tests.py` 增量全绿**（改了 Python / JS 再补 `compileall` / `node --check`），**不要跑全量 `python run_tests.py`**；全量只在本报告第 0 节的封闭白名单三种情形下执行。以下清单是发版专属，见 `AGENTS.md` 3.0 与 3.0.1 —— 不要每个需求都打包、打 tag，也不要每个需求都跑全量。
 
 - [ ] `compileall` 通过
 - [ ] `node --check web/app.js` 通过

@@ -83,6 +83,24 @@ class VersionConsistencyTests(unittest.TestCase):
         js = (ROOT / "web/app.js").read_text(encoding="utf-8")
         self.assertIn("obsidian-sync", js)
 
+    def test_incremental_test_policy_is_documented_in_agents(self):
+        """用户 2026-11-15 二次纠正：日常只跑增量，禁止拿「改动面大」当借口加跑全量。
+
+        这条约定必须写进 AGENTS.md（新会话第一优先级文件），且是封闭白名单口径，
+        防止以后被改回「全量是最终兜底，顺手跑一下」的模糊表述。
+        """
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        self.assertIn("run_changed_tests.py", text)
+        self.assertIn("封闭白名单", text)
+        self.assertIn("增量全绿", text)
+        self.assertIn("禁止", text)
+        # 白名单三种触发条件都要在文档里点名
+        for token in ("git push", "tests/base.py", "发版"):
+            self.assertIn(token, text)
+        # 被明确否决的借口也要在，避免只写「尽量」留口子
+        for token in ("改动面大", "兜底", "收尾"):
+            self.assertIn(token, text)
+
     def test_obsidian_doc_declares_current_version(self):
         text = (ROOT / "docs/OBSIDIAN.md").read_text(encoding="utf-8")
         self.assertIn(__version__, text)
