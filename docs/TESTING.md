@@ -1,6 +1,6 @@
-# 自测与单元测试报告 · v0.1.4
+# 自测与单元测试报告 · v0.1.5
 
-> 执行时间：2026-11-15；环境：Windows 10 专业版 / Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157。
+> 执行时间：2026-11-15（v0.1.5 发版门禁）；环境：Windows 10 专业版 / Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157。
 > 本报告只记录**实际跑过的命令与真实输出**，未实测的能力不会写成「通过」。
 
 ---
@@ -26,15 +26,15 @@
 
 | 项目 | 结果 |
 |---|---|
-| 单元测试 | **173 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，耗时 25.44 秒） |
+| 单元测试 | **709 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，详见第 11 节） |
 | Python 语法 | `compileall` 全通过 |
 | JavaScript 语法 | `node --check web/app.js` 通过 |
-| 原生窗口 | 8 个页面全部渲染成功，`js_api` 暴露 36 个方法；扫描结果 / 媒体库共用全量列表组件 |
-| 打包产物 | 0.1.3：ZIP 21.8 MB / MSI 21.9 MB，`exe --selftest` 全通过；0.1.4 重新构建的产物验收见第 10 节 |
+| 原生窗口 | 9 个页面（含新增「网页搜索」）全部渲染成功，`js_api` 暴露 40 余个方法；扫描结果 / 媒体库共用全量列表组件 |
+| 打包产物 | 0.1.4：ZIP 21.8 MB / MSI 22.0 MB（见第 10 节）；0.1.5 重新构建的产物验收见第 11.3 节 |
 | CLI | `init / status / dict / progress / player / mark / test / obsidian` 全部可用 |
 | 真实数据 | 旧播放记录、会话、断点进度、词典完整保留，未被本轮改动破坏 |
 | Obsidian 真实 vault | 首次同步生成 6 篇笔记 + 当天日志；用户原有 2 篇笔记 md5 前后完全一致；二次同步批注保留、日志去重通过 |
-| 远程推送 | 已完成：`master` + `v0.1.0`~`v0.1.4` 推送到私有仓库 `tiantangliwai/magic-video`（SSH 通道） |
+| 远程推送 | 已完成：`master` + `v0.1.0`~`v0.1.5` 推送到私有仓库 `tiantangliwai/magic-video`（SSH 通道） |
 
 ---
 
@@ -42,19 +42,45 @@
 
 | 测试文件 | 用例数 | 覆盖内容 |
 |---|---:|---|
-| `tests/test_db.py` | 10 | 建表 8 张、WAL、设置读写与容错、旧库迁移不丢数据、外键级联、幂等初始化 |
-| `tests/test_importer.py` | 19 | 行解析（季/集/范围/CSV/TSV/年份/注释）、文本去重、预览即时匹配、季名映射、提交去重、用户修正记忆 |
-| `tests/test_scanner.py` | 17 | 字幕组命名、`SxxEyy`、中文话数、结尾集数、年份与标签清洗、忽略规则、增量扫描、目录停用、文件不可读容错 |
-| `tests/test_metadata.py` | 20 | 归一化/季数解析、内置词典完整性、离线加载幂等、中英日命中、季名映射、用户修正优先级、`local_only` 状态、在线结果即时学习、写回行数、重匹配、词典统计、外部词典导入 |
-| `tests/test_potplayer.py` | 15 | 时间格式化、窗口标题解析、文件反查、进度百分比与钳制、无窗口降级、非 Windows 安全导入、`/seek` 参数组装、缺文件报错 |
-| `tests/test_watcher.py` | 10 | 首次轮询即写进度、进度推进、完成阈值、已看完不回退、切集结算、播放器关闭、外部文件登记、时长回填、回调异常隔离 |
 | `tests/test_api.py` | 15 | 版本信息、统计、导入往返、设置白名单、代理重置、续播参数、已看完列表、标记已看/未看/重置进度、目录扫描桥接、守护探测 |
-| `tests/test_smoke.py` | 2 | 端到端串联（导入 → 扫描 → 播放记录 → 续播 → 纠错 → 历史）、测试库隔离验证 |
-| `tests/test_docs.py` | 11 | 版本语义化、交付文档齐备、版本一致、gitignore、依赖格式、前端、前端缓存串、无定时任务残留、Obsidian 接线与文档版本 |
-| `tests/test_obsidian.py` | 26 | vault 探测与多选不猜、路径穿越防护、首次生成 6 篇笔记、同名用户笔记不覆盖、AUTO 区块外批注保留、frontmatter 用户字段保留、日志事件去重、历史快照去重、命名空间外零改动、路线图解析、结果渲染、状态查询、API 桥接与设置白名单 |
-| `tests/test_packaging.py` | 17 | 四种路径布局、两种形态启动命令、开机自启、笔记降级、守护/窗口/自检分发 |
-| `tests/test_media_browser.py` | 11 | 分页总数与旧上限、搜索字段、组合筛选、全量模式与排序、注入/越界安全、点击播放、前端契约 |
-| **合计** | **173** | v0.1.4 相对 161 新增 12 项（11 项全量文件浏览 + 1 项前端缓存守护） |
+| `tests/test_blacklist.py` | 38 | 默认开启、分隔符解析与去重、包含匹配、字形归一化（`亜`/`亞`/`亚`、NFKC 全角）、短英文词词边界与 GLOB 下推、目录派生的分组标题与季子节点过滤、各视图/历史/统计全被过滤、只隐藏不删行、关闭后全恢复 |
+| `tests/test_changed_tests.py` | 16 | 增量测试映射契约：`IMPACT` / `FRONTEND_MODULES` 不漏项、拒绝无授权全量 |
+| `tests/test_continue_dismiss.py` | 15 | 继续观看软删除、历史按作品只留最新、旧会话零删除 |
+| `tests/test_covers.py` | 23 | AGE / Seeduck 页面解析、只取 `data-original`、占位图排除、精确与严格选取阈值、封面文件名哈希 |
+| `tests/test_daemon_autostart.py` | 38 | 守护自动启动幂等、开关关闭立即停止、`Api.__init__` 绝不拉起进程 |
+| `tests/test_db.py` | 10 | 建表、WAL、设置读写与容错、旧库迁移不丢数据、外键级联、幂等初始化 |
+| `tests/test_docs.py` | 12 | 版本语义化与一致性、交付文档齐备、前端缓存串、增量测试制度契约、Obsidian 接线 |
+| `tests/test_embedded_player.py` | 23 | `SetParent` 嵌入、HWND 记录、失败降级外部播放、退出 `detach`、库外文件 `external` |
+| `tests/test_everything.py` | 9 | `es.exe` → HTTP → SQL 三级降级、Error 8 会话隔离提示 |
+| `tests/test_everything_open.py` | 14 | `es.exe` 空串回退、HTTP 认证、打开主程序与文件 |
+| `tests/test_importer.py` | 19 | 行解析（季/集/范围/CSV/TSV/年份/注释）、去重、预览即时匹配、提交去重、用户修正记忆 |
+| `tests/test_importer_realworld.py` | 17 | 真实清单脏数据、季集范围、异常行容错 |
+| `tests/test_manual_cleanup.py` | 36 | 删单条历史会话、整剧删本地文件进回收站、拒危险路径、单次上限 300 |
+| `tests/test_manual_cover.py` | 23 | 人工封面魔数与体积校验、`source=manual` 优先、`force` 也不覆盖、撤销 |
+| `tests/test_media_browser.py` | 12 | 分页总数与旧上限、搜索字段、组合筛选、全量模式与排序、注入安全、点击播放、跳转返回入口契约 |
+| `tests/test_media_tree.py` | 14 | 作品 → 季 → 集分组、无季文件直挂 `series.files`、工作标签重命名 |
+| `tests/test_metadata.py` | 20 | 归一化/季数解析、内置词典完整性、离线命中、用户修正优先、在线结果即时学习 |
+| `tests/test_obsidian.py` | 26 | vault 探测、路径穿越防护、笔记生成、AUTO 区块外批注保留、日志去重 |
+| `tests/test_packaging.py` | 19 | 四种路径布局、两种形态启动命令、开机自启、守护/窗口/自检分发 |
+| `tests/test_player_controls.py` | 35 | `WM_COMMAND` 命令号、三通道逐条退让、`POT_GET_PLAY_STATUS` 复查、倍速与全屏虚拟键、动作白名单 |
+| `tests/test_poster_watched.py` | 14 | 剧集墙五态判定、进度优先于看过的列表、宽松匹配不误标、导入后缓存失效 |
+| `tests/test_potplayer.py` | 20 | 时间格式化、窗口标题反查、进度百分比与钳制、`/seek` 参数组装 |
+| `tests/test_quicksearch.py` | 7 | 全盘快搜独立入口与导航视图一致性契约 |
+| `tests/test_scanner.py` | 17 | 字幕组命名、`SxxEyy`、中文话数、忽略规则、增量扫描、目录停用 |
+| `tests/test_smoke.py` | 2 | 端到端串联（导入 → 扫描 → 播放记录 → 续播 → 纠错 → 历史） |
+| `tests/test_startup.py` | 15 | 单实例、`js_api` 反射安全、播放器消息超时、一键启动脚本 |
+| `tests/test_sync_dedupe.py` | 9 | 按 `(title, 季)` 合并成区间行、幂等、清理旧的「每集一条」 |
+| `tests/test_theme.py` | 9 | 主题切换持久化、SVG 图标数量、导航与视图元信息一致 |
+| `tests/test_theme_native.py` | 13 | DWM 属性设置与失败降级 |
+| `tests/test_watched_cleanup.py` | 37 | 清洗只改 `title`/`title_cn`/`match_by`、卡片墙结构、四种视图与默认平铺表格 |
+| `tests/test_watched_folders.py` | 22 | 看过的列表 → 资源管理器、`is_safe_directory`、上退层数不跨扫描根 |
+| `tests/test_watched_list.py` | 12 | 看过的列表快速搜索与行内改名 |
+| `tests/test_watched_season.py` | 10 | 季数双击编辑、`2` / `S3` / `第4季`、非法值拒绝 |
+| `tests/test_watcher.py` | 10 | 轮询写进度、完成阈值、切集结算、外部文件登记 |
+| `tests/test_watchlist.py` | 49 | 导入、两栏互转、↑↓ 调序、匹配、未明确不得重灌 |
+| `tests/test_watchlist_top.py` | 9 | 同栏置顶、已置顶不移动、跨栏隔离、按钮等宽右对齐 CSS |
+| `tests/test_websearch.py` | 20 | 两站真实结构解析、占位图排除、绝对 URL、来源标记、单站失败降级、`open_url` 白名单 |
+| **合计** | **709** | v0.1.5 相对 0.1.4 的 173 新增 **536** 项，测试模块 12 → 38 个 |
 
 ### 隔离机制
 
@@ -350,3 +376,54 @@ AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0�
 - 首次隐藏窗口冒烟读到的仍是**旧界面**：`app/main.py` 的 `private_mode=False` 让 WebView2 复用了持久 profile 里缓存的旧 `app.js`。
 - 修复：`private_mode=True`（临时 profile）+ `web/index.html` 的 `app.js?v=<版本>` 双保险，并新增 `tests/test_docs.py::test_frontend_is_not_served_from_stale_cache` 守护，防止以后发版漏改缓存串。
 - 纯 JS 层用 Node `vm` 模拟 DOM 验证：`renderScan` / `renderLibrary` 均渲染出 `fileListBox` 与搜索框，`fileListRows` 生成可点击播放链接，`loadFileList` 正确传入 6 个查询参数并只局部刷新列表容器。
+
+---
+
+## 11. v0.1.5 发版门禁（一天 27 次迭代的集中验收）
+
+本版把 0.1.4 之后累计的 27 个本地提交一次性发布，因此门禁按「发版」标准执行：
+`compileall` + `node --check` + **全量 `run_tests.py`** + 打包链 + 产物验收。
+
+### 11.1 代码与用例（真实输出）
+
+| 检查 | 命令 | 结果 |
+|---|---|---|
+| Python 语法 | `.venv\Scripts\python.exe -m compileall -q app tests *.py` | `PY_OK` |
+| JavaScript 语法 | `node --check web/app.js` | `JS_OK` |
+| 全量单元测试 | `.venv\Scripts\python.exe run_tests.py` | **709 / 709 全绿**（0 失败 / 0 错误 / 0 跳过，83.69 秒），快照写入 `D:/magicvideo/test_last.json` |
+| 用例规模 | `TestLoader().discover('tests')` | 709，测试模块 38 个（0.1.4 为 173 / 12 个） |
+
+### 11.2 真实库接口耗时（`MAGIC_VIDEO_DATA_DIR=D:/magicvideo`，2105 个文件）
+
+| 接口 | 首次 | 命中缓存 |
+|---|---:|---:|
+| `get_poster_wall`（193 张卡片） | 467 ms | 13 ms |
+| `get_media_tree`（1954 个节点） | 177 ms | 11 ms |
+| `get_media_files_page`（每页 50） | 151 ms | — |
+| `get_stats` | 60 ms | — |
+| `get_watched_list` | 17 ms | — |
+| `get_watchlist`（762 条） | 331 ms | — |
+| `get_history` / `get_continue_watching` | 5 ms / 5 ms | — |
+
+剧集墙首次比 0.1.4 的 1105 ms 降了约 58%，其中约 200 ms 是首次构建「看过的列表」匹配索引（之后按数据指纹缓存，守护写播放进度不会让它失效）。
+真实库 193 张卡片的观看状态分布：`none` 188 / `listed` 2 / `partial` 1 / `done` 1 / `watching` 1——`listed` 的 3 张逐条人工核对过，全部为真匹配。
+
+### 11.3 产物验收（0.1.5，真实执行）
+
+| 检查 | 方法 | 结果 |
+|---|---|---|
+| 构建链 | `.venv\Scripts\python.exe build_dist.py` | ZIP 22.1 MB / MSI 22.2 MB；WiX `candle -dProductVersion=0.1.5` |
+| exe 自检 | 构建脚本内 `Magic Video.exe --selftest` | `ok=True` / `version=0.1.5` / `frozen=True`；资源在 `_internal`、数据在临时目录 |
+| ZIP 内容 | `zipfile` 逐项核对 | 218 条目；`Magic Video/Magic Video.exe`、`portable.txt`、`_internal/web/`、`_internal/app/data/aliases_builtin.json`、`_internal/webview/lib/Microsoft.Web.WebView2.*.dll` 齐全 |
+| 打包版前端 | 读 ZIP 内 `_internal/web/index.html` 与 `app.js` | 缓存串 `app.js?v=0.1.5` 存在；含 `web_search` / `renderWebSearch` / `posterStateTag` / `watchedCardsHtml` / `goto-back` |
+| MSI 属性 | `dark.exe` 反编译成 `product.wxs` | `Version="0.1.5"`、`Name="Magic Video"`、`UpgradeCode` 与历史版本一致 |
+
+> 打包踩坑（已固化到 AGENTS §8）：PyInstaller 的 `COLLECT` 会先删旧 `build/pyi-dist/Magic Video`，该操作被安全删除策略拦下导致构建失败。正确做法是**先把旧目录 `mv` 成 `Magic Video.prev`**，再跑 `build_dist.py`。
+
+### 11.4 本版未覆盖 / 待人工验证
+
+- **MSI 在干净机器上的安装 / 升级 / 卸载**：只验证了版本属性与文件清单，未在无 Python 环境的机器上跑安装向导。
+- **内嵌播放的真实窗口行为**：`SetParent` 单元测试全部 mock Win32 调用，真实嵌入效果需在有 PotPlayer 的桌面上手动确认。
+- **播放控制指令的跨版本兼容**：`via=command:10014` 只在本机 PotPlayer 上实测过；不同版本对 `WM_COMMAND` 命令号的响应需实机确认。
+- **网页搜索的两站可用性**：依赖外网，站点改版会让解析规则失效（已做单站失败降级，但两条都挂时搜索页为空）。
+- **黑名单字形表**：只收了字形一一对应的异体（日文新字体 / 繁体 / 旧字形），未做乾/干、著/着这类多义合并；遇到新字型仍需补表。
