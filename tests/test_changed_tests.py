@@ -49,6 +49,17 @@ class ImpactMappingTests(unittest.TestCase):
         self.assertTrue(shared <= modules_for("app/textmatch.py"))
         self.assertTrue(shared <= modules_for("app/covers.py"))
 
+    def test_watched_folder_module_is_in_frontend_and_api_mapping(self):
+        """看过的列表 / 目录跳转契约不能被共用文件改动漏掉。"""
+        for path in ("web/app.js", "web/style.css"):
+            mods = modules_for(path)
+            self.assertIn("tests.test_watched_list", mods)
+            self.assertIn("tests.test_watched_folders", mods)
+        for path in ("app/api.py", "app/file_ops.py", "app/watchlist.py"):
+            self.assertIn("tests.test_watched_folders", modules_for(path))
+        self.assertEqual(modules_for("tests/test_watched_folders.py"),
+                         {"tests.test_watched_folders"})
+
     def test_changed_test_file_runs_itself(self):
         self.assertEqual(modules_for("tests/test_api.py"), {"tests.test_api"})
 

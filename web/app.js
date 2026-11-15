@@ -30,6 +30,7 @@ let watchedEditing = 0;
 let watchedGrouped = false;         // 表格视图默认平铺，不按作品折叠
 let watchedViewMode = 'cards';      // 看过的列表：卡片墙 / 表格，两种都可切换
 let watchedCovers = {};             // 作品名 -> 封面 data URI（只读缓存，不触发抓取任务）
+let watchedFolders = {};            // watched_list.id -> 匹配到的本地目录（只用来决定按钮显隐）
 const watchedOpen = new Set();     // 已展开的分组 key
 
 const VIEW_META = {
@@ -694,6 +695,14 @@ async function saveWatchedEdit(rid) {
   } finally { watchedSaving = false; }
 }
 
+// 只有匹配到扫描目录的作品才显示「打开文件夹」；按钮只带条目 id，路径由后端现算现校验
+function watchedFolderButton(rowId) {
+  return watchedFolders[Number(rowId)]
+    ? `<button class="btn btn-sm" data-action="open-watched-folder" data-id="${num(rowId)}"
+        title="在文件资源管理器里打开这个作品所在的文件夹">打开文件夹</button>`
+    : '';
+}
+
 function watchedRowHtml(r) {
   const [label, tone] = MATCH_LABEL[r.match_by] || ['—', ''];
   if (watchedEditing === Number(r.id)) {
@@ -715,6 +724,7 @@ function watchedRowHtml(r) {
     <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
     <td>${esc(shortDate(r.imported_at))}</td>
     <td><div class="watched-actions">
+      ${watchedFolderButton(r.id)}
       <button class="btn btn-sm" data-action="edit-watched" data-id="${r.id}">改名</button>
       <button class="btn btn-sm btn-danger" data-action="delete-watched" data-id="${r.id}">删除</button>
     </div></td>
@@ -743,12 +753,15 @@ function watchedCardsHtml(groups) {
       ? `<img class="poster-art" src="${cover}" alt="${esc(g.key)}" loading="lazy">`
       : `<div class="poster-art poster-placeholder"><span>${esc((g.key || '?').slice(0, 2))}</span></div>`;
     const seasons = g.seasons.size ? `<span class="poster-tag">${g.seasons.size} 季</span>` : '';
+    // 一张卡可能对应多季/多条，取组内第一条能匹配到本地目录的记录
+    const folderRow = g.rows.find(r => watchedFolders[Number(r.id)]) || g.rows[0];
     return `<div class="poster-card">${art}
       <div class="poster-body">
         <div class="poster-title" title="${esc(g.key)}">${esc(g.key)}</div>
         <div class="poster-meta">${g.rows.length} 条记录</div>
         <div class="poster-tags">${seasons}</div>
         <div class="poster-actions">
+          ${folderRow ? watchedFolderButton(folderRow.id) : ''}
           <button class="btn btn-sm" data-action="watched-view-mode">查看条目</button>
         </div>
       </div></div>`;
@@ -800,7 +813,13 @@ function renderWatchedRows() {
 }
 
 async function renderWatched() {
-  watchedRows = await call('get_watched_list', 0);
+  // 列表数据与「匹配到的本地目录」并行取；目录接口异常时只隐藏按钮，不影响列表本身
+  const [rows, folderData] = await Promise.all([
+    call('get_watched_list', 0),
+    call('watched_folders').catch(() => ({ folders: {} })),
+  ]);
+  watchedRows = rows;
+  watchedFolders = (folderData && folderData.folders) || {};
   watchedEditing = 0;
   // 封面只读缓存：和剧集墙同一条 cover_data_uris 通道，不触发后台抓取任务
   // 作品名与中文名都试一遍：封面缓存可能以其中任一种标题落盘
@@ -814,7 +833,8 @@ async function renderWatched() {
   setContent(`<div class="card watched-card"><div class="section-head"><h3>看过的列表</h3>
       <span class="badge blue" id="watchedCount">正在统计…</span></div>
     <p class="hint">你手动导入的已观看作品。<b>默认卡片墙</b>：每部作品一张封面卡片、只显示一个作品名；
-      切到表格后双击作品名可直接改名（默认平铺、不分组），导入原文始终保留。</p>
+      切到表格后双击作品名可直接改名（默认平铺、不分组），导入原文始终保留。
+      <b>能在扫描目录里匹配到对应作品时</b>，条目上会出现「打开文件夹」，用资源管理器跳到该文件所在目录。</p>
     <div class="watched-toolbar">
       <input class="input" id="watchedSearch" placeholder="搜索作品名 / 中文名 / 导入原文 / 备注…" value="${esc(watchedKeyword)}" autocomplete="off">
       <button class="btn btn-sm" data-action="watched-view-mode">${cards ? '切换为表格' : '切换为卡片墙'}</button>
@@ -1535,6 +1555,11 @@ async function handleAction(action, btn) {
       toast(`已清洗 ${r.updated} 条标题 · 删除 ${r.deleted} 条垃圾行`, r.ok);
       await renderWatched();
       return;
+    }
+    case 'open-watched-folder': {
+      const r = await call('open_watched_folder', Number(id));
+      toast(r.ok ? '已在文件资源管理器中打开对应文件夹' : (r.error || '打开失败'), r.ok);
+      return;                                  // 只开窗口，不整页刷新
     }
     case 'watched-view-mode': {
       watchedViewMode = watchedViewMode === 'cards' ? 'table' : 'cards';

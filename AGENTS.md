@@ -51,6 +51,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 31 | 看过的列表 / 媒体库都做**卡片墙 + 表格可切换**：每部作品一张封面卡片、只显示一个作品名、不补中文名列；看过的列表默认平铺 | 用户明确要求（0.1.4 日常迭代，选择「两种都做可切换」） |
 | 32 | 扫描结果按**磁盘目录结构**展示；设置页「保存设置」等按钮固化在内容顶部、上下滚动时常驻 | 用户明确要求（0.1.4 日常迭代） |
 | 33 | 分组修正：`Anna Directors Cut E01–E08` 归成一部剧、`1.36G` 显示为「爱的躯壳」、尽量按目录统一归并、**去掉「未标注季」这一层**，并提供用户可编辑作品名的能力 | 用户明确要求（0.1.4 日常迭代） |
+| 34 | 看过的列表中能匹配到**扫描目录对应目录**的作品，支持用文件资源管理器跳转到该文件夹；匹配不到就不显示入口 | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -218,6 +219,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。**无季标记的文件直接挂作品组，禁止再生成「未标注季」节点**；分组改名只写 `settings.work_labels_json` 展示映射，绝不 `UPDATE media_files`，树 / 剧集墙 / 整剧树三处必须同源。
 - 展示视图改动：`tests/test_watched_cleanup.py` 必须覆盖卡片墙 / 表格切换、看过的列表默认平铺与单作品名、四种文件视图（cards/series/folder/flat）与扫描页默认 folder、设置页 sticky 工具条、作品改名两端接线；看过的列表取封面只能调 `cover_data_uris` 读缓存，**不得触发后台抓取任务**。
+- 本地目录跳转改动：`tests/test_watched_folders.py` 必须覆盖目录白名单（绝对路径 / 真实存在 / 非系统目录 / 在扫描根内）、匹配与未匹配分支、文件直接在扫描根内、失效发布目录向上回退 2 层（但**不退到扫描根本身 / 不跨出扫描根**）、只传 `id` 不传路径、`os.startfile` 全程 mock 且失败不抛异常、前端两种视图共用按钮与接口失败降级。**前端绝不把 path 传给后端**；打开动作只允许 `os.startfile`，禁止 `explorer` 命令拼接；`get_watched_list` 返回结构不得为此改动；目录匹配必须复用 `watchlist.media_index()` + `match_files()`，不得另写一套搜索 SQL。
 - 启动 / 单实例改动：`tests/test_startup.py` 必须覆盖互斥锁、已有窗口置前、js_api 反射安全与 `./start` 脚本；主题改动必须同时跑 `tests/test_theme.py` 与 `tests/test_theme_native.py`（DWM 原生标题栏、降级路径、CSS `color-scheme` 契约）。
 - 默认数据目录改动：`tests/test_packaging.py` 的布局断言与 `tests/test_startup.py` 的 `start` 脚本契约必须同步；**改真实库前先用 `sqlite3.backup()` 做一致性快照、旧目录保留不删除**。
 - 看过的列表解析 / 清洗 / 同步改动：`tests/test_watched_cleanup.py` 必须覆盖解析防再犯、清洗幂等与 `match_by='user'` 保护、区间覆盖判重、守护断点兜底与前端静态契约；清洗函数**只改 `title/title_cn/match_by`**，保留 `raw_text`、季、集、备注。

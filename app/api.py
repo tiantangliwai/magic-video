@@ -257,6 +257,111 @@ class Api:
             params.append(size)
         return db.rows(sql, tuple(params))
 
+    # ---- 看过的列表 → 本地目录：只读匹配 + 资源管理器跳转 ------------------
+    @staticmethod
+    def _existing_folder(folder: str, roots: list[str]) -> str:
+        """发布目录若已被移走/改名，退到最近一层仍存在的上级作品目录。
+
+        目录本身恰好就是扫描根（文件直接放在根里）是合法的，仍原样返回；
+        **向上回退时不会退到扫描根**，也不会跨出扫描根，避免打开整个大盘。
+        最多向上找 2 层，不存在的分支一律返回空串（按钮就不显示）。
+        """
+        safe, _why = file_ops.is_safe_directory(folder, roots)
+        if safe:
+            return folder
+        try:
+            p = Path(folder)
+            root_paths = [Path(r).resolve() for r in roots if str(r or "").strip()]
+            parent = p.parent
+        except (OSError, ValueError):
+            return ""
+        for _ in range(2):
+            if parent == p:
+                return ""
+            try:
+                resolved_parent = parent.resolve()
+            except OSError:
+                return ""
+            # 比较时才 resolve（Windows 可能给短名），返回给调用方的始终是原始长路径
+            if any(resolved_parent == root for root in root_paths):
+                return ""
+            if not any(resolved_parent.is_relative_to(root) for root in root_paths):
+                return ""
+            safe, _why = file_ops.is_safe_directory(str(parent), roots)
+            if safe:
+                return str(parent)
+            p, parent = parent, parent.parent
+        return ""
+
+    @staticmethod
+    def _watched_folder_for(row: dict, media: list[dict], roots: list[str]) -> str:
+        """这部作品在本地最可能的发布目录；匹配不到或目录不安全时返回空串。
+
+        复用追剧列表同一套「关键词优先级首个命中即停」匹配，避免另写一套搜索。
+        一部剧偶尔散在多个目录，取命中文件最多的那个。
+        """
+        for title in (str(row.get("title") or "").strip(),
+                      str(row.get("title_cn") or "").strip()):
+            if not title:
+                continue
+            _count, files, _keyword = watchlist.match_files(title, media)
+            if not files:
+                continue
+            counts: dict[str, int] = {}
+            for f in files:
+                folder = os.path.dirname(str(f.get("path") or ""))
+                if folder:
+                    counts[folder] = counts.get(folder, 0) + 1
+            for folder, _ in sorted(counts.items(), key=lambda kv: (-kv[1], kv[0].lower())):
+                existing = Api._existing_folder(folder, roots)
+                if existing:
+                    return existing
+        return ""
+
+    @staticmethod
+    def _scan_roots() -> list[str]:
+        return [str(r["path"]) for r in db.rows("SELECT path FROM directories")]
+
+    def watched_folders(self) -> dict:
+        """看过的列表每行 -> 匹配到的本地目录（未匹配的行不出现在字典里）。
+
+        只用来决定「打开文件夹」按钮是否出现；真正的打开动作仍由
+        ``open_watched_folder`` 按 id 重新计算并二次校验，**前端不传路径**。
+        """
+        rows = db.rows("SELECT id, title, title_cn FROM watched_list")
+        media = watchlist.media_index()
+        roots = self._scan_roots()
+        folders = {}
+        for row in rows:
+            folder = self._watched_folder_for(row, media, roots)
+            if folder:
+                folders[int(row["id"])] = folder
+        return {"ok": True, "folders": folders}
+
+    def open_watched_folder(self, item_id: int) -> dict:
+        """用文件资源管理器打开该作品所在的本地目录；只读打开，不改任何文件。"""
+        try:
+            rid = int(item_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "条目编号无效"}
+        row = db.row("SELECT id, title, title_cn FROM watched_list WHERE id = ?", (rid,))
+        if not row:
+            return {"ok": False, "error": "这条记录已不存在"}
+        roots = self._scan_roots()
+        folder = self._watched_folder_for(row, watchlist.media_index(), roots)
+        if not folder:
+            return {"ok": False, "error": "没有匹配到扫描目录里的对应作品，无法跳转"}
+        safe, why = file_ops.is_safe_directory(folder, roots)
+        if not safe:
+            return {"ok": False, "error": why or "目录校验未通过"}
+        if not hasattr(os, "startfile"):
+            return {"ok": False, "error": "当前系统不支持打开资源管理器"}
+        try:
+            os.startfile(folder)           # 不是 shell 命令，无法被拼接注入
+            return {"ok": True, "path": folder}
+        except OSError as exc:
+            return {"ok": False, "error": str(exc)}
+
     def update_watched(self, item_id: int, title: str | None = None,
                       title_cn: str | None = None) -> dict:
         """行内改名。None = 不改该字段；中文名传空串表示清空。

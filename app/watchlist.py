@@ -122,6 +122,11 @@ def _media_haystacks() -> list[dict]:
     return rows
 
 
+def media_index() -> list[dict]:
+    """给其它模块复用的媒体检索索引（追剧列表 / 看过的列表共用同一套归一化）。"""
+    return _media_haystacks()
+
+
 def match_files(title: str, media: list[dict]) -> tuple[int, list[dict], str]:
     """按关键词优先级逐个尝试，**第一个命中的关键词即采用**。
 

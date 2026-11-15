@@ -63,6 +63,43 @@ def is_safe_video_path(path) -> tuple[bool, str]:
     return True, ""
 
 
+def is_safe_directory(path, roots=None) -> tuple[bool, str]:
+    """校验「用资源管理器打开」的目录是否安全。
+
+    与 :func:`is_safe_video_path` 不同，这里针对的是**目录**：不检查视频后缀，
+    但必须是绝对路径、真实存在、不在系统目录黑名单里，并且（给了 roots 时）
+    落在已登记的扫描根目录内。只做只读判断，绝不改动磁盘。
+    """
+    text = str(path or "").strip()
+    if not text:
+        return False, "路径为空"
+    p = Path(text)
+    if not p.is_absolute():
+        return False, "路径不是绝对路径"
+    if {part.lower() for part in p.parts} & _BLOCKED_PARTS:
+        return False, "路径位于系统目录，已拒绝"
+    try:
+        resolved = p.resolve()
+        if {part.lower() for part in resolved.parts} & _BLOCKED_PARTS:
+            return False, "路径位于系统目录，已拒绝"
+        if not resolved.is_dir():
+            return False, "目录不存在或已被移动"
+    except OSError as exc:
+        return False, f"目录不可访问：{exc}"
+    allowed = [str(r) for r in (roots or []) if str(r or "").strip()]
+    if allowed:
+        for raw in allowed:
+            try:
+                root = Path(raw).resolve()
+            except OSError:
+                continue
+            if resolved == root or resolved.is_relative_to(root):
+                break
+        else:
+            return False, "目录不在已添加的扫描目录内，已拒绝"
+    return True, ""
+
+
 def _shell_trash(path: str) -> tuple[bool, str]:
     """调用 SHFileOperationW(FO_DELETE + FOF_ALLOWUNDO) 把单个文件移入回收站。"""
     if os.name != "nt":

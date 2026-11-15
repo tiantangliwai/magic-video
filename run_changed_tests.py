@@ -34,7 +34,8 @@ sys.path.insert(0, str(ROOT))
 IMPACT: dict[str, tuple[str, ...]] = {
     "app/api.py": ("tests.test_media_browser", "tests.test_media_tree",
                    "tests.test_manual_cleanup", "tests.test_watched_cleanup",
-                   "tests.test_player_controls", "tests.test_continue_dismiss"),
+                   "tests.test_player_controls", "tests.test_continue_dismiss",
+                   "tests.test_watched_folders"),
     "app/db.py": ("tests.test_api", "tests.test_manual_cleanup", "tests.test_watcher",
                   "tests.test_continue_dismiss"),
     "app/config.py": ("tests.test_packaging", "tests.test_startup", "tests.test_theme"),
@@ -42,7 +43,7 @@ IMPACT: dict[str, tuple[str, ...]] = {
     "app/importer.py": ("tests.test_importer", "tests.test_importer_realworld",
                         "tests.test_watched_cleanup", "tests.test_watched_list"),
     "app/covers.py": ("tests.test_covers", "tests.test_watchlist"),
-    "app/watchlist.py": ("tests.test_watchlist",),
+    "app/watchlist.py": ("tests.test_watchlist", "tests.test_watched_folders"),
     "app/textmatch.py": ("tests.test_watchlist", "tests.test_covers"),
     "app/everything.py": ("tests.test_everything", "tests.test_quicksearch"),
     "app/embedded_player.py": ("tests.test_embedded_player", "tests.test_potplayer"),
@@ -56,7 +57,7 @@ IMPACT: dict[str, tuple[str, ...]] = {
     "app/main.py": ("tests.test_startup", "tests.test_packaging"),
     "app/runtime.py": ("tests.test_packaging", "tests.test_startup"),
     "app/autostart.py": ("tests.test_startup",),
-    "app/file_ops.py": ("tests.test_manual_cleanup",),
+    "app/file_ops.py": ("tests.test_manual_cleanup", "tests.test_watched_folders"),
     "app/scanner.py": ("tests.test_scanner", "tests.test_manual_cleanup"),
     "app/metadata.py": ("tests.test_metadata", "tests.test_importer"),
     "app/obsidian.py": ("tests.test_obsidian",),
@@ -77,6 +78,9 @@ FRONTEND_MODULES: tuple[str, ...] = (
     "tests.test_media_browser",
     "tests.test_media_tree",
     "tests.test_smoke",
+    # 看过的列表的返回结构与前端契约以前是漏网模块：改共用前端文件必须连带验证
+    "tests.test_watched_list",
+    "tests.test_watched_folders",
 )
 
 DOC_PATHS = ("README.md", "AGENTS.md", "CHANGELOG.md")

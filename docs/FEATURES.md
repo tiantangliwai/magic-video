@@ -616,7 +616,30 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 21. 尚未实现（明确边界，避免误判为缺陷）
+## 21. 看过的列表 → 资源管理器跳转对应文件夹（0.1.4 日常迭代）
+
+### 验收标准
+
+| 需求 | 验收 |
+|---|---|
+| 能匹配到扫描目录里对应作品时，看过的列表条目可跳到该文件夹 | 卡片墙与表格两种视图共用「打开文件夹」按钮；只有 `watched_folders()` 返回了目录的行才显示 |
+| 匹配不到就不要出现入口 | 未匹配行不进 `folders` 字典；`open_watched_folder` 返回「没有匹配到扫描目录里的对应作品」 |
+| 跳转的是作品所在目录，不是扫描根目录概览 | 取命中文件最多的**发布目录**；文件直接放在扫描根里时才原样打开该根 |
+| 目录被移走/改名也不误开整个盘 | `_existing_folder()` 最多向上退 2 层到仍存在、仍在扫描根内的一级作品目录；**回退时不会退到扫描根本身**，也不跨出扫描根 |
+| 不能借这个入口打开任意路径 | 前端只传 `watched_list.id`；后端按 id 重新算目录并二次校验（绝对路径 / 真实存在 / 非系统目录黑名单 / 在 `directories` 登记的扫描根内），再用 `os.startfile` 打开 |
+
+### 数据流与边界
+
+- `renderWatched()` 并行取 `get_watched_list(0)` 与 `watched_folders()`；目录接口异常时 `.catch()` 降级成空字典，列表本身照常渲染。
+- `Api.watched_folders()` 复用 `watchlist.media_index()` + `match_files()`（同一套 `textmatch.query_variants` 关键词优先级、首个命中即停），按 `title` → `title_cn` 依次尝试；不塞进 `get_watched_list` 的返回体，旧契约不变。真实库只读实测：134 条看过的列表里有 **8 条**能匹配到目录，其余作品本地确实没有文件（媒体库里 `进击的巨人 / 鬼灭之刃 / 刀剑神域` 等关键词命中数为 0），属于预期而非漏配。全量匹配一次约 0.16s。
+- 打开动作**只读**：`os.startfile(folder)`，不拼 `explorer` 命令、不写库、不改磁盘；`startfile` 抛 `OSError` 时返回错误文案而不冒泡。
+- 与「人工删除」共用 `app/file_ops.py` 的系统目录黑名单，但 `is_safe_directory()` 是**目录**校验（不检查视频后缀、要求真实存在、要求在扫描根内），和 `is_safe_video_path()` 互不复用。
+
+对应测试：`tests/test_watched_folders.py`（19 个用例，含目录白名单、只传 id、失效目录回退与边界、`startfile` 全程 mock、前端双视图与失败降级）；`run_changed_tests.py` 的 `web/app.js` / `app/api.py` / `app/file_ops.py` / `app/watchlist.py` 映射已连带加入 `tests.test_watched_list` 与 `tests.test_watched_folders`。
+
+---
+
+## 22. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、封面人工确认与多站点兜底。
 - 换用 mpv / libVLC 等开源内核（正在调研，未决定是否迁移；当前仍是 PotPlayer 控制层方案）。
