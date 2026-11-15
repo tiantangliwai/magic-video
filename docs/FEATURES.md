@@ -273,6 +273,39 @@ web/app.js::loadFileList()
 
 ---
 
+## 10. 媒体库树状视图（0.1.4 日常迭代）
+
+### 需求与验收标准
+
+| 需求 | 验收标准 |
+|---|---|
+| 不再只平铺全部视频 | 媒体库默认「作品 → 季 → 集」；第一季/第二季/第三季各自成组，一部番十几集展开季后可逐集看到 |
+| 视图可切换 | 同一组件提供「作品树 / 目录树 / 平铺列表」，切换后搜索、目录筛选、匹配状态筛选保持一致；平铺列表行为与 §9 完全一致 |
+| 作品归并抗脏文件名 | 字幕组命名（`[组][片名][01][1080P]…`）按发布目录归并，去掉字幕组/分辨率/集数范围/季标记；≥2 个文件的目录才作为分组依据，单文件电影不误并；已匹配的干净中文名优先级最高 |
+| 季 / 集可推断 | 解析字段优先，缺省时从 `Season 2`、`S2`、`第三季`、`[01]` 等补齐；无季无集的文件进「未标注季」，总数不丢 |
+| 完整可见 + 不截断 | 树对当前筛选结果的**全部**文件分组（实测 2104 条），与 `page_size` 无关；节点按需展开，折叠时只渲染分组头 |
+| 可直接看可播 | 节点显示集数 / 已看 / 在看与「播放下一集」（优先回到看了一半的一集）；叶子文件行复用 `fileListRows()`，点击即调 `play_file` |
+| 交互稳定 | 展开/折叠只重绘列表容器且不重新查库；搜索时自动展开命中的分组，结果过多时只展开第一层 |
+
+### 数据流
+
+```
+web/app.js::loadFileList()  (view_mode != 'flat')
+  -> Api.get_media_tree({keyword, directory_id, match_state, mode})
+  -> Api._media_filters()（与平铺列表共用，参数绑定 + 排序白名单）
+  -> app/library_tree.py::build_tree(rows, mode, directories)
+        series_tree: clean_cn_key → folder_key_of（去噪音 / 跳过通用目录）→ title_guess
+                     季数 season_of / 集数 episode_of → 作品 → 季 → 文件
+        directory_tree: 扫描根目录 → 子目录 → 文件（库外文件按盘符兜底）
+  -> {mode, groups[节点: id/kind/label/sub/计数/next_file_id/children/files], total, group_count}
+  -> treeNodeHtml() 递归渲染；tree-toggle / tree-*-all 只改 treeState.open
+  -> 叶子文件行 fileListRows() -> data-action="play" -> Api.play_file(id)
+```
+
+对应测试：`tests/test_media_tree.py`（分组、季数/集数推断、脏文件名归并、筛选与无上限、目录树、已看/在看计数与续播集、播放链路、前端契约）。
+
+---
+
 ## 10. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、按季海报墙、看片时长统计、外部追番站点同步。

@@ -166,7 +166,18 @@ async function renderHistory() {
 const fileListState = {
   keyword: '', page: 1, page_size: 200,
   directory_id: 0, match_state: '', sort: 'newest',
+  view_mode: 'flat', mode_touched: false,
 };
+
+// 树状视图：只缓存当前分组结果 + 已展开节点，展开/折叠不重复查库
+const treeState = { data: null, open: new Set() };
+
+function fileViewModeHandler(value) {
+  const mode = ['flat', 'series', 'folder'].includes(value) ? value : 'flat';
+  if (mode !== fileListState.view_mode) treeState.open.clear();
+  fileListState.view_mode = mode;
+  fileListState.mode_touched = true;
+}
 
 function option(value, label, current) {
   return `<option value="${esc(value)}" ${String(value) === String(current) ? 'selected' : ''}>${esc(label)}</option>`;
@@ -195,6 +206,17 @@ function fileListCard(title, hint, directories) {
         ${option(100, '每页 100 条', s.page_size)}${option(200, '每页 200 条', s.page_size)}
         ${option(500, '每页 500 条', s.page_size)}${option(0, '一次显示全部', s.page_size)}
       </select>
+    </div>
+    <div class="tree-toolbar">
+      <span class="tree-toolbar-label">展示方式</span>
+      <select class="input" id="fileViewMode">
+        ${option('series', '作品 → 季 → 集', s.view_mode)}
+        ${option('folder', '目录树', s.view_mode)}
+        ${option('flat', '平铺列表', s.view_mode)}
+      </select>
+      <span class="hint" id="treeSummary">按作品分组，展开季即可看到每一集</span>
+      <button class="btn btn-sm" data-action="tree-expand-all">展开全部分组</button>
+      <button class="btn btn-sm" data-action="tree-collapse-all">全部折叠</button>
     </div>
     <div class="btn-row" style="margin-bottom:10px">
       <button class="btn btn-sm" data-action="file-refresh">刷新列表</button>
@@ -244,12 +266,69 @@ function fileListPagerHtml(data) {
     <button class="btn btn-sm" data-action="file-all">显示全部 ${num(data.total_all)} 个</button>`;
 }
 
+function treeNodeHtml(node, depth) {
+  const open = treeState.open.has(node.id);
+  const icon = node.kind === 'series' ? '▣' : node.kind === 'season' ? '▤' : '▱';
+  const badges = `${num(node.watched_count) ? `<span class="badge green">已看 ${num(node.watched_count)}</span>` : ''}
+    ${num(node.playing_count) ? `<span class="badge amber">在看 ${num(node.playing_count)}</span>` : ''}`;
+  const play = node.next_file_id
+    ? `<button class="btn btn-sm" data-action="play" data-id="${num(node.next_file_id)}">${num(node.playing_count) ? '继续观看' : '播放下一集'}</button>`
+    : '';
+  const children = open
+    ? `<div class="tree-children">
+        ${node.children.map(c => treeNodeHtml(c, depth + 1)).join('')}
+        ${node.files.length ? `<div class="tree-leaf">${fileListRows(node.files)}</div>` : ''}
+      </div>` : '';
+  return `<div class="tree-node tree-node-${esc(node.kind)}" data-depth="${num(depth)}">
+    <div class="tree-head">
+      <button class="tree-caret" data-action="tree-toggle" data-node="${esc(node.id)}"
+        title="展开 / 折叠">${open ? '▾' : '▸'}</button>
+      <span class="tree-icon">${icon}</span>
+      <span class="tree-label">${esc(node.label)}</span>
+      <span class="tree-sub">${esc(node.sub || '')}</span>
+      ${badges}
+      <span class="tree-actions">${play}</span>
+    </div>${children}</div>`;
+}
+
+function treeHtml(data) {
+  if (!data.groups || !data.groups.length) {
+    return empty('没有符合条件的文件', '换个关键词，或把筛选条件改成「全部」');
+  }
+  return `<div class="tree-root">${data.groups.map(g => treeNodeHtml(g, 0)).join('')}</div>`;
+}
+
+function treePagerHtml(data) {
+  const label = data.mode === 'folder' ? '目录树' : '作品 → 季 → 集';
+  return `<span>${esc(label)} · 当前筛选 <b>${num(data.total)}</b> 个文件 ·
+      <b>${num(data.group_count)}</b> 个分组（不受每页条数限制，节点按需展开）</span>
+    <button class="btn btn-sm" data-action="file-flat">切回平铺列表</button>`;
+}
+
+// 搜索时自动把命中的分组展开；结果很多时只展开第一层，避免一次渲染上千行
+function autoExpandHits(data) {
+  if (!fileListState.keyword) return;
+  const full = num(data.total) <= 120;
+  const walk = (node, depth) => {
+    if (depth === 0 || full) treeState.open.add(node.id);
+    if (full) node.children.forEach(c => walk(c, depth + 1));
+  };
+  data.groups.forEach(g => walk(g, 0));
+}
+
+function renderTree() {
+  const box = document.getElementById('fileListBox');
+  if (box && treeState.data) box.innerHTML = treeHtml(treeState.data);
+}
+
 async function loadFileList() {
   const box = document.getElementById('fileListBox');
   if (!box) return;
+  const mode = fileListState.view_mode;
   let data;
   try {
-    data = await call('get_media_files_page', { ...fileListState });
+    data = await call(mode === 'flat' ? 'get_media_files_page' : 'get_media_tree',
+      { ...fileListState, mode });
   } catch (err) {
     box.innerHTML = empty('列表加载失败', String(err && err.message || err));
     return;
@@ -258,15 +337,29 @@ async function loadFileList() {
   if (count) count.textContent =
     `库内 ${num(data.total_all)} 个文件 · 已匹配中文 ${num(data.matched)} · 当前筛选 ${num(data.total)} 个`;
   const pager = document.getElementById('fileListPager');
-  if (pager) pager.innerHTML = fileListPagerHtml(data);
-  box.innerHTML = fileListRows(data.rows || []);
+  const summary = document.getElementById('treeSummary');
+  if (mode === 'flat') {
+    treeState.data = null;
+    if (pager) pager.innerHTML = fileListPagerHtml(data);
+    if (summary) summary.textContent = '当前是平铺列表，可切换成按季分集的树状展示';
+    box.innerHTML = fileListRows(data.rows || []);
+  } else {
+    treeState.data = data;
+    if (pager) pager.innerHTML = treePagerHtml(data);
+    if (summary) summary.textContent = data.mode === 'folder'
+      ? '按磁盘目录层级展开，叶子节点可直接点击播放'
+      : '同一部作品归为一组，按第 1 季 / 第 2 季… 展开到每一集';
+    autoExpandHits(data);
+    box.innerHTML = treeHtml(data);
+  }
 }
 
 async function renderLibrary() {
+  if (!fileListState.mode_touched) fileListState.view_mode = 'series';
   const dirs = await call('get_directories');
   setContent(fileListCard(
-    '媒体库 · 全部本地视频',
-    '扫描到的所有视频文件都在这里，没有条数上限。点文件名或「播放」即可用 PotPlayer 打开；搜索支持文件名、中文名、原名和完整路径。',
+    '媒体库 · 按作品分季浏览',
+    '默认按「作品 → 季 → 集」分组：第一季、第二季、第三季各自成组，十几集的动漫展开季就能看到每一集。也可以切换成目录树或原来的平铺列表；搜索、筛选与点击播放三种视图都可用。',
     dirs,
   ));
   await loadFileList();
@@ -375,6 +468,7 @@ function renderPreview(data) {
 }
 
 async function renderScan() {
+  if (!fileListState.mode_touched) fileListState.view_mode = 'flat';
   const [dirs, dict, last] = await Promise.all([
     call('get_directories'), call('dictionary_status'), call('get_last_scan'),
   ]);
@@ -411,7 +505,7 @@ async function renderScan() {
       <button class="btn" data-action="open-data">打开数据目录</button>
     </div></div>
   ${fileListCard('扫描结果 · 全部文件',
-    '本次及历次扫描到的视频都会列在这里。默认按最近扫描排序，可搜索、按目录或匹配状态筛选、翻页或一次显示全部；点文件名即可调用 PotPlayer 播放。',
+    '本次及历次扫描到的视频都会列在这里。默认平铺，可搜索、按目录或匹配状态筛选、翻页或一次显示全部；也可以切换成「作品 → 季 → 集」或目录树。点文件名即可调用 PotPlayer 播放。',
     dirs)}`);
   await loadFileList();
 }
@@ -625,6 +719,29 @@ async function handleAction(action, btn) {
       return;
     }
     case 'file-refresh': await loadFileList(); toast('列表已刷新'); return;
+    case 'tree-toggle': {
+      const key = btn.dataset.node;
+      if (!key) return;
+      if (treeState.open.has(key)) treeState.open.delete(key);
+      else treeState.open.add(key);
+      renderTree();
+      return;
+    }
+    case 'tree-expand-all': {
+      if (!treeState.data) return;
+      // 只展开第一层分组，季 / 子目录仍按需点开，避免一次渲染上千行文件
+      treeState.data.groups.forEach(g => treeState.open.add(g.id));
+      renderTree();
+      return;
+    }
+    case 'tree-collapse-all': treeState.open.clear(); renderTree(); return;
+    case 'file-flat': {
+      fileViewModeHandler('flat');
+      const sel = document.getElementById('fileViewMode');
+      if (sel) sel.value = 'flat';
+      await loadFileList();
+      return;
+    }
     case 'file-prev':
       fileListState.page = Math.max(1, fileListState.page - 1);
       await loadFileList(); return;
@@ -790,6 +907,7 @@ document.addEventListener('change', (ev) => {
     fileMatch: () => { fileListState.match_state = el.value; },
     fileSort: () => { fileListState.sort = el.value; },
     filePageSize: () => { fileListState.page_size = Number(el.value); },
+    fileViewMode: () => fileViewModeHandler(el.value),
   };
   if (!handlers[el.id]) return;
   handlers[el.id]();

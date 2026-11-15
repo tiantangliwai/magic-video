@@ -155,3 +155,29 @@ td { color: var(--text); }
 .file-row .name { white-space: normal; line-height: 1.8; }
 .file-row .mono { word-break: break-all; margin-top: 3px; }
 button[disabled] { opacity: .45; cursor: not-allowed; }
+
+/* 媒体库树状视图：作品 → 季 → 集 / 目录树，节点按需展开 */
+.tree-toolbar { display: flex; align-items: center; gap: 9px; flex-wrap: wrap; margin-bottom: 10px; }
+.tree-toolbar-label { font-size: 12px; color: var(--muted); flex: none; }
+.tree-toolbar .input { width: auto; flex: 0 0 186px; padding: 7px 9px; font-size: 12px; }
+.tree-toolbar .hint { flex: 1 1 220px; margin: 0; }
+.tree-root { border-top: 1px solid var(--border); padding-top: 4px; }
+.tree-node { min-width: 0; }
+.tree-head { display: flex; align-items: center; gap: 8px; padding: 8px 8px 8px 2px;
+  border-bottom: 1px solid var(--border); border-radius: 6px; }
+.tree-head:hover { background: var(--surface-2); }
+.tree-caret { width: 22px; height: 22px; flex: none; border: 0; background: transparent;
+  color: var(--muted); cursor: pointer; font-size: 12px; padding: 0; }
+.tree-caret:hover { color: var(--primary); }
+.tree-icon { width: 18px; flex: none; text-align: center; color: var(--primary); font-size: 14px; }
+.tree-label { font-weight: 600; font-size: 13px; min-width: 0;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tree-node-series > .tree-head .tree-label { font-size: 14px; }
+.tree-sub { flex: none; color: var(--faint); font-size: 11px; white-space: nowrap; }
+.tree-actions { margin-left: auto; flex: none; }
+.tree-children { margin-left: 16px; padding-left: 12px; border-left: 1px dashed var(--border); }
+.tree-node-season > .tree-head, .tree-node-folder .tree-node-folder > .tree-head { padding-left: 2px; }
+.tree-leaf { margin: 2px 0 8px; }
+.tree-leaf .item { padding: 9px 6px; gap: 10px; }
+.tree-leaf .item .thumb { width: 34px; height: 42px; font-size: 13px; }
+.tree-leaf .file-row .mono { font-size: 10px; }

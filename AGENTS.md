@@ -30,6 +30,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 10 | 结合本机 Obsidian 自动记录**流程与结果**，供后续优化和补齐功能；只写 vault 内独立命名空间，绝不覆盖用户已有笔记，保留手写批注；不做定时同步 | 用户要求（v0.1.3） |
 | 11 | 扫描出的文件必须**完整可见**（不得截断）、可搜索、可在软件里点击直接打开播放器 | 用户要求（v0.1.4） |
 | 12 | 「看过的列表」要能**改动名称并快速搜索**：一次载入全量、本地即时过滤（作品名/中文名/导入原文/备注），行内改名并把用户手改的中文名记住 | 用户要求（0.1.4 日常迭代） |
+| 13 | 媒体库不能只平铺全部视频：要能按**第一季/第二季/第三季、一部番十几集**做树状展示；原平铺列表仍需保留可切换 | 用户要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **Obsidian 同步是纯本地文件写入，不是定时任务、不是云同步、不引入账号或插件。**
@@ -161,6 +162,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 涉及 PotPlayer → mock `read_status` / `resolve_media` / `subprocess.Popen`，不真的启动播放器。
 - **仅显式发版时**：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过；日常提交只需 `run_tests.py` 全绿（见 3.0）。
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
+- 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。
 - **仅用户要求发版或改打包链时**：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
 - 窗口冒烟：`webview.create_window(..., hidden=True)` + 线程内 `evaluate_js` 检查 8 页渲染，完成后 `destroy()`。
 
@@ -230,6 +232,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 |---|---|
 | 加一个界面按钮 | `web/app.js` 的 `data-action` + `handleAction`，后端在 `app/api.py` 加同名方法 |
 | 改文件名解析规则 | `app/scanner.py::parse_filename` + `tests/test_scanner.py::FilenameTests` |
+| 改媒体库树分组 / 季集推断 | `app/library_tree.py` + `app/api.py::get_media_tree` + `web/app.js` 树渲染 + `tests/test_media_tree.py` |
 | 扩充中文词典 | `app/data/aliases_builtin.json`（真实条目，禁止编造）+ `tests/test_metadata.py` |
 | 改观看完成判定 | `app/watcher.py::_tick` + `tests/test_watcher.py` |
 | 加数据库字段 | `app/db.py::SCHEMA` + `_migrate()` 补列，并写迁移不丢数据的用例 |

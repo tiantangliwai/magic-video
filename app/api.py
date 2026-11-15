@@ -10,7 +10,8 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, config, db, importer, metadata, obsidian, potplayer, runtime, scanner,
+    __version__, autostart, config, db, importer, library_tree, metadata, obsidian, potplayer,
+    runtime, scanner,
 )
 
 
@@ -213,21 +214,10 @@ class Api:
             (like, like, like, int(limit)),
         )
 
-    def get_media_files_page(self, options: dict | None = None) -> dict:
-        """全量文件浏览：返回筛选后的总数与当前页数据；page_size <= 0 表示一次取全部。
-
-        前端「扫描结果 / 媒体库」共用此接口，避免 400 条硬上限截掉扫描到的文件。
-        """
+    @staticmethod
+    def _media_filters(options: dict | None) -> tuple[str, list]:
+        """平铺列表与树状视图共用的筛选条件；用户输入只做参数绑定，绝不拼进 SQL。"""
         opt = options or {}
-        try:
-            page = max(1, int(opt.get("page") or 1))
-        except (TypeError, ValueError):
-            page = 1
-        try:
-            size = int(opt.get("page_size", 200))
-        except (TypeError, ValueError):
-            size = 200
-        total_all = int(db.scalar("SELECT COUNT(*) FROM media_files") or 0)
         keyword = str(opt.get("keyword") or "").strip()
         # LIKE 的 % / _ / \ 是通配符或转义符，用户输入的关键词一律按字面量处理
         escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -257,7 +247,34 @@ class Api:
             conditions.append("COALESCE(f.title_cn,'') = ''")
         elif match_state == "progress":
             conditions.append("COALESCE(p.position_ms, 0) > 0")
-        where = " AND ".join(conditions)
+        return " AND ".join(conditions), params
+
+    @staticmethod
+    def _matched_count() -> int:
+        return int(db.scalar(
+            "SELECT COUNT(*) FROM media_files WHERE title_cn IS NOT NULL AND title_cn <> ''"
+        ) or 0)
+
+    @staticmethod
+    def _directory_options() -> list[dict]:
+        return db.rows("SELECT id, path, file_count AS files FROM directories ORDER BY id")
+
+    def get_media_files_page(self, options: dict | None = None) -> dict:
+        """全量文件浏览：返回筛选后的总数与当前页数据；page_size <= 0 表示一次取全部。
+
+        前端「扫描结果 / 媒体库」共用此接口，避免 400 条硬上限截掉扫描到的文件。
+        """
+        opt = options or {}
+        try:
+            page = max(1, int(opt.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            size = int(opt.get("page_size", 200))
+        except (TypeError, ValueError):
+            size = 200
+        total_all = int(db.scalar("SELECT COUNT(*) FROM media_files") or 0)
+        where, params = self._media_filters(opt)
 
         total = int(db.scalar(
             "SELECT COUNT(*) FROM media_files f "
@@ -285,14 +302,37 @@ class Api:
             last = min(offset + size, total) if first else 0
         else:
             pages, first, last = 1, (1 if total else 0), total
-        matched = int(db.scalar(
-            "SELECT COUNT(*) FROM media_files WHERE title_cn IS NOT NULL AND title_cn <> ''"
-        ) or 0)
         return {
             "ok": True, "rows": rows, "total": total, "total_all": total_all,
-            "matched": matched, "page": page, "page_size": size, "pages": pages,
+            "matched": self._matched_count(), "page": page, "page_size": size, "pages": pages,
             "from": first, "to": last,
-            "directories": db.rows("SELECT id, path, file_count AS files FROM directories ORDER BY id"),
+            "directories": self._directory_options(),
+        }
+
+    def get_media_tree(self, options: dict | None = None) -> dict:
+        """树状视图：按「作品 → 季 → 集」或「目录 → 子目录 → 文件」分组。
+
+        与平铺列表共用同一套搜索 / 目录 / 匹配状态筛选，但**不受每页条数限制**：
+        树是对当前筛选结果的全部文件做分组，节点默认折叠，展开才渲染文件行。
+        """
+        opt = options or {}
+        where, params = self._media_filters(opt)
+        rows = db.rows(
+            "SELECT f.id, f.dir_id, f.path, f.filename, f.size, f.title_raw, "
+            "f.title_guess, f.title_cn, f.match_by, f.season_no, f.episode_no, f.year, "
+            "f.status, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            "p.position_ms, p.percent, p.completed, p.last_played_at "
+            "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+            "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
+            tuple(params),
+        )
+        directories = self._directory_options()
+        tree = library_tree.build_tree(rows, str(opt.get("mode") or "series"), directories)
+        return {
+            "ok": True, **tree,
+            "total_all": int(db.scalar("SELECT COUNT(*) FROM media_files") or 0),
+            "matched": self._matched_count(),
+            "directories": directories,
         }
 
     def preview_import(self, text: str) -> dict:
