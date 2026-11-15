@@ -349,7 +349,8 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 有对应动漫展示图 | `app/covers.py` 主源 AGE动漫搜索页（精确标题 → `data-original` 高清图）、备源 SeedHub 首页/分类页（title 属性配对）；下载到自己的 `<数据目录>/covers/`，`subjects.cover_local` 落库 |
 | 后台起一次性任务 | `start_cover_fetch()` 只在用户点击时起 daemon 线程，可 `cancel_cover_fetch()`；**没有 `Timer` / 定时任务 / 开机自跑**；重复点击不会起第二个线程 |
 | 不阻塞界面、不炸磁盘 | 短超时 + 单张 3 MB 上限 + Content-Type 校验 + 单部作品异常只记失败；`cover_data_uris()` 转 data URI 给 WebView2（不依赖 `file://`） |
-| 优先抓能抓到的 | `cover_titles()` 先排导入清单里的中文作品名，再排媒体库中文名，最后才是英文标题；技术标签 / 番号编号先过滤 |
+| 抓到就能显示 | 封面按标题哈希落盘，所以 `cover_titles()` **第一优先级就是剧集墙卡片标题**（`poster_labels()` 复用 `library_tree.build_tree(rows,"series")`）；`cover_key()` 去季标记 + 去尾集号，逐集分组共用一张；卡片标题与抓取标题仍不一致时 `resolve_cover()` 按 `subjects` 精确/去季/包含回退，`get_poster_wall()` 再用分组内文件 `title_cn/title_guess` 兜底 |
+| 优先抓能抓到的 | 卡片标题之后依次是导入清单中文名、媒体库中文名、其余英文标题；技术标签 / 番号编号 /「（完）」残行 / 零宽字符先过滤 |
 | Everything 快搜 | `app/everything.py`：`es.exe` → Everything HTTP 服务 → **自动降级为媒体库检索**；能力探测与提示写进「设置」页 |
 
 ### 数据流

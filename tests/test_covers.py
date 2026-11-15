@@ -48,6 +48,26 @@ class CoverParseTests(unittest.TestCase):
         self.assertEqual(covers._strip_season("葬送的芙莉莲 第二季"), "葬送的芙莉莲")
         self.assertEqual(covers._strip_season("间谍过家家 S2"), "间谍过家家")
 
+    def test_cover_key_strips_season_and_episode_suffix(self):
+        cases = {
+            "间谍过家家 第三季": "间谍过家家",
+            "葬送的芙莉莲 第二季": "葬送的芙莉莲",
+            "Nagasarete Airantou 蓝兰岛漂流记 01": "Nagasarete Airantou 蓝兰岛漂流记",
+            "[Group] Show - 12": "[Group] Show",
+            "第 08 集": "第 08 集",
+            "CLANNAD": "CLANNAD",
+            "怪兽8号": "怪兽8号",
+            "10天的爱人 10-Day Lover2023": "10天的爱人 10-Day Lover2023",
+        }
+        for raw, expected in cases.items():
+            self.assertEqual(covers.cover_key(raw), expected, raw)
+
+    def test_local_cover_uses_normalized_key_and_legacy_hash(self):
+        covers.config.COVER_DIR.mkdir(parents=True, exist_ok=True)
+        covers.cache_path("间谍过家家").write_bytes(b"x" * 1024)
+        self.assertTrue(covers.local_cover("间谍过家家 第三季"))
+        self.assertTrue(covers.local_cover("间谍过家家 第 12 集"))
+
     def test_cache_path_is_stable_hash_not_raw_title(self):
         a = covers.cache_path("葬送的芙莉莲/第二季")
         b = covers.cache_path("葬送的芙莉莲/第二季")
@@ -100,6 +120,31 @@ class CoverFlowTests(IsolatedDbTestCase):
         self.assertIn("A", out)
         self.assertNotIn("B", out)
 
+    def test_resolve_cover_bridges_card_title_and_fetched_title(self):
+        """抓取标题带季标记、卡片标题不带时，仍要能显示同一张封面。"""
+        from app import db
+        covers.config.COVER_DIR.mkdir(parents=True, exist_ok=True)
+        saved = covers.cache_path("间谍过家家 第三季").name
+        (covers.config.COVER_DIR / saved).write_bytes(b"x" * 1024)
+        db.execute(
+            "INSERT INTO subjects(title_cn, cover_local, source, confidence, created_at, updated_at) "
+            "VALUES (?, ?, 'agedm', 0.5, ?, ?)",
+            ("间谍过家家 第三季", saved, "2026-01-01", "2026-01-01"),
+        )
+        self.assertEqual(covers.resolve_cover("间谍过家家 第三季"), saved)
+        self.assertEqual(covers.resolve_cover("间谍过家家"), saved)
+        self.assertEqual(covers.cover_map(["间谍过家家"]).get("间谍过家家"), saved)
+        out = Api().cover_data_uris(["间谍过家家"])
+        self.assertTrue(out["间谍过家家"].startswith("data:image/jpeg;base64,"))
+
+    def test_resolve_cover_ignores_missing_files(self):
+        from app import db
+        db.execute(
+            "INSERT INTO subjects(title_cn, cover_local, source, confidence, created_at, updated_at) "
+            "VALUES ('幽灵作品', 'not-there.jpg', 'agedm', 0.5, '2026-01-01', '2026-01-01')"
+        )
+        self.assertEqual(covers.resolve_cover("幽灵作品"), "")
+
     def test_status_is_not_running_by_default(self):
         self.assertFalse(covers.status()["running"])
 
@@ -135,6 +180,14 @@ class CoverFlowTests(IsolatedDbTestCase):
         titles = covers.cover_titles()
         self.assertEqual(titles[0], "葬送的芙莉莲")
         self.assertIn("Goblin Slayer", titles)
+
+    def test_cover_titles_puts_poster_card_labels_first(self):
+        # 封面缓存按抓取标题哈希，只有先抓卡片标题才能在剧集墙直接显示
+        for i in range(3):
+            self.media(f"Frieren - {i:02d}.mkv", title_cn="葬送的芙莉莲")
+        from app import db
+        db.execute("INSERT INTO watched_list(title) VALUES ('别的中文作品')")
+        self.assertEqual(covers.cover_titles()[0], "葬送的芙莉莲")
 
     def test_cover_titles_drops_junk_ids(self):
         from app import db

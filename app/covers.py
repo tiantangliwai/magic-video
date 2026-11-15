@@ -75,6 +75,25 @@ def cache_path(title: str) -> Path:
     return config.COVER_DIR / f"{digest}.jpg"
 
 
+# 剧集墙里同一部番可能按「… 01」「… 02」拆成几十个分组，不该各抓一张封面
+_EP_SUFFIX_RE = re.compile(
+    r"(?:\s*\[\s*\d{1,3}\s*\]|\s*第\s*\d{1,3}\s*[集话話]|\s*EP?\s*\d{1,3}|"
+    r"\s*[-_]?\s*(?<!\d)\d{1,3})\s*$",
+    re.IGNORECASE,
+)
+
+
+def cover_key(title: str) -> str:
+    """把展示标题归一成「作品名」：去掉结尾的季标记与集号，作为搜索词 / 缓存键。"""
+    original = str(title or "").strip()
+    text = _strip_season(original)
+    previous = None
+    while text and previous != text:
+        previous = text
+        text = _EP_SUFFIX_RE.sub("", text).strip(" -_·:：")
+    return text or original
+
+
 def _get(url: str, *, timeout=TIMEOUT, stream: bool = False):
     import requests
     import urllib3
@@ -139,7 +158,7 @@ def parse_seeduck(body: str, want: str) -> tuple[list[str], str] | None:
 
 def search_cover(title: str) -> dict:
     """同步查一次封面（供后台线程调用）；返回 {ok,urls,source,hit}。"""
-    want = _strip_season(title) or str(title or "").strip()
+    want = cover_key(title)
     if not want:
         return {"ok": False, "error": "空标题"}
 
@@ -192,9 +211,17 @@ def download_cover(url: str, dest: Path) -> bool:
 
 
 def local_cover(title: str) -> str:
-    """已缓存的封面相对文件名；没有则返回空串。"""
-    path = cache_path(title)
-    return path.name if path.is_file() and path.stat().st_size > 512 else ""
+    """已缓存的封面相对文件名；先按归一化的作品名找，再兼容旧的原标题哈希。"""
+    for key in (cover_key(title), str(title or "").strip()):
+        if not key:
+            continue
+        path = cache_path(key)
+        try:
+            if path.is_file() and path.stat().st_size > 512:
+                return path.name
+        except OSError:
+            continue
+    return ""
 
 
 def save_cover_record(title: str, url: str, source: str, filename: str) -> None:
@@ -215,8 +242,13 @@ def save_cover_record(title: str, url: str, source: str, filename: str) -> None:
 
 
 def fetch_one(title: str, force: bool = False) -> dict:
-    """抓一个作品的封面：先查缓存 → 搜索 → 下载 → 入库。"""
-    dest = cache_path(title)
+    """抓一个作品的封面：先查缓存 → 搜索 → 下载 → 入库。
+
+    统一用 `cover_key()`（去季 + 去尾集号）做缓存键与入库标题，
+    剧集墙里逐集分组的卡片因此能共用同一张封面。
+    """
+    key_title = cover_key(title)
+    dest = cache_path(key_title)
     if not force and dest.is_file() and dest.stat().st_size > 512:
         return {"ok": True, "cached": True, "file": dest.name, "source": "cache"}
     found = search_cover(title)
@@ -229,7 +261,7 @@ def fetch_one(title: str, force: bool = False) -> dict:
             break
     if not used_url:
         return {"ok": False, "error": "封面下载失败"}
-    save_cover_record(title, used_url, found["source"], dest.name)
+    save_cover_record(key_title, used_url, found["source"], dest.name)
     return {"ok": True, "cached": False, "file": dest.name,
             "source": found["source"], "hit": found.get("hit")}
 
@@ -270,20 +302,48 @@ def clean_candidate(title: str) -> str:
     return text
 
 
+def poster_labels() -> list[str]:
+    """剧集墙卡片标题（与 `Api.get_poster_wall()` 同一套 series 分组逻辑）。
+
+    封面按「抓取标题」哈希落盘，只有直接拿卡片标题去抓，缓存才能被
+    `cover_map()` 直接命中；用导入清单标题抓到的图很可能展示不出来。
+    """
+    try:
+        from . import library_tree
+        rows = db.rows(
+            "SELECT id, dir_id, path, filename, title_guess, title_cn, "
+            "season_no, episode_no FROM media_files"
+        )
+        tree = library_tree.build_tree(rows, "series", None)
+        seen, labels = set(), []
+        for group in tree.get("groups", []):
+            key = cover_key(str(group.get("label") or ""))
+            normalized = _norm_key(key)
+            if key and normalized and normalized not in seen:
+                seen.add(normalized)
+                labels.append(key)
+        return labels
+    except Exception:
+        return []
+
+
 def cover_titles(limit: int = 0) -> list[str]:
     """待抓封面的作品名。
 
-    排序直接决定命中率：实测 AGE动漫 / SeedHub 只对**中文作品名**有稳定结果，
-    而库里 `title_guess` 有大量字幕组英文文件名。所以顺序是
-    「导入清单的中文名 → 媒体库的中文名 → 其余英文标题」，同档里文件数多的排前。
-    脏文件名（技术标签 / 番号）先被 `clean_candidate()` 过滤，避免把配额浪费在必定失败的请求上。
+    排序直接决定「抓到的图能不能显示」：优先级为
+    **剧集墙卡片标题 → 导入清单中文名 → 媒体库中文名 → 其余英文标题**，
+    每档里中文名排前、文件数多的排前。实测 AGE动漫 / SeedHub 只对中文作品名稳定命中，
+    字幕组英文文件名、番号编号与「（完）」残行先被 `clean_candidate()` 过滤，
+    免得把一次性任务的配额浪费在必定失败的请求上。
     """
     scored: list[tuple[int, int, int, str, str]] = []
-    # (是否有中文, 来源优先级, 负的文件数, 排序用标题, 待清洗标题)
+    # (来源档位, 是否非中文, 负的文件数, 排序用标题, 待清洗标题)
+    for label in poster_labels():
+        scored.append((0, 0 if _HAS_CN_RE.search(label) else 1, 0, label, label))
     for r in db.rows("SELECT COALESCE(NULLIF(TRIM(title_cn),''), NULLIF(TRIM(title),'')) AS title "
                     "FROM watched_list"):
         raw = str(r["title"] or "")
-        scored.append((0 if _HAS_CN_RE.search(raw) else 1, 0, 0, raw, raw))
+        scored.append((1, 0 if _HAS_CN_RE.search(raw) else 1, 0, raw, raw))
     for r in db.rows(
         "SELECT COALESCE(NULLIF(TRIM(title_cn),''), NULLIF(TRIM(title_guess),'')) AS title, "
         "COUNT(*) AS n FROM media_files "
@@ -291,10 +351,10 @@ def cover_titles(limit: int = 0) -> list[str]:
         "GROUP BY title"
     ):
         raw = str(r["title"] or "")
-        scored.append((0 if _HAS_CN_RE.search(raw) else 1, 1, -int(r["n"] or 0), raw, raw))
+        scored.append((2, 0 if _HAS_CN_RE.search(raw) else 1, -int(r["n"] or 0), raw, raw))
 
     seen, out = set(), []
-    for _cn, _src, _negn, _sort, raw in sorted(scored, key=lambda item: item[:4]):
+    for _tier, _not_cn, _negn, _sort, raw in sorted(scored, key=lambda item: item[:4]):
         title = clean_candidate(raw)
         key = _norm_key(title)
         if not title or key in seen:
@@ -355,11 +415,66 @@ def cancel_job() -> dict:
     return {"ok": True}
 
 
+def subject_covers() -> list[tuple[str, str]]:
+    """subjects 里已经落库的 (标题, 本地封面文件名)，供卡片标题回退匹配。"""
+    try:
+        return [
+            (str(r["title"] or ""), str(r["cover_local"] or ""))
+            for r in db.rows(
+                "SELECT COALESCE(NULLIF(TRIM(title_cn),''), NULLIF(TRIM(title_orig),'')) AS title, "
+                "cover_local FROM subjects WHERE COALESCE(cover_local,'') <> ''"
+            )
+        ]
+    except Exception:
+        return []
+
+
+def _cover_file_ok(filename: str) -> bool:
+    if not filename:
+        return False
+    path = config.COVER_DIR / filename
+    try:
+        return path.is_file() and path.stat().st_size > 512
+    except OSError:
+        return False
+
+
+def resolve_cover(title: str, entries: list[tuple[str, str]] | None = None) -> str:
+    """把「展示标题」解析成本地封面文件名。
+
+    抓取时的标题（导入清单 / media_files）与剧集墙卡片标题（树分组 label）可能带了
+    不同的季标记或后缀，只按哈希查会漏。顺序：
+    原哈希 → 去季标记哈希 → subjects 精确匹配 → subjects 去季精确 → subjects 包含匹配。
+    """
+    text = str(title or "").strip()
+    if not text:
+        return ""
+    name = local_cover(text)
+    if not name:
+        base = _strip_season(text)
+        if base and base != text:
+            name = local_cover(base)
+    if name:
+        return name
+
+    entries = subject_covers() if entries is None else entries
+    key, base_key = _norm_key(text), _norm_key(_strip_season(text))
+    for rec_title, filename in entries:
+        if _norm_key(rec_title) == key or _norm_key(_strip_season(rec_title)) == base_key:
+            if _cover_file_ok(filename):
+                return filename
+    for rec_title, filename in entries:
+        if _fuzzy_match(rec_title, text) and _cover_file_ok(filename):
+            return filename
+    return ""
+
+
 def cover_map(titles: list[str]) -> dict:
-    """给前端剧集卡片用：{标题: 本地封面文件名}，无封面则不放进字典。"""
+    """给前端剧集卡片用：{展示标题: 本地封面文件名}，无封面则不放进字典。"""
+    entries = subject_covers()
     out = {}
     for title in titles or []:
-        name = local_cover(str(title))
+        name = resolve_cover(title, entries)
         if name:
             out[str(title)] = name
     return out

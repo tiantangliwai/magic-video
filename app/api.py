@@ -352,6 +352,29 @@ class Api:
             "directories": directories,
         }
 
+    @staticmethod
+    def _group_cover_titles(group: dict) -> list[str]:
+        """取分组内文件已匹配的中文名 / 解析原名，作为封面标题回退候选（去重、限量）。"""
+        seen, out = set(), []
+
+        def walk(node: dict) -> None:
+            for f in node.get("files") or []:
+                for key in ("title_cn", "title_guess"):
+                    value = str((f or {}).get(key) or "").strip()
+                    if not value or value in seen:
+                        continue
+                    seen.add(value)
+                    out.append(value)
+                    if len(out) >= 12:
+                        return
+            for child in node.get("children") or []:
+                walk(child)
+                if len(out) >= 12:
+                    return
+
+        walk(group)
+        return out
+
     def get_poster_wall(self, options: dict | None = None) -> dict:
         """剧集墙：作品卡片（封面 + 季/集统计 + 续播集）。复用树分组，不另写一套搜索。"""
         opt = options or {}
@@ -366,6 +389,7 @@ class Api:
             tuple(params),
         )
         tree = library_tree.build_tree(rows, "series", self._directory_options())
+        cover_entries = covers.subject_covers()
         cards = []
         for group in tree.get("groups", []):
             seasons = [c.get("label") for c in group.get("children", [])]
@@ -378,6 +402,7 @@ class Api:
                 "season_count": len(seasons),
                 "seasons": seasons[:12],
                 "sub": group.get("sub", ""),
+                "_cover_titles": self._group_cover_titles(group),
             })
         keyword = str(opt.get("keyword") or "").strip().lower()
         if keyword:
@@ -388,9 +413,18 @@ class Api:
             max_cards = 300
         total = len(cards)
         cards = cards[:max_cards]
+        # 卡片标题（树分组 label）与抓取封面时用的标题可能不同：
+        # 先用卡片标题，再退到该分组内文件的中文名 / 解析原名，命中就复用同一张封面。
+        resolved = {}
+        for card in cards:
+            for candidate in [card["title"], *card.pop("_cover_titles")]:
+                name = covers.resolve_cover(candidate, cover_entries)
+                if name:
+                    resolved[card["title"]] = name
+                    break
         return {
             "ok": True, "cards": cards, "total": total, "shown": len(cards),
-            "covers": covers.cover_map([c["title"] for c in cards]),
+            "covers": resolved,
             "cover_status": covers.status(),
         }
 
@@ -464,8 +498,9 @@ class Api:
         import base64
         import mimetypes
         out: dict[str, str] = {}
+        entries = covers.subject_covers()      # 一次查库，避免每张卡片一次 SQL
         for title in (titles or [])[:400]:
-            name = covers.local_cover(str(title))
+            name = covers.resolve_cover(str(title), entries)
             if not name:
                 continue
             path = config.COVER_DIR / name
