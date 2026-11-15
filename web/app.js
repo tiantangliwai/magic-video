@@ -27,7 +27,9 @@ function applyTheme(theme) {
 let watchedRows = [];
 let watchedKeyword = '';
 let watchedEditing = 0;
-let watchedGrouped = true;          // 同一作品的多季收拢成一组，避免列表散成一片
+let watchedGrouped = false;         // 表格视图默认平铺，不按作品折叠
+let watchedViewMode = 'cards';      // 看过的列表：卡片墙 / 表格，两种都可切换
+let watchedCovers = {};             // 作品名 -> 封面 data URI（只读缓存，不触发抓取任务）
 const watchedOpen = new Set();     // 已展开的分组 key
 
 const VIEW_META = {
@@ -130,6 +132,42 @@ function confirmDialog({ title, message, note = '', items = [],
     document.addEventListener('keydown', onKey);
     const cancel = layer.querySelector('[data-modal="cancel"]');
     if (cancel) cancel.focus();
+  });
+}
+
+// 轻量输入弹窗：WebView2 的原生 prompt 不可用，复用自己的模态层。
+function promptDialog({ title, message, value = '', confirmText = '保存' }) {
+  return new Promise(resolve => {
+    const layer = document.createElement('div');
+    layer.className = 'modal-layer';
+    layer.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true">
+      <h3>${esc(title)}</h3>
+      <p class="modal-msg">${esc(message)}</p>
+      <input class="input" id="modalInput" value="${esc(value)}" autocomplete="off">
+      <div class="modal-actions">
+        <button class="btn" data-modal="cancel">取消</button>
+        <button class="btn btn-primary" data-modal="ok">${esc(confirmText)}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(layer);
+    const done = (ok) => {
+      const text = layer.querySelector('#modalInput').value;
+      layer.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(ok ? text.trim() : null);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') done(false);
+      if (e.key === 'Enter' && e.target.id === 'modalInput') done(true);
+    };
+    layer.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-modal]');
+      if (btn) done(btn.dataset.modal === 'ok');
+      else if (e.target === layer) done(false);
+    });
+    document.addEventListener('keydown', onKey);
+    const input = layer.querySelector('#modalInput');
+    if (input) { input.focus(); input.select(); }
   });
 }
 
@@ -406,7 +444,7 @@ const fileListState = {
 const treeState = { data: null, open: new Set() };
 
 function fileViewModeHandler(value) {
-  const mode = ['flat', 'series', 'folder'].includes(value) ? value : 'flat';
+  const mode = ['cards', 'series', 'flat', 'folder'].includes(value) ? value : 'flat';
   if (mode !== fileListState.view_mode) treeState.open.clear();
   fileListState.view_mode = mode;
   fileListState.mode_touched = true;
@@ -418,8 +456,6 @@ function option(value, label, current) {
 
 function fileListCard(title, hint, directories) {
   const s = fileListState;
-  // 旧状态里可能残留「目录树」视图，统一归一到剧集展示，避免刷新后仍是目录层级
-  if (s.view_mode === 'folder') s.view_mode = 'series';
   const dirs = ['<option value="0">全部目录</option>']
     .concat((directories || []).map(d => option(d.id, `${d.path}（${num(d.files)}）`, s.directory_id)));
   return `<div class="card"><div class="section-head">
@@ -445,7 +481,9 @@ function fileListCard(title, hint, directories) {
     <div class="tree-toolbar">
       <span class="tree-toolbar-label">展示方式</span>
       <select class="input" id="fileViewMode">
+        ${option('cards', '封面墙（每部作品一张卡片）', s.view_mode)}
         ${option('series', '剧集展示（作品 → 季 → 集）', s.view_mode)}
+        ${option('folder', '目录结构（扫描根目录 → 子目录）', s.view_mode)}
         ${option('flat', '平铺列表', s.view_mode)}
       </select>
       <span class="hint" id="treeSummary">按剧集分组，展开季即可看到每一集</span>
@@ -517,6 +555,11 @@ function treeNodeHtml(node, depth) {
     ? `<button class="btn btn-sm btn-danger" data-action="delete-series-files"
         data-node="${esc(node.id)}" title="把这部作品的全部本地文件移入回收站，观看记录保留">删除整部本地文件</button>`
     : '';
+  // 用户可编辑作品/分组名称：只改展示标签，不碰磁盘文件与播放记录
+  const rename = node.kind === 'series'
+    ? `<button class="btn btn-sm" data-action="rename-work" data-node="${esc(node.id)}"
+        data-name="${esc(node.label)}" title="修改这部作品在软件里显示的名称">改名</button>`
+    : '';
   const children = open
     ? `<div class="tree-children">
         ${node.children.map(c => treeNodeHtml(c, depth + 1)).join('')}
@@ -532,7 +575,7 @@ function treeNodeHtml(node, depth) {
       ${badges}
       ${node.kind === 'series' && node.all_done && num(node.removable_count) === 0
         ? '<span class="badge amber">本地文件已移除</span>' : ''}
-      <span class="tree-actions">${play}${cleanup}</span>
+      <span class="tree-actions">${rename}${play}${cleanup}</span>
     </div>${children}</div>`;
 }
 
@@ -544,7 +587,8 @@ function treeHtml(data) {
 }
 
 function treePagerHtml(data) {
-  const label = '剧集展示（作品 → 季 → 集）';
+  const label = fileListState.view_mode === 'folder'
+    ? '目录结构（扫描根目录 → 子目录）' : '剧集展示（作品 → 季 → 集）';
   return `<span>${esc(label)} · 当前筛选 <b>${num(data.total)}</b> 个文件 ·
       <b>${num(data.group_count)}</b> 个分组（不受每页条数限制，节点按需展开）</span>
     <button class="btn btn-sm" data-action="file-flat">切回平铺列表</button>`;
@@ -572,37 +616,58 @@ async function loadFileList() {
   const mode = fileListState.view_mode;
   let data;
   try {
-    data = await call(mode === 'flat' ? 'get_media_files_page' : 'get_media_tree',
-      { ...fileListState, mode });
+    const api = mode === 'flat' ? 'get_media_files_page'
+      : mode === 'cards' ? 'get_poster_wall' : 'get_media_tree';
+    data = await call(api, { ...fileListState, mode });
   } catch (err) {
     box.innerHTML = empty('列表加载失败', String(err && err.message || err));
     return;
   }
   const count = document.getElementById('fileListCount');
-  if (count) count.textContent =
-    `库内 ${num(data.total_all)} 个文件 · 已匹配中文 ${num(data.matched)} · 当前筛选 ${num(data.total)} 个`;
   const pager = document.getElementById('fileListPager');
   const summary = document.getElementById('treeSummary');
+  if (mode === 'cards') {
+    treeState.data = null;
+    const covers = data.covers || {};
+    const titles = Object.keys(covers);
+    // 只把已缓存的封面转成 data URI，绝不在这里触发后台抓取任务
+    if (titles.length) {
+      try { data.covers = await call('cover_data_uris', titles); } catch (e) { /* 降级为占位图 */ }
+    }
+    if (count) count.textContent = `${num(data.total)} 部作品 · 已有封面 ${Object.keys(data.covers || {}).length} 张`;
+    if (pager) pager.innerHTML = `<span>封面墙 · <b>${num(data.shown || data.total)}</b> 部作品（一次最多 300 张卡片）</span>
+      <button class="btn btn-sm" data-action="file-flat">切回平铺列表</button>`;
+    if (summary) summary.textContent = '每部作品一张封面卡片，只显示一个作品名；点「查看分集」带搜索词进入剧集展示';
+    const cards = data.cards || [];
+    box.innerHTML = cards.length
+      ? `<div class="poster-grid">${cards.map(c => posterCardHtml(c, (data.covers || {})[c.title])).join('')}</div>`
+      : empty('还没有作品卡片', '先扫描目录；封面可在「后台进程」页抓取');
+    return;
+  }
+  if (count) count.textContent =
+    `库内 ${num(data.total_all)} 个文件 · 已匹配中文 ${num(data.matched)} · 当前筛选 ${num(data.total)} 个`;
   if (mode === 'flat') {
     treeState.data = null;
     if (pager) pager.innerHTML = fileListPagerHtml(data);
-    if (summary) summary.textContent = '当前是平铺列表，可切换成剧集展示';
+    if (summary) summary.textContent = '当前是平铺列表，可切换成封面墙 / 剧集展示 / 目录结构';
     box.innerHTML = fileListRows(data.rows || []);
   } else {
     treeState.data = data;
     if (pager) pager.innerHTML = treePagerHtml(data);
-    if (summary) summary.textContent = '同一部作品归为一组，按第 1 季 / 第 2 季… 展开到每一集';
+    if (summary) summary.textContent = mode === 'folder'
+      ? '按扫描根目录 → 子目录 → 文件展开，目录名即磁盘上的真实文件夹'
+      : '同一部作品归为一组；有季标记的按第 1 季 / 第 2 季展开，无季标记的直接挂在作品下';
     autoExpandHits(data);
     box.innerHTML = treeHtml(data);
   }
 }
 
 async function renderLibrary() {
-  if (!fileListState.mode_touched) fileListState.view_mode = 'series';
+  if (!fileListState.mode_touched) fileListState.view_mode = 'cards';
   const dirs = await call('get_directories');
   setContent(fileListCard(
-    '媒体库 · 按作品分季浏览',
-    '默认按「剧集展示」分组：第一季、第二季、第三季各自成组，十几集的动漫展开季就能看到每一集。也可以切换回原来的平铺列表；搜索、筛选与点击播放两种视图都可用。',
+    '媒体库 · 按作品浏览',
+    '默认是「封面墙」：每部作品一张封面卡片、只显示一个作品名；可随时切换成剧集展示（作品 → 季 → 集）、目录结构或平铺列表。搜索、筛选与点击播放四种视图都可用。',
     dirs,
   ));
   await loadFileList();
@@ -632,10 +697,11 @@ async function saveWatchedEdit(rid) {
 function watchedRowHtml(r) {
   const [label, tone] = MATCH_LABEL[r.match_by] || ['—', ''];
   if (watchedEditing === Number(r.id)) {
+    // 中文名列不再展示，但已匹配/手改过的中文名要原样保留：用隐藏域带回给后端。
     return `<tr class="watched-edit">
-      <td><input class="input" id="watchedEditTitle" value="${esc(r.title)}" autocomplete="off"></td>
-      <td><input class="input" id="watchedEditCn" value="${esc(r.title_cn || '')}" placeholder="留空则清除中文名" autocomplete="off"></td>
-      <td colspan="4" class="hint">保存后中文名会被记住，下次导入同名作品自动使用；导入原文保留，旧名字也能搜到。</td>
+      <td><input class="input" id="watchedEditTitle" value="${esc(r.title)}" autocomplete="off">
+        <input type="hidden" id="watchedEditCn" value="${esc(r.title_cn || '')}"></td>
+      <td colspan="4" class="hint">改名只影响这一条；导入原文与已记住的中文名保持不变。</td>
       <td><div class="watched-actions">
         <button class="btn btn-primary btn-sm" data-action="save-watched" data-id="${r.id}">保存</button>
         <button class="btn btn-sm" data-action="cancel-watched">取消</button>
@@ -644,7 +710,6 @@ function watchedRowHtml(r) {
   }
   return `<tr>
     <td data-edit-watched="${r.id}" data-field="title" title="双击编辑">${esc(r.title)}</td>
-    <td data-edit-watched="${r.id}" data-field="title_cn" title="双击编辑">${esc(r.title_cn || '—')}</td>
     <td><span class="badge ${tone}">${esc(label)}</span></td>
     <td>${r.season_no ? esc(r.season_no) : '—'}</td>
     <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
@@ -656,12 +721,13 @@ function watchedRowHtml(r) {
   </tr>`;
 }
 
-// 与后端 importer.group_watched 同构：按中文名（回退作品名）折叠
+// 卡片墙按「作品名」折叠：一部作品一张卡片，只展示一个名字，不补中文名列
 function groupWatchedRows(rows) {
   const map = new Map();
   rows.forEach(r => {
-    const key = String(r.title_cn || r.title || '').trim() || '(未命名)';
-    if (!map.has(key)) map.set(key, { key, label: key, title: r.title, seasons: new Set(), rows: [] });
+    const key = String(r.title || r.title_cn || '').trim() || '(未命名)';
+    if (!map.has(key)) map.set(key, { key, label: key, title: r.title,
+      cn: String(r.title_cn || '').trim(), seasons: new Set(), rows: [] });
     const g = map.get(key);
     g.rows.push(r);
     if (r.season_no) g.seasons.add(Number(r.season_no));
@@ -669,10 +735,31 @@ function groupWatchedRows(rows) {
   return [...map.values()];
 }
 
-// 只重写 tbody：搜索框不重建，输入焦点与光标始终保留
+// 卡片墙：每部作品一张封面卡片，只显示一个作品名；封面纯读缓存，不触发抓取
+function watchedCardsHtml(groups) {
+  return groups.map(g => {
+    const cover = watchedCovers[g.key] || watchedCovers[g.title] || watchedCovers[g.cn] || '';
+    const art = cover
+      ? `<img class="poster-art" src="${cover}" alt="${esc(g.key)}" loading="lazy">`
+      : `<div class="poster-art poster-placeholder"><span>${esc((g.key || '?').slice(0, 2))}</span></div>`;
+    const seasons = g.seasons.size ? `<span class="poster-tag">${g.seasons.size} 季</span>` : '';
+    return `<div class="poster-card">${art}
+      <div class="poster-body">
+        <div class="poster-title" title="${esc(g.key)}">${esc(g.key)}</div>
+        <div class="poster-meta">${g.rows.length} 条记录</div>
+        <div class="poster-tags">${seasons}</div>
+        <div class="poster-actions">
+          <button class="btn btn-sm" data-action="watched-view-mode">查看条目</button>
+        </div>
+      </div></div>`;
+  }).join('');
+}
+
+// 只重写列表容器：搜索框不重建，输入焦点与光标始终保留
 function renderWatchedRows() {
   const box = document.getElementById('watchedListBody');
-  if (!box) return;
+  const cardBox = document.getElementById('watchedCards');
+  if (!box || !cardBox) return;
   const kw = watchedKeyword.trim().toLowerCase();
   const rows = kw ? watchedRows.filter(r =>
     [r.title, r.title_cn, r.raw_text, r.note].some(v =>
@@ -680,9 +767,19 @@ function renderWatchedRows() {
   const count = document.getElementById('watchedCount');
   const groups = groupWatchedRows(rows);
   if (count) count.textContent = (kw ? `匹配 ${rows.length} / 共 ${watchedRows.length} 条`
-    : `共 ${watchedRows.length} 条`) + (watchedGrouped ? ` · ${groups.length} 部作品` : '');
+    : `共 ${watchedRows.length} 条`) + (watchedViewMode === 'cards' || watchedGrouped
+      ? ` · ${groups.length} 部作品` : '');
+  if (watchedViewMode === 'cards') {
+    box.innerHTML = '';
+    cardBox.innerHTML = rows.length
+      ? watchedCardsHtml(groups)
+      : empty(kw ? '没有匹配的作品' : '还没有导入',
+        kw ? '换个关键词，或点「清空搜索」' : '到「导入列表」粘贴你的动漫清单');
+    return;
+  }
+  cardBox.innerHTML = '';
   if (!rows.length) {
-    box.innerHTML = `<tr><td colspan="7">${empty(kw ? '没有匹配的作品' : '还没有导入',
+    box.innerHTML = `<tr><td colspan="6">${empty(kw ? '没有匹配的作品' : '还没有导入',
       kw ? '换个关键词，或点「清空搜索」' : '到「导入列表」粘贴你的动漫清单')}</td></tr>`;
     return;
   }
@@ -693,7 +790,7 @@ function renderWatchedRows() {
     const open = autoOpen || watchedOpen.has(g.key) || g.rows.length === 1;
     const seasons = [...g.seasons].sort((a, b) => a - b);
     const summary = seasons.length ? `${seasons.length} 季（S${seasons.join(' / S')}）` : '未标注季';
-    const head = `<tr class="watched-group-row"><td colspan="7">
+    const head = `<tr class="watched-group-row"><td colspan="6">
       <button class="watched-group-toggle" data-action="watched-group-toggle" data-key="${esc(g.key)}">
         <span class="tree-caret">${open ? '▾' : '▸'}</span>
         <b>${esc(g.label)}</b><span class="watched-group-meta">${g.rows.length} 条 · ${esc(summary)}</span>
@@ -705,17 +802,29 @@ function renderWatchedRows() {
 async function renderWatched() {
   watchedRows = await call('get_watched_list', 0);
   watchedEditing = 0;
+  // 封面只读缓存：和剧集墙同一条 cover_data_uris 通道，不触发后台抓取任务
+  // 作品名与中文名都试一遍：封面缓存可能以其中任一种标题落盘
+  const titles = [...new Set(watchedRows.flatMap(r => [r.title, r.title_cn])
+    .map(v => String(v || '').trim()).filter(Boolean))];
+  watchedCovers = {};
+  if (titles.length) {
+    try { watchedCovers = (await call('cover_data_uris', titles)) || {}; } catch (e) { /* 降级为占位图 */ }
+  }
+  const cards = watchedViewMode === 'cards';
   setContent(`<div class="card watched-card"><div class="section-head"><h3>看过的列表</h3>
       <span class="badge blue" id="watchedCount">正在统计…</span></div>
-    <p class="hint">你手动导入的已观看作品。中文名在导入那一刻已自动匹配；<b>双击作品名或中文名单元格即可直接编辑，光标移开自动保存</b>，导入原文始终保留。</p>
+    <p class="hint">你手动导入的已观看作品。<b>默认卡片墙</b>：每部作品一张封面卡片、只显示一个作品名；
+      切到表格后双击作品名可直接改名（默认平铺、不分组），导入原文始终保留。</p>
     <div class="watched-toolbar">
       <input class="input" id="watchedSearch" placeholder="搜索作品名 / 中文名 / 导入原文 / 备注…" value="${esc(watchedKeyword)}" autocomplete="off">
-      <button class="btn btn-sm" data-action="watched-view-mode">${watchedGrouped ? '切换为平铺' : '按作品分组'}</button>
+      <button class="btn btn-sm" data-action="watched-view-mode">${cards ? '切换为表格' : '切换为卡片墙'}</button>
+      ${cards ? '' : `<button class="btn btn-sm" data-action="watched-group-mode">${watchedGrouped ? '切换为平铺' : '按作品分组'}</button>`}
       <button class="btn btn-sm" data-action="sync-watched-history" title="把播放记录里已看完的作品回补到本列表">从播放记录同步</button>
       <button class="btn btn-sm" data-action="clean-watched" title="修正旧版导入残留的脏标题与「- 完」垃圾行">清洗脏数据</button>
       <button class="btn btn-sm" data-action="watched-clear-search">清空搜索</button>
     </div>
-    <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名</th><th>匹配方式</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
+    <div id="watchedCards" class="poster-grid watched-cards" ${cards ? '' : 'hidden'}></div>
+    <div class="table-wrap" ${cards ? 'hidden' : ''}><table><thead><tr><th>作品名</th><th>匹配方式</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
     <tbody id="watchedListBody"></tbody></table></div></div>`);
   renderWatchedRows();
   const input = document.getElementById('watchedSearch');
@@ -766,7 +875,7 @@ function renderPreview(data) {
 }
 
 async function renderScan() {
-  if (!fileListState.mode_touched) fileListState.view_mode = 'flat';
+  if (!fileListState.mode_touched) fileListState.view_mode = 'folder';
   const [dirs, dict, last] = await Promise.all([
     call('get_directories'), call('dictionary_status'), call('get_last_scan'),
   ]);
@@ -803,7 +912,7 @@ async function renderScan() {
       <button class="btn" data-action="open-data">打开数据目录</button>
     </div></div>
   ${fileListCard('扫描结果 · 全部文件',
-    '本次及历次扫描到的视频都会列在这里。默认平铺，可搜索、按目录或匹配状态筛选、翻页或一次显示全部；也可以切换成「剧集展示（作品 → 季 → 集）」。点文件名即可调用 PotPlayer 播放。',
+    '本次及历次扫描到的视频都会列在这里。默认按磁盘上的<b>目录结构</b>展示（扫描根目录 → 子目录 → 文件），可搜索、按目录或匹配状态筛选；也能切换成封面墙 / 剧集展示 / 平铺列表。点文件名即可调用 PotPlayer 播放。',
     dirs)}`);
   await loadFileList();
 }
@@ -819,7 +928,16 @@ async function renderSettings() {
   const s = await call('get_settings');
   const d = s.dictionary || {};
   const o = s.obsidian || {};
-  setContent(`<div class="grid-2">
+  // 保存设置等按钮固化在内容区顶部：设置页很长，上下滚动时常驻可点，改完随时能保存。
+  setContent(`<div class="settings-actions btn-row">
+      <button class="btn btn-primary" data-action="save-settings">保存设置</button>
+      <button class="btn" data-action="rematch">重新匹配未识别标题</button>
+      <button class="btn" data-action="obsidian-sync">同步到 Obsidian</button>
+      <button class="btn" data-action="obsidian-open">打开笔记目录</button>
+      <button class="btn" data-action="open-data">打开数据目录</button>
+      <span class="hint">改动后立即点「保存设置」生效，滚动页面时这一栏会一直停在最上面。</span>
+    </div>
+    <div class="grid-2">
     <div class="card"><h3>播放器与记录</h3>
       <div class="field"><label>PotPlayer 可执行文件路径</label>
         <input class="input" id="set-potplayer_path" value="${esc(s.potplayer_path)}">
@@ -907,13 +1025,7 @@ async function renderSettings() {
       </div>
       ${switchHtml('obsidian_auto_sync', isOn(o.auto_sync), '跑完单元测试自动同步', '命令行执行 cli.py test 通过后自动写入一次结果')}
     </div>
-    <div class="card"><div class="btn-row">
-      <button class="btn btn-primary" data-action="save-settings">保存设置</button>
-      <button class="btn" data-action="rematch">重新匹配未识别标题</button>
-      <button class="btn" data-action="obsidian-sync">同步到 Obsidian</button>
-      <button class="btn" data-action="obsidian-open">打开笔记目录</button>
-      <button class="btn" data-action="open-data">打开数据目录</button>
-    </div><p class="hint" style="margin:14px 0 0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
+    <div class="card"><p class="hint" style="margin:0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
 }
 
 // ---------- 剧集墙：卡片式展示（参考 SeedHub / AGE动漫 的作品墙） ----------
@@ -957,7 +1069,9 @@ function posterCardHtml(card, cover) {
       <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
       <div class="poster-meta">${num(card.file_count)} 集${card.watched_count ? ` · 已看 ${num(card.watched_count)}` : ''}</div>
       <div class="poster-tags">${seasons}${progress}${removedTag}</div>
-      <div class="poster-actions">${cleanup}
+      <div class="poster-actions">
+        <button class="btn btn-sm" data-action="rename-work" data-node="${esc(card.group_id)}"
+          data-name="${esc(card.title)}" title="修改这部作品在软件里显示的名称">改名</button>${cleanup}
         <button class="btn btn-sm" data-action="goto" data-view="library"
           data-keyword="${esc(card.search_keyword || card.title)}">查看分集</button></div>
     </div></div>`;
@@ -1423,6 +1537,11 @@ async function handleAction(action, btn) {
       return;
     }
     case 'watched-view-mode': {
+      watchedViewMode = watchedViewMode === 'cards' ? 'table' : 'cards';
+      await renderWatched();
+      return;
+    }
+    case 'watched-group-mode': {
       watchedGrouped = !watchedGrouped;
       await renderWatched();
       return;
@@ -1513,6 +1632,23 @@ async function handleAction(action, btn) {
       return;
     }
     case 'file-refresh': await loadFileList(); toast('列表已刷新'); return;
+    case 'rename-work': {
+      const gid = btn.dataset.node || '';
+      const old = btn.dataset.name || '这部作品';
+      const label = await promptDialog({
+        title: '修改作品名称',
+        message: `给「${old}」换个显示名；留空则恢复自动识别的名称。`,
+        value: old, confirmText: '保存名称',
+      });
+      if (label === null) return;                  // 取消 / Esc
+      const r = await call('rename_work', gid, label);
+      if (!r.ok) { toast(r.error || '改名失败', false); return; }
+      toast(label ? '名称已更新，媒体库与剧集墙同步生效' : '已恢复自动识别的名称');
+      if (currentView === 'library' || currentView === 'scan') await loadFileList();
+      else if (currentView === 'posters') await loadPosterWall();
+      else await refresh();
+      return;
+    }
     case 'tree-toggle': {
       const key = btn.dataset.node;
       if (!key) return;

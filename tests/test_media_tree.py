@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from app import db, potplayer
+from app.scanner import parse_filename
 from app.api import Api
 from tests.base import IsolatedDbTestCase
 
@@ -43,7 +44,7 @@ class MediaTreeTests(IsolatedDbTestCase):
             self._file("Frieren - 03.mkv", sub="Frieren/Season 2",
                        title_guess="Frieren", title_cn="葬送的芙莉莲",
                        episode_no=3, dir_id=dir_id),
-            # 剧场版 / 未分集文件单独放到「未标注季」，不能丢
+            # 剧场版 / 未分集文件直接挂在作品组下，不造「未标注季」，也不能丢
             self._file("Frieren Movie.mkv", sub="Frieren",
                        title_guess="Frieren", title_cn="葬送的芙莉莲", dir_id=dir_id),
             self._file("Attack on Titan - 01.mkv", sub="AOT",
@@ -72,16 +73,19 @@ class MediaTreeTests(IsolatedDbTestCase):
         self.assertIn("Frieren", frieren["sub"])
         self.assertEqual(
             [s["label"] for s in frieren["children"]],
-            ["第 1 季", "第 2 季", "未标注季"],
+            ["第 1 季", "第 2 季"],
         )
         s1 = frieren["children"][0]
         self.assertEqual(s1["file_count"], 2)
         self.assertEqual([f["episode_no"] for f in s1["files"]], [1, 2])
-        self.assertEqual([f["filename"] for f in frieren["children"][2]["files"]],
-                         ["Frieren Movie.mkv"])
+        # 没有季标记的文件直接挂在作品组上，绝不造「未标注季」这一层
+        self.assertEqual([f["filename"] for f in frieren["files"]], ["Frieren Movie.mkv"])
         aot = self._group(tree, "Attack on Titan")
         self.assertEqual(aot["file_count"], 1)
-        self.assertEqual(aot["children"][0]["label"], "未标注季")
+        self.assertEqual(aot["children"], [])
+        self.assertEqual([f["filename"] for f in aot["files"]], ["Attack on Titan - 01.mkv"])
+        self.assertFalse(any("未标注季" in s["label"]
+                             for g in tree["groups"] for s in g["children"]))
 
     def test_chinese_title_merges_rows_without_cn_and_season_from_path(self):
         dir_id = self._dir()
@@ -134,7 +138,7 @@ class MediaTreeTests(IsolatedDbTestCase):
         tree = self.api.get_media_tree({"mode": "series; DROP TABLE media_files"})
         self.assertEqual(tree["mode"], "series")
         self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 1)
-        leaf = tree["groups"][0]["children"][0]["files"][0]
+        leaf = tree["groups"][0]["files"][0]
         with mock.patch.object(potplayer, "play", return_value={"ok": True}) as play:
             result = self.api.play_file(leaf["id"])
         self.assertTrue(result["ok"])
@@ -166,7 +170,7 @@ class MediaTreeTests(IsolatedDbTestCase):
         group = tree["groups"][0]
         self.assertEqual(group["label"], "家里蹲吸血姬的苦闷")
         self.assertEqual(group["file_count"], 3)
-        self.assertEqual([f["tree_episode"] for f in group["children"][0]["files"]], [1, 2, 3])
+        self.assertEqual([f["tree_episode"] for f in group["files"]], [1, 2, 3])
 
     def test_chinese_numeral_season_and_single_file_movie_keeps_own_group(self):
         dir_id = self._dir()
@@ -207,6 +211,56 @@ class MediaTreeTests(IsolatedDbTestCase):
         self.assertEqual([f["id"] for f in movies["files"]], [c["id"]])
         # 不在扫描根目录里的文件也要有归属，不能凭空消失
         self.assertEqual(sum(g["file_count"] for g in tree["groups"]), 4)
+
+    def test_anna_e_prefixed_episodes_merge_by_release_folder(self):
+        """真实脏目录：8 集 E01–E08 同目录，靠目录归并成一部剧而不是散成 8 组。"""
+        dir_id = self._dir()
+        folder = ("【高清剧集网 www.BTHDTV.com】安娜[全6集][简繁英字幕]"
+                  ".Anna.Directors.Cut.2022.WEB-DL.1080p")
+        for i in range(1, 9):
+            name = f"Anna.Directors.Cut.E{i:02d}.2022.Amazon.WEB-DL.1080p.H264.mkv"
+            self.media(name, path=str(self.tmp / "Anime" / folder / name),
+                       title_guess=f"Anna Directors Cut E{i:02d} Amazon", dir_id=dir_id)
+        self.assertEqual(parse_filename("Anna.Directors.Cut.E01.2022.mkv")["episode_no"], 1)
+        tree = self.api.get_media_tree({})
+        groups = [g for g in tree["groups"] if g["label"] == "安娜"]
+        self.assertEqual(len(groups), 1)
+        group = groups[0]
+        self.assertEqual(group["file_count"], 8)
+        self.assertEqual([f["tree_episode"] for f in group["files"]], list(range(1, 9)))
+        self.assertEqual(group["children"], [])       # 无季标记，直接挂作品组
+
+    def test_size_token_folder_shows_real_chinese_title(self):
+        """WWW.17BT.CN@爱的躯壳[…][1.36G] 必须显示片名，不能把体积当作品名。"""
+        dir_id = self._dir()
+        folder = "WWW.17BT.CN@爱的躯壳[韩语中字幕WAF][1.36G]"
+        for i in (1, 2):
+            name = f"[爱的躯壳].La.Belle.2000.XviD.AC3.CD{i}-WAF.avi"
+            self.media(name, path=str(self.tmp / "Anime" / folder / name),
+                       title_guess=f"La Belle XviD AC3 CD{i}-WAF", dir_id=dir_id)
+        labels = [g["label"] for g in self.api.get_media_tree({})["groups"]]
+        self.assertIn("爱的躯壳", labels)
+        self.assertNotIn("1.36G", labels)
+        card = next(c for c in self.api.get_poster_wall({})["cards"]
+                    if c["title"] == "爱的躯壳")
+        self.assertEqual(card["search_keyword"], "爱的躯壳")
+
+    def test_rename_work_persists_and_can_be_reset(self):
+        """改名只改展示标签：树 / 剧集墙同步，media_files 与播放记录分毫不动。"""
+        dir_id = self._dir()
+        self._file("Show - 01.mkv", title_guess="Show", title_cn="原剧名", dir_id=dir_id)
+        before = self.api.get_media_tree({})
+        gid = before["groups"][0]["id"]
+        self.assertEqual(before["groups"][0]["label"], "原剧名")
+        self.assertTrue(self.api.rename_work(gid, "我改的名字")["ok"])
+        after = self.api.get_media_tree({})
+        self.assertEqual(after["groups"][0]["label"], "我改的名字")
+        self.assertEqual(after["groups"][0]["id"], gid)
+        self.assertEqual(db.scalar("SELECT title_cn FROM media_files"), "原剧名")
+        self.assertEqual(self.api.get_poster_wall({})["cards"][0]["title"], "我改的名字")
+        self.assertTrue(self.api.rename_work(gid, "", reset=True)["ok"])
+        self.assertEqual(self.api.get_media_tree({})["groups"][0]["label"], "原剧名")
+        self.assertFalse(self.api.rename_work("not-a-group", "x")["ok"])
 
 
 class FrontendTreeTests(unittest.TestCase):

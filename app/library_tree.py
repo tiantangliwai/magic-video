@@ -9,8 +9,8 @@
       按盘符 / 顶层目录兜底归属。
 
 季数优先取扫描时解析出的 ``season_no``，缺失时从文件名 / 目录名（Season 2、S2、
-第三季…）推断；剧场版、特典等没有集数的文件进「未标注季」，绝不丢弃。
-分组只用于展示：不改数据库、不改用户文件名、不重命名磁盘视频。
+第三季…）推断；没有季标记的文件直接挂在作品组下，不再造「未标注季」这一层，
+绝不丢弃。分组只用于展示：不改数据库、不改用户文件名、不重命名磁盘视频。
 """
 from __future__ import annotations
 
@@ -41,10 +41,19 @@ _EPISODE_BRACKET_RE = re.compile(r"\[(\d{1,3})\]")
 _TECH_WORDS = (
     "1080", "720", "2160", "4k", "bdrip", "bluray", "web-dl", "web-rip", "webrip",
     "hevc", "x264", "x265", "h264", "h265", "aac", "flac", "10bit", "8bit", "opus",
-    "mkv", "mp4", "hdr", "yts", "zerotv", "zero", "bphdtv", "pthdtv", "17bt",
+    "mkv", "mp4", "hdr", "yts", "zerotv", "zero", "bphdtv", "pthdtv", "bthdtv", "17bt",
+    "www", "com", "cn", "net", "bt",
     "全集", "集完结", "中文字幕", "字幕", "简体", "繁体", "外挂", "内嵌", "国配",
     "特典", "映像", "合集", "完结", "简", "繁", "tv", "bd", "dvd", "sp", "pv", "ova",
 )
+# 站点 / 字幕组名与纯中文噪音词：只用于「目录片段」筛选，不参与标题归一化
+_SITE_NOISE_RE = re.compile(r"高清剧集网|剧集网|动漫网|字幕组|字幕社|www\.|\.com|\.cn|bthdtv|17bt", re.IGNORECASE)
+_CJK_NOISE_RE = re.compile(
+    r"字幕|简体|繁体|内嵌|外挂|全集|完结|合集|特典|映像|剧集网|高清|"
+    r"第\s*[0-9一二三四五六七八九十]+\s*[季期话集]|\d+\s*集"
+)
+# 1.36G / 720P / 4GB 这类体积或分辨率 token 不能当作品名
+_SIZE_TOKEN_RE = re.compile(r"^\d+(?:\.\d+)?\s*[kmgtp]b?i?t?e?s?$", re.IGNORECASE)
 _GENERIC_FOLDERS = {
     "pv", "sp", "sp1", "sp2", "subs", "sub", "cd", "cd1", "cd2", "extras", "extra",
     "ova", "special", "specials", "season", "data", "video", "videos", "movie", "movies",
@@ -128,6 +137,8 @@ def _is_tech_token(text: str) -> bool:
         return True
     if re.fullmatch(r"[\d\W_]+", low):          # 纯数字 / 标点，如 01-12、2020
         return True
+    if _SIZE_TOKEN_RE.match(low):               # 1.36G / 720P 这类体积或分辨率
+        return True
     if re.search(r"\d{1,3}\s*[-~+]\s*\d{1,3}", low):
         return True
     for word in _TECH_WORDS:
@@ -143,7 +154,9 @@ def _is_tech_token(text: str) -> bool:
 def _strip_release_noise(text: str) -> str:
     """把发布目录名里的字幕组 / 分辨率 / 集数范围 / 季标记等噪音去掉。"""
     s = unicodedata.normalize("NFKC", str(text or ""))
-    s = re.sub(r"www\.[^\s]+", " ", s, flags=re.IGNORECASE)
+    # 只吃掉域名本身：旧写法「www. + 任意非空白」会把紧跟在域名后面的
+    # 中文片名（WWW.17BT.CN@爱的躯壳）一起洗掉。
+    s = re.sub(r"www\.[a-z0-9.\-]+", " ", s, flags=re.IGNORECASE)
     # 保护「2.5 次元」这类标题里的小数点，避免被当成发布标记洗掉
     s = re.sub(r"(?<=\d)\.(?=\d)", "\u0001", s)
     s = _SEASON_MARK_RE.sub(" ", s)
@@ -157,20 +170,37 @@ def _strip_release_noise(text: str) -> str:
 
 
 def _folder_label(folder: str) -> tuple[str, str]:
-    """从发布目录名提取归并键与展示名；技术标记全部剔除，中文标题优先保留。"""
-    tokens = re.findall(r"\[([^\[\]]*)\]", folder)
-    outside = re.sub(r"\[[^\[\]]*\]", " ", folder)
-    candidates = [outside.strip()] + [t.strip() for t in tokens]
-    kept = []
-    for token in candidates:
-        if _is_tech_token(token):
+    """从发布目录名提取归并键与展示名；中文片名优先，技术/字幕组噪音逐段剔除。
+
+    真实目录里片名常和站点、分辨率挤在同一段，例如
+    ``WWW.17BT.CN@爱的躯壳[韩语中字幕WAF][1.36G]`` 或
+    ``【高清剧集网 www.BTHDTV.com】安娜[全6集][简繁英字幕].Anna...``。
+    旧实现是「整段只要含一个技术词就丢弃」，会把中文片名连坐洗掉，只剩
+    ``1.36G`` 这种体积 token 当作品名。改成按括号 / 分隔符切片逐段判定。
+    """
+    text = unicodedata.normalize("NFKC", str(folder or ""))
+    segments = re.split(r"[\[\]（）()【】{}._\-–—+~:：,，、!！?？'\"@]+", text)
+    segments += re.findall(r"\[([^\[\]]*)\]", text)
+    kept: list[str] = []
+    for seg in segments:
+        seg = (seg or "").strip()
+        if not seg or _is_tech_token(seg):
             continue
-        cleaned = _strip_release_noise(token)
-        if len(norm_title(cleaned)) >= 2:
-            kept.append(cleaned)
-    cjk = [t for t in kept if re.search(r"[\u4e00-\u9fff]", t)]
-    chosen = cjk if cjk else kept
-    display = " ".join(dict.fromkeys(chosen)).strip()
+        if _SITE_NOISE_RE.search(seg):
+            # 站点名 + 片名混在同一段时，把站点名剔掉再判断剩下的内容
+            seg = _SITE_NOISE_RE.sub(" ", seg).strip()
+            if not seg:
+                continue
+        cleaned = _strip_release_noise(seg)
+        if len(norm_title(cleaned)) < 2:
+            continue
+        if not re.search(r"[\u4e00-\u9fff]", cleaned) and not re.search(r"[A-Za-z]{3,}", cleaned):
+            continue
+        kept.append(cleaned)
+    cjk = [t for t in kept
+           if re.search(r"[\u4e00-\u9fff]", t) and not _CJK_NOISE_RE.search(t)]
+    chosen = cjk if cjk else [t for t in kept if re.search(r"[A-Za-z]{3,}", t)]
+    display = " ".join(dict.fromkeys(chosen)).strip()[:60]
     if len(norm_title(display)) < 2:
         return "", ""
     return "folder::" + norm_title(display), display
@@ -200,7 +230,10 @@ def folder_key_of(row: dict, roots=None) -> tuple[str, str]:
     for i in range(len(parent) - 1, -1, -1):
         if _is_generic_folder(parent[i]):
             continue
-        return _folder_label(parent[i])
+        key, label = _folder_label(parent[i])
+        # 最内层目录全是技术噪音时继续往外找，别让这一批文件退回「按文件名各自成组」
+        if key:
+            return key, label
     return "", ""
 
 
@@ -313,7 +346,10 @@ def _finalize(node: dict) -> None:
     )
     hint = node["_hint"]
     if node["kind"] == "series":
-        node["sub"] = (hint + " · " if hint else "") + f"{len(node['children'])} 季 · {len(files)} 集"
+        seasons = len(node["children"])
+        node["sub"] = ((hint + " · " if hint else "")
+                       + (f"{seasons} 季 · " if seasons else "")
+                       + f"{len(files)} 集")
     elif node["kind"] == "folder":
         node["sub"] = f"{len(files)} 个文件" + (f" · {len(node['children'])} 个子目录" if node["children"] else "")
     else:
@@ -322,7 +358,9 @@ def _finalize(node: dict) -> None:
         node.pop(key, None)
 
 
-def series_tree(rows: list[dict], directories: list[dict] | None = None) -> dict:
+def series_tree(rows: list[dict], directories: list[dict] | None = None,
+                labels: dict | None = None) -> dict:
+    """``labels`` 是用户手工改过的作品名（按分组 id 索引），只影响展示标签。"""
     enriched = [_enrich(r) for r in rows]
     roots = _roots(directories)
     # 第一遍：算出每行的中文名 / 发布目录 / 文件名候选键，并统计目录里的文件数
@@ -369,15 +407,20 @@ def series_tree(rows: list[dict], directories: list[dict] | None = None) -> dict
         group["_all"].append(item)
 
         season = item.get("tree_season") or 0
+        if season == 0:
+            # 剧场版 / 单集 / 未标季：直接挂在作品组下，不再造「未标注季」这一层
+            group["files"].append(item)
+            continue
         season_id = f"{group['id']}::season::{season}"
         season_node = next((c for c in group["children"] if c["id"] == season_id), None)
         if season_node is None:
-            season_node = _node(season_id, "season", f"第 {season} 季" if season else "未标注季")
+            season_node = _node(season_id, "season", f"第 {season} 季")
             season_node["_season"] = season
             group["children"].append(season_node)
         season_node["_all"].append(item)
         season_node["files"].append(item)
 
+    overrides = {str(k): str(v).strip() for k, v in (labels or {}).items() if str(v).strip()}
     result = []
     for key, group in groups.items():
         cns = [t for t in group["_titles"] if t]
@@ -389,7 +432,7 @@ def series_tree(rows: list[dict], directories: list[dict] | None = None) -> dict
             label = Counter(folders).most_common(1)[0][0]
         else:
             label = Counter(guesses).most_common(1)[0][0] if guesses else key.split("::")[-1]
-        group["label"] = label[:60]
+        group["label"] = overrides.get(group["id"], label[:60])
         other = [g for g in guesses if g and norm_title(g) != norm_title(label)]
         group["_hint"] = other[0][:40] if other else ""
         # 有编号的季按 1、2、3… 排，未标注季永远放最后
@@ -459,9 +502,10 @@ def directory_tree(rows: list[dict], directories: list[dict] | None = None) -> d
 
 
 def build_tree(rows: list[dict], mode: str = "series",
-               directories: list[dict] | None = None) -> dict:
+               directories: list[dict] | None = None,
+               labels: dict | None = None) -> dict:
     """按视图模式构建树；未知模式一律降级为作品树，绝不把输入拼进 SQL。"""
     wanted = str(mode or "series").strip().lower()
     if wanted in ("folder", "directory", "path"):
         return directory_tree(rows, directories)
-    return series_tree(rows, directories)
+    return series_tree(rows, directories, labels)

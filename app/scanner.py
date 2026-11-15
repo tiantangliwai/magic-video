@@ -27,11 +27,16 @@ SEASON_WORD_RE = re.compile(
     r"\b(?:2nd|3rd|1st)\s+Season\b",
     re.IGNORECASE,
 )
-EPISODE_WORD_RE = re.compile(r"(?:EP|Episode|第)\s*\d{1,3}\s*(?:话|集|話)?", re.IGNORECASE)
+EPISODE_WORD_RE = re.compile(
+    r"(?:EP|Episode|第)\s*\d{1,3}\s*(?:话|集|話)?|(?<![A-Za-z0-9])E\d{1,3}(?![A-Za-z0-9])",
+    re.IGNORECASE,
+)
 TRAILING_EP_RE = re.compile(r"[-–—_.\s]\s*(\d{1,3})\s*(?:v\d)?\s*$", re.IGNORECASE)
 EPISODE_PATTERNS = [
     re.compile(r"(?:EP|Episode|第)\s*(\d{1,3})\s*(?:话|集|話)?"),
     re.compile(r"^\s*[-_]?\s*(\d{1,3})\s*(?:v\d)?\s*$"),
+    # Anna.Directors.Cut.E01 / Show.E08.1080p 这类「无 S 前缀的 E01」也是剧集标记
+    re.compile(r"(?<![A-Za-z0-9])E(\d{1,3})(?![A-Za-z0-9])", re.IGNORECASE),
     re.compile(r"[-_\s]\s*(\d{2,3})\s*(?:v\d)?\s*[-_\s\[]"),
 ]
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")

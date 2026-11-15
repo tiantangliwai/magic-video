@@ -590,7 +590,33 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 20. 尚未实现（明确边界，避免误判为缺陷）
+## 20. 展示视图、分组修正与作品改名（0.1.4 日常迭代）
+
+### 验收标准
+
+| 需求 | 验收 |
+|---|---|
+| 看过的列表默认平铺、也展示剧集列表与图片、只显示一个作品名 | 默认卡片墙：一部作品一张封面卡片、只显示 `r.title`；表格视图默认不分组且无「中文名」列；双击作品名仍可改名 |
+| 媒体库也展示剧集列表 | 媒体库默认封面墙，另有剧集展示 / 目录结构 / 平铺列表，四种视图共用 `_media_filters()` |
+| 扫描结果按目录结构展示 | 扫描页默认 `folder` 树（扫描根 → 子目录 → 文件），后端 `directory_tree` 已实现并有单测 |
+| 设置页保存按钮固化在顶部 | `.settings-actions` `position: sticky; top: 0`，`case 'save-settings'` 与事件委托不变 |
+| Anna E01–E08 是一部剧 | `parse_filename` 认 `E01`；发布目录归并后 8 集同组、集号 1–8 有序 |
+| `1.36G` 应显示「爱的躯壳」 | `_folder_label` 逐段去噪 + 体积 token 识别，树 label 与卡片标题均为「爱的躯壳」 |
+| 不要「未标注季」这一层 | 无季标记的文件直接挂到 series 节点的 `files`，`children` 里不再有「未标注季」 |
+| 提供编辑修改名称的能力 | `Api.rename_work()` 写 `settings.work_labels_json`，树 / 剧集墙 / 整剧树三处同源；留空恢复；只改展示标签 |
+
+### 数据流与边界
+
+- 封面：`get_poster_wall` → `covers` 映射（标题 → 文件名）→ `cover_data_uris(titles)` → data URI。看过的列表同时用 `title` 与 `title_cn` 查缓存。**只读缓存，不启动 `covers.start_job`**。
+- 改名：`rename_work(group_id, label)` 校验 `group_id` 前缀 `series::` → 读写一个 JSON 设置键 → `build_tree(..., labels=...)` 在 `series_tree` 里覆盖 `group["label"]`。分组 id 不变，因此 `_find_series_group()` 的整剧清理校验不受影响。
+- 目录归并：`folder_key_of()` 从最内层非通用目录开始，逐段切分（方括号 / 常见分隔符），技术词、站点名、体积 token、字幕噪音逐段剔除，中文片名优先；一层全是噪音就继续往外层找。
+- **铁律不变**：分组只用于展示，不改数据库行、不改磁盘文件名；观看记录零自动删除；用户 `source='user'` 的手改中文名不被自动匹配覆盖。
+
+对应测试：`tests/test_media_tree.py`（14 个用例，含 Anna / 1.36G / 无季层 / 改名持久化）、`tests/test_watched_cleanup.py`（前端契约 37 个用例，含四视图、卡片墙 / 表格、sticky、改名两端接线）、`tests/test_scanner.py`（`E01` 解析由媒体库用例连带验证）。
+
+---
+
+## 21. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、封面人工确认与多站点兜底。
 - 换用 mpv / libVLC 等开源内核（正在调研，未决定是否迁移；当前仍是 PotPlayer 控制层方案）。

@@ -1,6 +1,7 @@
 """pywebview 的 js_api：前端与本地数据之间的唯一桥梁。"""
 from __future__ import annotations
 
+import json
 import os
 import re
 import subprocess
@@ -19,6 +20,10 @@ from . import (
 
 # 单次人工删除的文件数上限：一部剧通常十几到几十集，给足余量又防误传整库
 _MAX_DELETE_FILES = 300
+
+# 用户手工修改的作品名：存在 settings 里的一份 JSON 映射（分组 id -> 名称）。
+# 只影响展示标签，不改 media_files 的任何字段；不引入新表、不需要迁移。
+_WORK_LABELS_KEY = "work_labels_json"
 
 # 剧集墙「查看分集」的搜索词清洗：树分组偶尔把 [1.36G] 这类文件大小当成
 # 作品名，此时退回文件名方括号里的真实中文片名（例：[爱的躯壳].La.Belle...）。
@@ -427,13 +432,47 @@ class Api:
             tuple(params),
         )
         directories = self._directory_options()
-        tree = library_tree.build_tree(rows, str(opt.get("mode") or "series"), directories)
+        tree = library_tree.build_tree(rows, str(opt.get("mode") or "series"),
+                                       directories, self._work_labels())
         return {
             "ok": True, **tree,
             "total_all": int(db.scalar("SELECT COUNT(*) FROM media_files") or 0),
             "matched": self._matched_count(),
             "directories": directories,
         }
+
+    # ---- 作品改名：只改展示名，绝不碰媒体文件 / 播放记录 -------------------
+    @staticmethod
+    def _work_labels() -> dict:
+        """读用户手改的作品名映射；内容损坏时静默降级为空，不影响浏览。"""
+        try:
+            data = json.loads(db.get_setting(_WORK_LABELS_KEY, "{}") or "{}")
+        except (TypeError, ValueError):
+            return {}
+        if not isinstance(data, dict):
+            return {}
+        return {str(k): str(v).strip()[:60] for k, v in data.items()
+                if str(k).strip() and str(v).strip()}
+
+    def rename_work(self, group_id: str, new_label: str, reset: bool = False) -> dict:
+        """给一个作品分组改名（或清空恢复自动名称）。
+
+        ``group_id`` 必须是树里返回的 ``series::...`` 节点 id；改名只写一份
+        settings 映射，不 UPDATE media_files，也不影响封面缓存与搜索词兜底。
+        """
+        gid = str(group_id or "").strip()
+        if not gid.startswith("series::"):
+            return {"ok": False, "error": "只能修改作品分组的名称"}
+        label = str(new_label or "").strip()[:60]
+        labels = self._work_labels()
+        if reset or not label:
+            labels.pop(gid, None)
+        elif not re.search(r"[\u4e00-\u9fffA-Za-z0-9]", label):
+            return {"ok": False, "error": "名称里至少要有一个文字或数字"}
+        else:
+            labels[gid] = label
+        db.set_setting(_WORK_LABELS_KEY, json.dumps(labels, ensure_ascii=False))
+        return {"ok": True, "group_id": gid, "label": label, "labels": labels}
 
     # ---- 人工清理：历史记录 / 已看完剧集的本地文件 -------------------------
     @staticmethod
@@ -467,7 +506,8 @@ class Api:
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC"
         )
-        return library_tree.build_tree(rows, "series", Api._directory_options())
+        return library_tree.build_tree(rows, "series", Api._directory_options(),
+                                      Api._work_labels())
 
     @classmethod
     def _find_series_group(cls, group_id: str) -> dict | None:
@@ -689,7 +729,8 @@ class Api:
             "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
             tuple(params),
         )
-        tree = library_tree.build_tree(rows, "series", self._directory_options())
+        tree = library_tree.build_tree(rows, "series", self._directory_options(),
+                                      self._work_labels())
         cover_entries = covers.subject_covers()
         cards = []
         for group in tree.get("groups", []):

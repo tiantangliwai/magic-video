@@ -189,6 +189,11 @@ html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #33
 html[data-theme="dark"] .btn-danger { border-color: rgba(248, 113, 113, .35); }
 html[data-theme="dark"] .btn-danger:hover { background: rgba(248, 113, 113, .12); }
 .btn-row { display: flex; gap: 9px; flex-wrap: wrap; }
+/* 设置页工具条：跟随 #content 滚动，top:0 紧贴不滚动的顶栏下沿 */
+.settings-actions { position: sticky; top: 0; z-index: 6; align-items: center;
+  margin: -22px -26px 16px; padding: 14px 26px;
+  background: var(--surface); border-bottom: 1px solid var(--border); }
+.settings-actions .hint { flex: 1 1 220px; margin: 0; font-size: 11px; }
 
 .input, textarea.input, select.input { width: 100%; padding: 9px 11px; border: 1px solid var(--border);
   border-radius: 8px; background: var(--surface); color: var(--text); outline: none; }
@@ -231,6 +236,10 @@ td { color: var(--text); }
 .content-fill > .watched-card { flex: 1 1 auto; min-height: 0; margin-bottom: 0; }
 .content-fill > .watched-card > :not(.table-wrap) { flex: none; }
 .watched-card > .table-wrap { flex: 1 1 auto; min-height: 0; max-height: none; overflow: auto; }
+/* 卡片墙与表格互斥：作者样式的 display 会盖过 UA 的 [hidden]，必须显式关掉 */
+.watched-card > [hidden] { display: none !important; }
+.watched-card > .watched-cards { flex: 1 1 auto; min-height: 0; overflow: auto;
+  align-content: start; padding: 4px 2px 12px; }
 /* border-collapse: collapse 时 th 的 border-bottom 不跟随 sticky，用 box-shadow 补线；
    z-index 保证表头盖住带背景的分组行。 */
 .table-wrap thead th { position: sticky; top: 0; z-index: 2;

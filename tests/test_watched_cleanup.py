@@ -315,10 +315,49 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('WINDOW_TITLE = "Magic Video"', single)
         self.assertIn("document.title = 'Magic Video · ' + title", self.js)
 
-    def test_series_view_replaces_directory_tree_option(self):
+    def test_four_view_modes_and_defaults_are_wired(self):
+        """扫描页默认目录结构、媒体库默认封面墙，四种视图都能在下拉里切。"""
         self.assertIn("剧集展示（作品 → 季 → 集）", self.js)
-        self.assertNotIn("option('folder'", self.js)
-        self.assertIn("if (s.view_mode === 'folder') s.view_mode = 'series';", self.js)
+        self.assertIn("option('cards', '封面墙", self.js)
+        self.assertIn("option('folder', '目录结构", self.js)
+        self.assertIn("option('flat', '平铺列表'", self.js)
+        self.assertNotIn("if (s.view_mode === 'folder') s.view_mode = 'series';", self.js)
+        self.assertIn("['cards', 'series', 'flat', 'folder']", self.js)
+        self.assertIn("fileListState.view_mode = 'folder'", self.js)
+        self.assertIn("fileListState.view_mode = 'cards'", self.js)
+
+    def test_settings_actions_are_pinned_to_top(self):
+        for token in ("settings-actions", "data-action=\"save-settings\"",
+                      "position: sticky"):
+            self.assertIn(token, self.js if token.startswith("settings-actions") or token.startswith("data-") else self.css)
+
+    def test_watched_list_has_card_wall_and_flat_table(self):
+        """看过的列表：卡片墙 / 表格可切换，默认平铺，只显示一个作品名。"""
+        for token in ("let watchedViewMode = 'cards'", "let watchedGrouped = false",
+                      "watchedCardsHtml", 'id="watchedCards"', "watched-view-mode",
+                      "watched-group-mode", "watchedCovers", "cover_data_uris",
+                      "data-action=\"watched-view-mode\""):
+            self.assertIn(token, self.js)
+        self.assertNotIn("<th>中文名</th>", self.js)
+        # 中文名列去掉了，但已有中文名要能通过隐藏域原样带回后端
+        self.assertIn('type="hidden" id="watchedEditCn"', self.js)
+        self.assertIn("titleEl.value, cnEl.value", self.js)
+
+    def test_library_and_scan_support_four_view_modes(self):
+        for token in ("option('cards', '封面墙", "get_poster_wall",
+                      "mode === 'cards'", "posterCardHtml", "fileListState.view_mode = 'folder'",
+                      "fileListState.view_mode = 'cards'"):
+            self.assertIn(token, self.js)
+
+    def test_work_rename_is_wired_both_ends(self):
+        for token in ('data-action="rename-work"', "case 'rename-work'",
+                      "promptDialog", "rename_work"):
+            self.assertIn(token, self.js)
+        self.assertIn("def rename_work", (ROOT / "app/api.py").read_text(encoding="utf-8"))
+
+    def test_settings_actions_are_sticky_in_css(self):
+        self.assertIn(".settings-actions { position: sticky", self.css)
+        self.assertIn(".watched-card > .watched-cards", self.css)
 
     def test_double_click_and_focusout_autosave(self):
         for token in ('data-edit-watched="', "addEventListener('dblclick'",
