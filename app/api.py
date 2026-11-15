@@ -200,8 +200,9 @@ class Api:
         """历史记录按「每个作品只显示最新一次会话」去重。
 
         只是展示层收拢：``watch_sessions`` 里所有旧会话**原样保留**，
-        人工删除入口仍只作用于用户点中的那一条。file_id 为空的外部播放
-        会话用 ``-id`` 分组，避免彼此被合并掉。
+        人工删除入口仍只作用于用户点中的那一条。分组键优先用作品标题
+        （中文名 > 推断名），同一部剧的不同集因此只留最新一条；没有标题
+        的（如外部播放）退回 ``file_id`` / ``-id``，避免彼此被误合并。
         """
         return db.rows(
             "SELECT s.*, f.filename, "
@@ -209,7 +210,13 @@ class Api:
             "f.season_no, f.episode_no, f.path "
             "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
             "WHERE s.id IN ("
-            "  SELECT MAX(id) FROM watch_sessions GROUP BY COALESCE(file_id, -id)"
+            "  SELECT MAX(t.id) FROM ("
+            "    SELECT s2.id AS id, COALESCE("
+            "      NULLIF(TRIM(COALESCE(f2.title_cn, f2.title_guess)), ''),"
+            "      'file::' || COALESCE(CAST(s2.file_id AS TEXT), CAST(-s2.id AS TEXT))"
+            "    ) AS work_key"
+            "    FROM watch_sessions s2 LEFT JOIN media_files f2 ON f2.id = s2.file_id"
+            "  ) t GROUP BY t.work_key"
             ") ORDER BY s.started_at DESC LIMIT ?",
             (int(limit),),
         )

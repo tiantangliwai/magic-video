@@ -53,8 +53,9 @@ Bocchi the Rock\t1\t1\t12
 | R2-5 | 进度 ≥90%（可配）自动标记 `completed=1`；重看开头不回退该标记 | `test_completed_threshold_marks_watched` 等 |
 | R2-6 | 直接双击 PotPlayer 打开库外文件也留历史，并即时查离线词典 | `test_external_file_is_registered_and_matched_offline` |
 | R2-7 | 续播用 `/seek=hh:mm:ss /current /autoplay` 从上次位置启动；「从头播放」不传 seek | `test_potplayer.py::PlayTests`、`test_api.py::test_play_file_uses_saved_position` |
-| R2-8 | 历史页按时间倒序列出每次会话的起止时间与最远进度 | `test_smoke.py::test_full_user_journey` |
+| R2-8 | 历史页按时间倒序列出作品的起止时间与最远进度；**同一作品的不同集/多次会话只显示最新一条** | `test_continue_dismiss.py::HistoryDedupTests`、`test_smoke.py::test_full_user_journey` |
 | R2-9 | 「标记已看 / 标记未看 / 重置进度」可纠错，且**不删除** `watch_sessions` | `test_api.py::test_mark_watched_and_unwatched` 等 |
+| R2-10 | 历史去重按作品标题（中文名 > 推断名）分组，无标题会话按 `file_id` / `-id` 独立保留；只是展示层收拢，旧会话一条不删，人工删最新一条后自动露出该作品次新一条 | `test_continue_dismiss.py::test_same_work_different_episodes_keep_only_latest` 等 |
 
 ### R3 · 目录扫描与中文名识别
 
@@ -596,7 +597,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 | 需求 | 验收 |
 |---|---|
-| 看过的列表默认平铺、也展示剧集列表与图片、只显示一个作品名 | 默认卡片墙：一部作品一张封面卡片、只显示 `r.title`；表格视图默认不分组且无「中文名」列；双击作品名仍可改名 |
+| 看过的列表默认平铺、也展示剧集列表与图片、只显示一个作品名 | 默认**平铺表格**：一行一条、不分组、无「中文名」列；可切到卡片墙（每部作品一张封面卡片、只显示 `r.title`）；双击作品名仍可改名 |
 | 媒体库也展示剧集列表 | 媒体库默认封面墙，另有剧集展示 / 目录结构 / 平铺列表，四种视图共用 `_media_filters()` |
 | 扫描结果按目录结构展示 | 扫描页默认 `folder` 树（扫描根 → 子目录 → 文件），后端 `directory_tree` 已实现并有单测 |
 | 设置页保存按钮固化在顶部 | `.settings-actions` `position: sticky; top: 0`，`case 'save-settings'` 与事件委托不变 |

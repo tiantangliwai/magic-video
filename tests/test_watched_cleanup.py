@@ -333,7 +333,7 @@ class FrontendContractTests(unittest.TestCase):
 
     def test_watched_list_has_card_wall_and_flat_table(self):
         """看过的列表：卡片墙 / 表格可切换，默认平铺，只显示一个作品名。"""
-        for token in ("let watchedViewMode = 'cards'", "let watchedGrouped = false",
+        for token in ("let watchedViewMode = 'table'", "let watchedGrouped = false",
                       "watchedCardsHtml", 'id="watchedCards"', "watched-view-mode",
                       "watched-group-mode", "watchedCovers", "cover_data_uris",
                       "data-action=\"watched-view-mode\""):

@@ -28,7 +28,7 @@ let watchedRows = [];
 let watchedKeyword = '';
 let watchedEditing = 0;
 let watchedGrouped = false;         // 表格视图默认平铺，不按作品折叠
-let watchedViewMode = 'cards';      // 看过的列表：卡片墙 / 表格，两种都可切换
+let watchedViewMode = 'table';      // 看过的列表：默认平铺表格，卡片墙仍可一键切换
 let watchedCovers = {};             // 作品名 -> 封面 data URI（只读缓存，不触发抓取任务）
 let watchedFolders = {};            // watched_list.id -> 匹配到的本地目录（只用来决定按钮显隐）
 const watchedOpen = new Set();     // 已展开的分组 key
@@ -832,8 +832,8 @@ async function renderWatched() {
   const cards = watchedViewMode === 'cards';
   setContent(`<div class="card watched-card"><div class="section-head"><h3>看过的列表</h3>
       <span class="badge blue" id="watchedCount">正在统计…</span></div>
-    <p class="hint">你手动导入的已观看作品。<b>默认卡片墙</b>：每部作品一张封面卡片、只显示一个作品名；
-      切到表格后双击作品名可直接改名（默认平铺、不分组），导入原文始终保留。
+    <p class="hint">你手动导入的已观看作品。<b>默认平铺表格</b>：一行一条、不按作品折叠，双击作品名即可改名；
+      切到卡片墙后每部作品一张封面卡片、只显示一个作品名，导入原文始终保留。
       <b>能在扫描目录里匹配到对应作品时</b>，条目上会出现「打开文件夹」，用资源管理器跳到该文件所在目录。</p>
     <div class="watched-toolbar">
       <input class="input" id="watchedSearch" placeholder="搜索作品名 / 中文名 / 导入原文 / 备注…" value="${esc(watchedKeyword)}" autocomplete="off">

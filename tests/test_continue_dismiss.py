@@ -110,14 +110,36 @@ class HistoryDedupTests(IsolatedDbTestCase):
         # 旧会话一条不少
         self.assertEqual(db.scalar("SELECT COUNT(*) FROM watch_sessions"), 3)
 
-    def test_different_files_each_keep_one_row(self):
-        a = self.media("A - 01.mkv")["id"]
-        b = self.media("B - 01.mkv")["id"]
+    def test_different_works_each_keep_one_row(self):
+        a = self.media("A - 01.mkv", title_cn="作品甲")["id"]
+        b = self.media("B - 01.mkv", title_cn="作品乙")["id"]
         self.session(a, "2026-11-01 10:00:00")
         self.session(a, "2026-11-02 10:00:00")
         self.session(b, "2026-11-03 10:00:00")
         ids = {r["file_id"] for r in Api().get_history()}
         self.assertEqual(ids, {a, b})
+
+    def test_same_work_different_episodes_keep_only_latest(self):
+        """同一部剧的不同集（不同 file_id）只显示最新一条，旧会话不删库。"""
+        ep3 = self.media("Show - 03.mkv", title_cn="同一部剧")["id"]
+        ep5 = self.media("Show - 05.mkv", title_cn="同一部剧")["id"]
+        ep7 = self.media("Show - 07.mkv", title_cn="同一部剧")["id"]
+        self.session(ep3, "2026-11-01 10:00:00")
+        self.session(ep5, "2026-11-02 10:00:00")
+        latest = self.session(ep7, "2026-11-03 10:00:00")
+        history = Api().get_history()
+        self.assertEqual(len(history), 1)
+        self.assertEqual(history[0]["id"], latest)
+        self.assertEqual(history[0]["file_id"], ep7)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watch_sessions"), 3)
+
+    def test_episodes_with_no_title_fall_back_to_file_key(self):
+        """没有作品标题的文件（外部/未刮削）按 file_id 各自保留，不被合并。"""
+        a = self.media("A - 01.mkv", title_guess=None)["id"]
+        b = self.media("B - 01.mkv", title_guess=None)["id"]
+        self.session(a, "2026-11-01 10:00:00")
+        self.session(b, "2026-11-02 10:00:00")
+        self.assertEqual({r["file_id"] for r in Api().get_history()}, {a, b})
 
     def test_external_sessions_without_file_id_are_not_merged(self):
         self.session(None, "2026-11-01 10:00:00")
