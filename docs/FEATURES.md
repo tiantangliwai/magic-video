@@ -82,6 +82,9 @@ Bocchi the Rock\t1\t1\t12
 | R4-8 | 自动启动幂等：已在运行不重复拉起；窗口侧与前端 `init()` 双调用也只拉起一个托盘图标 |
 | R4-9 | `Api.__init__` 不启动任何进程；进程拉起只发生在 `create_window()` / 设置变更时的显式调用，单测可安全实例化 `Api()` |
 | R4-10 | 源码版（`pythonw.exe daemon.py`）与打包版（`exe --daemon`）都能被识别、检测与停止 |
+| R4-11 | 左下角状态准确：守护刚被拉起时显示「启动中…」，就绪后 1 秒内转「正在运行」；切回窗口立即校正；`refresh()` 抛错也不能阻断状态轮询注册 |
+| R4-12 | 守护进程自身抢命名互斥体 `MagicVideo_Daemon_v1`，两个窗口同时 Popen 也只留一份托盘；进程识别精确到 `python(w).exe` + `daemon.py` 参数，逐进程容错，不把诊断脚本误判为守护 |
+| R4-13 | 单测绝不启停本机真实守护：`save_settings()` 会立刻走 `_apply_daemon_auto_start()`，相关用例必须 mock；`DaemonAutoStartApiTests.setUp` 默认把 `psutil.process_iter` 钉成空列表、把 `Popen` 钉成报错做双保险 |
 
 > 三个开关语义独立：`daemon_auto_start`（本次启动拉起守护，默认 1）、`autostart`（开机登录自启，默认 0）、`recording_enabled`（守护是否写历史，默认 1）。
 

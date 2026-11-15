@@ -13,6 +13,7 @@ import sys
 from ctypes import wintypes
 
 MUTEX_NAME = "Local\\MagicVideo_SingleInstance_v1"
+DAEMON_MUTEX_NAME = "Local\\MagicVideo_Daemon_v1"  # 守护进程专用，与主窗口互斥体互不干扰
 WINDOW_TITLE = "Magic Video"  # 必须与 app/main.py::create_window 的窗口标题完全一致
 ERROR_ALREADY_EXISTS = 183
 SW_RESTORE = 9
@@ -36,6 +37,7 @@ except (AttributeError, OSError):  # pragma: no cover - 仅在非 Windows 触发
 
 # 句柄必须在进程生命周期内一直持有，提前 CloseHandle 会让互斥体失效
 _held_handle = None
+_daemon_handle = None
 
 
 def acquire() -> bool:
@@ -44,6 +46,19 @@ def acquire() -> bool:
     if _kernel32 is None:
         return True
     _held_handle = _kernel32.CreateMutexW(None, False, MUTEX_NAME)
+    return _kernel32.GetLastError() != ERROR_ALREADY_EXISTS
+
+
+def acquire_daemon() -> bool:
+    """守护进程专用互斥体：已有守护在跑返回 False，避免重复托盘图标与重复写记录。
+
+    ``start_daemon()`` 是「先查进程再 Popen」，两个窗口几乎同时启动时会竞态拉起
+    两份守护；由守护自己在入口处抢占互斥体才是可靠的最后一道防线。
+    """
+    global _daemon_handle
+    if _kernel32 is None:
+        return True
+    _daemon_handle = _kernel32.CreateMutexW(None, False, DAEMON_MUTEX_NAME)
     return _kernel32.GetLastError() != ERROR_ALREADY_EXISTS
 
 

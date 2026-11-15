@@ -670,22 +670,38 @@ class Api:
 
         源码版命令行是 ``pythonw.exe daemon.py``；打包版是同一个 exe 带
         ``--daemon``。打包版必须靠这个参数区分，否则会把主窗口也算成守护。
-        psutil 枚举失败（权限 / 进程退出）一律静默降级为空列表。
+
+        判定必须精确到「可执行文件是 python/pythonw，且某个参数的路径名恰好是
+        daemon.py」：早期用整条命令行做子串匹配，会把 ``python -c "…daemon.py…"``
+        这类诊断脚本、CLI 命令误判成守护，让状态显示与实际不符。
+
+        每个进程单独容错：单个进程无权限 / 已退出只跳过它，绝不中断整轮扫描
+        （否则排在守护之前的系统进程一抛异常，就会漏报成「守护未启动」）。
+        psutil 整体枚举失败时静默降级为空列表。
         """
         found = []
         try:
             own_exe = str(runtime.executable()).replace("\\", "/").lower()
             frozen = runtime.is_frozen()
             for proc in psutil.process_iter(["cmdline"]):
-                parts = proc.info.get("cmdline") or []
-                if not parts:
+                try:
+                    parts = proc.info.get("cmdline") or []
+                    if not parts:
+                        continue
+                    first = str(parts[0]).replace("\\", "/").lower()
+                    exe_name = first.rsplit("/", 1)[-1]
+                    is_python = exe_name in ("python.exe", "pythonw.exe")
+                    # 参数里存在路径末段恰好为 daemon.py 的脚本才算源码版守护
+                    script_arg = any(
+                        str(part).replace("\\", "/").rsplit("/", 1)[-1].lower() == "daemon.py"
+                        for part in parts[1:]
+                    )
+                    source_mode = is_python and script_arg
+                    frozen_mode = frozen and "--daemon" in parts and first == own_exe
+                    if source_mode or frozen_mode:
+                        found.append(proc)
+                except Exception:
                     continue
-                cmd = " ".join(parts)
-                source_mode = "daemon.py" in cmd and "python" in cmd.lower()
-                first = str(parts[0]).replace("\\", "/").lower()
-                frozen_mode = frozen and "--daemon" in parts and first == own_exe
-                if source_mode or frozen_mode:
-                    found.append(proc)
         except Exception:
             pass
         return found

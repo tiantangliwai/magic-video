@@ -9,6 +9,8 @@ let embeddedMode = true;            // 软件内播放开关（设置存 SQLite�
 let playerStageActive = false;      // 播放舞台是否已展开
 let embedSyncTimer = null;          // 仅内嵌播放期间存在，退出立即清掉
 let embedResizeTimer = null;
+let daemonAutoStart = true;         // 设置里是否允许自动开启后台记录
+let daemonBootUntil = 0;            // 启动宽限期截止时间戳：刚 Popen 时先显示「启动中」，别误报未启动
 
 // 展示风格：黑 / 白两套。存在 SQLite 设置表里（WebView2 用 private_mode，localStorage 不持久）。
 function applyTheme(theme) {
@@ -954,11 +956,35 @@ async function updateDaemonState() {
     const st = await call('daemon_running');
     const running = !!st.running;
     const dot = document.getElementById('daemonDot');
-    dot.className = 'dot' + (running ? '' : ' gray');
-    document.getElementById('daemonText').textContent = running ? '后台记录正在运行' : '后台记录未启动 · 设置里可开启';
+    const text = document.getElementById('daemonText');
+    if (running) {
+      dot.className = 'dot';
+      text.textContent = '后台记录正在运行';
+      daemonBootUntil = 0;                       // 已就绪，结束启动宽限期与短轮询
+    } else if (!daemonAutoStart) {
+      dot.className = 'dot gray';
+      text.textContent = '后台记录已关闭 · 设置里可开启';
+    } else if (Date.now() < daemonBootUntil) {
+      // 守护刚被拉起时进程列表未必立即可见，此处不能草率判定「未启动」
+      dot.className = 'dot amber';
+      text.textContent = '后台记录启动中…';
+    } else {
+      dot.className = 'dot gray';
+      text.textContent = '后台记录未启动 · 设置里可开启';
+    }
+    return running;
   } catch (e) {
     document.getElementById('daemonText').textContent = '后台记录状态未知';
+    return false;
   }
+}
+
+// 启动后的短时间内用 1 秒间隔把「启动中」纠正为「正在运行」，就绪或超时即停。
+function watchDaemonBoot() {
+  const timer = setInterval(async () => {
+    const running = await updateDaemonState();
+    if (running || Date.now() >= daemonBootUntil) clearInterval(timer);
+  }, 1000);
 }
 
 async function handleAction(action, btn) {
@@ -1345,18 +1371,26 @@ async function init() {
   // 原生窗口标题栏不受 CSS 控制，窗口就绪后同步一次；重启深色模式也不会退回白条
   try { await call('sync_native_theme'); } catch (e) { /* 不支持 DWM 时静默降级 */ }
   // 后台记录默认自动启动：create_window 已先拉起一次，此处为幂等兜底（不会重复拉起）
-  try { await call('ensure_daemon_auto_start'); } catch (e) { /* 守护启动失败不影响界面 */ }
-  await refreshEmbedState();
-  await refresh();
+  try {
+    const boot = await call('ensure_daemon_auto_start');
+    daemonAutoStart = !(boot && boot.disabled);
+  } catch (e) { /* 守护启动失败不影响界面 */ }
+  // 任何一步刷新抛错都不能阻断状态轮询：以前 refresh() 一旦异常，
+  // 左下角会永远停在启动那一刻的旧文案，看起来就像「守护没起来」。
+  if (daemonAutoStart) daemonBootUntil = Date.now() + 12000;
+  try { await refreshEmbedState(); } catch (e) { /* 内嵌播放状态降级不影响界面 */ }
+  try { await refresh(); } catch (e) { /* 首页刷新失败不影响状态与轮询注册 */ }
   await updateDaemonState();
-  await updatePlayerChip();
+  if (daemonAutoStart && daemonBootUntil) watchDaemonBoot();
+  try { await updatePlayerChip(); } catch (e) { /* 播放器状态降级不影响界面 */ }
   setInterval(updatePlayerChip, 3000);
-  setInterval(updateDaemonState, 15000);
+  setInterval(updateDaemonState, 8000);
   setInterval(() => { if (currentView === 'home' && !playerStageActive) refresh(); }, 12000);
 }
 
-// 关掉 PotPlayer 切回软件窗口时立即重查断点 / 历史，不必等 12 秒的首页轮询
+// 切回软件窗口时立即校正守护状态与断点 / 历史，不必等下一轮轮询
 window.addEventListener('focus', () => {
+  updateDaemonState();
   if ((currentView === 'home' || currentView === 'continue')
       && !watchedEditing && !playerStageActive) refresh();
 });
