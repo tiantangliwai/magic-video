@@ -901,6 +901,26 @@ def _cover_file_ok(filename: str) -> bool:
         return False
 
 
+def cover_index(entries: list[tuple[str, str]] | None) -> tuple[dict, dict]:
+    """把 subjects 列表编译成两张查找表：精确键、去季键。
+
+    旧实现每解析一张封面都要重新 ``_norm_key()`` 全部 subjects（80 条 × 195 张卡），
+    再逐个 ``stat()`` 校验文件，实测光这一步就 220ms。表只建一次即可。
+    """
+    exact: dict[str, str] = {}
+    base: dict[str, str] = {}
+    for rec_title, filename in entries or []:
+        if not filename:
+            continue
+        key = _norm_key(rec_title)
+        if key:
+            exact.setdefault(key, filename)
+        base_key = _norm_key(_strip_season(rec_title))
+        if base_key:
+            base.setdefault(base_key, filename)
+    return exact, base
+
+
 def resolve_cover(title: str, entries: list[tuple[str, str]] | None = None) -> str:
     """把「展示标题」解析成本地封面文件名。
 
@@ -908,27 +928,80 @@ def resolve_cover(title: str, entries: list[tuple[str, str]] | None = None) -> s
     不同的季标记或后缀，只按哈希查会漏。顺序：
     原哈希 → 去季标记哈希 → subjects 精确匹配 → subjects 去季精确 → subjects 包含匹配。
     """
-    text = str(title or "").strip()
-    if not text:
-        return ""
-    name = local_cover(text)
-    if not name:
-        base = _strip_season(text)
-        if base and base != text:
-            name = local_cover(base)
-    if name:
-        return name
-
     entries = subject_covers() if entries is None else entries
-    key, base_key = _norm_key(text), _norm_key(_strip_season(text))
+    return resolve_cover_many([("", [title])], entries).get("", "")
+
+
+def resolve_cover_many(pairs: list[tuple[str, list[str]]],
+                       entries: list[tuple[str, str]] | None = None) -> dict[str, str]:
+    """批量解析封面：``[(结果键, [候选标题…])]`` → ``{结果键: 封面文件名}``。
+
+    剧集墙一次要解析近 200 张卡，逐张调用会把 subjects 索引重复构建 200 次；
+    这里索引与「文件存在」检查都只做一次。
+    """
+    entries = subject_covers() if entries is None else entries
+    exact, base = cover_index(entries)
+    exists: dict[str, bool] = {}
+
+    def ok(name: str) -> bool:
+        if name not in exists:
+            exists[name] = _cover_file_ok(name)
+        return exists[name]
+
+    out: dict[str, str] = {}
+    fuzzy_misses: list[tuple[str, list[str]]] = []
+    for key, candidates in pairs or []:
+        texts = [str(t or "").strip() for t in candidates or []]
+        texts = [t for t in texts if t]
+        hit = ""
+        for text in texts:
+            name = local_cover(text)
+            if name and ok(name):
+                hit = name
+                break
+            base_text = _strip_season(text)
+            if base_text and base_text != text:
+                name = local_cover(base_text)
+                if name and ok(name):
+                    hit = name
+                    break
+            norm = _norm_key(text)
+            if norm and ok(exact.get(norm, "")):
+                hit = exact[norm]
+                break
+            norm_base = _norm_key(base_text)
+            if norm_base and ok(base.get(norm_base, "")):
+                hit = base[norm_base]
+                break
+        if hit:
+            out[key] = hit
+        elif texts:
+            fuzzy_misses.append((key, texts))
+    if not fuzzy_misses:
+        return out
+    # 只有完全没有精确命中时才走模糊兜底，避免把别的作品封面套上去。
+    # 把 subjects 的归一化键预先算好：旧实现每个候选都重新归一化 80 条记录，
+    # 150 张对不上的卡要多花 3 秒（用户反馈的「剧集墙打开很慢」）。
+    fuzzy_entries = []
     for rec_title, filename in entries:
-        if _norm_key(rec_title) == key or _norm_key(_strip_season(rec_title)) == base_key:
-            if _cover_file_ok(filename):
-                return filename
-    for rec_title, filename in entries:
-        if _fuzzy_match(rec_title, text) and _cover_file_ok(filename):
-            return filename
-    return ""
+        if not filename or not ok(filename):
+            continue
+        norm = _norm_key(rec_title)
+        if norm:
+            fuzzy_entries.append((norm, _norm_key(_strip_season(rec_title)), filename))
+    for key, texts in fuzzy_misses:
+        for text in texts:
+            a = _norm_key(text)
+            if not a:
+                continue
+            a_base = _norm_key(_strip_season(a))
+            match = next((fn for norm, norm_base, fn in fuzzy_entries
+                          if a == norm or a in norm or norm in a
+                          or (a_base and a_base == norm_base)), "")
+            if match:
+                out[key] = match
+                break
+    return out
 
 
 def cover_map(titles: list[str]) -> dict:

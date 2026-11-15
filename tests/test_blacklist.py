@@ -10,7 +10,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from app import api, blacklist, db
+from app import api, blacklist, db, library_tree
 from tests.base import IsolatedDbTestCase
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -172,6 +172,115 @@ class BlacklistFrontendTests(unittest.TestCase):
         js = APP_JS.read_text(encoding="utf-8")
         self.assertIn("不删本地文件", js)
         self.assertIn("不删追剧清单条目", js)
+
+
+class BlacklistNormalizationTests(IsolatedDbTestCase):
+    """连接符归一化 + 目录名派生标题：用户报「剧集墙还能看到黑名单剧集」的两个真因。"""
+
+    def setUp(self):
+        super().setUp()
+
+    def test_hyphenated_name_matches_compact_keyword(self):
+        # 词表里写的是 FC2PPV，实际文件名是 FC2-PPV-1288053
+        self.assertTrue(blacklist.hit("FC2-PPV-1288053.mp4"))
+        self.assertTrue(blacklist.hit("SSIS-001.mkv"))
+        self.assertTrue(blacklist.hit("mvsd.naiad.mp4"))       # 词表里本来就带点
+        self.assertTrue(blacklist.hit("MIDA_077.mp4"))
+
+    def test_normalization_does_not_hit_unrelated_titles(self):
+        for name in ("葬送的芙莉莲 01.mkv", "更衣人偶坠入爱河", "间谍过家家 S02E03.mkv",
+                     "Spy x Family - 05.mkv"):
+            self.assertFalse(blacklist.hit(name), name)
+
+    def test_normalize_name_strips_only_separators(self):
+        self.assertEqual(blacklist.normalize_name("FC2-PPV_1288.053 ·A"),
+                         "fc2ppv1288053a")
+
+    def test_keywords_keep_user_spelling_but_dedupe_by_normalized_form(self):
+        db.set_setting("video_blacklist", "FC2PPV，fc2-ppv，三上悠亚")
+        # 归一化后 fc2ppv / fc2ppv 视为同一个词，只留第一次写法
+        self.assertEqual(blacklist.keywords(), ["fc2ppv", "三上悠亚"])
+        self.assertEqual(blacklist.norm_keywords(), ["fc2ppv", "三上悠亚"])
+
+    def test_folder_derived_group_title_is_hidden_in_wall_and_tree(self):
+        """文件名干净、但发布目录名带黑名单词：卡片/分组也要消失。"""
+        client = api.Api()
+        folder = self.tmp / "三上悠亚 精选"
+        folder.mkdir()
+        # 目录里有 2 个文件才会被当成发布目录、用目录名做作品名
+        for idx in (1, 2):
+            name = f"clip {idx}.mkv"
+            self.media(name, path=str(folder / name), title_guess=f"clip {idx}",
+                       title_cn=f"一段视频{idx}")
+        other = self.tmp / "葬送的芙莉莲"
+        other.mkdir()
+        self.media("葬送的芙莉莲 - 01.mkv", path=str(other / "葬送的芙莉莲 - 01.mkv"),
+                   title_guess="葬送的芙莉莲", title_cn="葬送的芙莉莲")
+        wall = client.get_poster_wall({})
+        titles = [c["title"] for c in wall["cards"]]
+        self.assertIn("葬送的芙莉莲", titles)
+        self.assertFalse([t for t in titles if "三上悠亚" in t], titles)
+        tree = client.get_media_tree({"mode": "series"})
+        labels = [g["label"] for g in tree["groups"]]
+        self.assertFalse([l for l in labels if "三上悠亚" in l], labels)
+
+    def test_switch_off_restores_folder_derived_group(self):
+        client = api.Api()
+        folder = self.tmp / "三上悠亚 精选"
+        folder.mkdir()
+        for idx in (1, 2):
+            name = f"clip {idx}.mkv"
+            self.media(name, path=str(folder / name), title_guess=f"clip {idx}")
+        db.set_setting("blacklist_enabled", 0)
+        wall = client.get_poster_wall({})
+        self.assertTrue([c["title"] for c in wall["cards"] if "三上悠亚" in c["title"]])
+
+
+class MediaCacheTests(IsolatedDbTestCase):
+    """媒体库 / 剧集墙的结果缓存：必须真的省掉重算，且数据一动就失效。"""
+
+    def setUp(self):
+        super().setUp()
+        self.api = api.Api()
+        self._add("葬送的芙莉莲")
+
+    def _add(self, title):
+        """每个作品一个独立目录：同目录下的文件会被归并成同一张卡片。"""
+        folder = self.tmp / title
+        folder.mkdir(exist_ok=True)
+        name = f"{title} - 01.mkv"
+        return self.media(name, path=str(folder / name),
+                          title_guess=title, title_cn=title)
+
+    def test_second_call_is_served_from_cache(self):
+        first = self.api.get_poster_wall({})
+        self.assertTrue(first["cards"])
+        self.assertTrue(api._MEDIA_CACHE)
+        # 缓存命中后不应该再跑 SQL：把 build_tree 打断，命中时不会走到它
+        with mock.patch.object(library_tree, "build_tree",
+                               side_effect=AssertionError("不应重算")):
+            second = self.api.get_poster_wall({})
+        self.assertEqual([c["title"] for c in second["cards"]],
+                         [c["title"] for c in first["cards"]])
+
+    def test_write_invalidates_cache(self):
+        self.api.get_poster_wall({})
+        self._add("进击的巨人")
+        titles = [c["title"] for c in self.api.get_poster_wall({})["cards"]]
+        self.assertIn("进击的巨人", titles)
+
+    def test_other_options_do_not_share_cache(self):
+        self.api.get_poster_wall({})
+        with mock.patch.object(library_tree, "build_tree",
+                               side_effect=library_tree.build_tree) as build:
+            self.api.get_poster_wall({"limit": 1})
+        build.assert_called_once()
+
+    def test_disabling_blacklist_invalidates_media_cache(self):
+        db.set_setting("video_blacklist", "芙莉莲")
+        self.assertEqual(self.api.get_poster_wall({})["total"], 0)
+        db.set_setting("blacklist_enabled", 0)
+        self.assertEqual(self.api.get_poster_wall({})["total"], 1)
 
 
 if __name__ == "__main__":

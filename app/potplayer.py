@@ -14,6 +14,7 @@ from __future__ import annotations
 import ctypes
 import re
 import subprocess
+import time
 from ctypes import wintypes
 from pathlib import Path
 
@@ -26,6 +27,26 @@ POT_GET_PROGRESS_TIME = 0x5003
 POT_GET_CURRENT_TIME = 0x5004
 POT_SET_CURRENT_TIME = 0x5005
 POT_GET_PLAY_STATUS = 0x5006
+POT_SET_PLAY_STATUS = 0x5007     # 0 切换 / 1 暂停 / 2 播放
+POT_SET_PLAY_ORDER = 0x5008      # 0 上一集 / 1 下一集（走 PotPlayer 自己的播放列表）
+POT_SEND_VIRTUAL_KEY = 0x5010    # 2023-08-30 之后的版本支持，不需要窗口焦点
+
+# WM_COMMAND 指令 ID：PotPlayer 的菜单命令编号，官方未写文档但跨版本稳定，
+# 社区库（AutoHotkey PotPlayer x64 Function Library / PotPlayerAPI.NET）长期在用。
+# 相比「投快捷键」的优势：不受用户自定义键位影响，也不需要窗口有键盘焦点，
+# 内嵌成子窗口时同样有效——这正是「顶栏倍速/暂停按钮点了没反应」的根因。
+WM_COMMAND = 0x0111
+POT_CMD = {
+    "play_pause": 10014,
+    "play": 20001,
+    "pause": 20000,
+    "stop": 20002,
+    "prev": 10123,
+    "next": 10124,
+    "volume_up": 10035,
+    "volume_down": 10036,
+    "toggle_mute": 10037,
+}
 
 STATE_LABEL = {-1: "stopped", 1: "paused", 2: "playing"}
 WINDOW_CLASSES = ("PotPlayer64", "PotPlayer", "PotPlayerMini64")
@@ -291,7 +312,11 @@ def speed_step() -> float:
 
 
 def send_key(action: str, hwnd: int | None = None) -> dict:
-    """把 action 对应的按键投到 PotPlayer 窗口。不依赖键盘焦点。"""
+    """把 action 对应的按键投到 PotPlayer 窗口。不依赖键盘焦点。
+
+    优先走 ``POT_SEND_VIRTUAL_KEY``（PotPlayer 自己受理虚拟键，不需要焦点、
+    也不受输入法/前台窗口影响）；老版本不认这个命令时再退回直接投 WM_KEYDOWN。
+    """
     vk = VK_CODES.get(binding(action), 0)
     if not vk:
         return {"ok": False, "error": f"未知的播放控制动作：{action}"}
@@ -300,6 +325,14 @@ def send_key(action: str, hwnd: int | None = None) -> dict:
         return {"ok": False, "error": "PotPlayer 未运行"}
     if _user32 is None:
         return {"ok": False, "error": "当前系统不支持 Win32 按键注入"}
+    # 1) 官方虚拟键通道
+    try:
+        if _user32.PostMessageW(target, WM_USER, POT_SEND_VIRTUAL_KEY, vk):
+            return {"ok": True, "action": action, "key": binding(action),
+                    "hwnd": target, "via": "virtual-key"}
+    except Exception:
+        pass
+    # 2) 直接投键盘消息（老版本兜底）
     try:
         scan = int(_user32.MapVirtualKeyW(vk, 0) or 0)
         down = (scan << 16) | 1
@@ -310,7 +343,99 @@ def send_key(action: str, hwnd: int | None = None) -> dict:
         return {"ok": False, "error": str(exc)}
     if not (ok_down and ok_up):
         return {"ok": False, "error": "按键投递失败（播放器窗口可能已关闭）"}
-    return {"ok": True, "action": action, "key": binding(action), "hwnd": target}
+    return {"ok": True, "action": action, "key": binding(action), "hwnd": target,
+            "via": "wm-keydown"}
+
+
+def _post(hwnd: int, message: int, code: int, lparam: int = 0) -> bool:
+    """异步投一条消息：播放器卡住也不会把界面线程带住。"""
+    if _user32 is None or not hwnd:
+        return False
+    try:
+        return bool(_user32.PostMessageW(hwnd, message, code, lparam))
+    except Exception:
+        return False
+
+
+def play_status(hwnd: int) -> int:
+    """当前播放状态：-1 停止 / 1 暂停 / 2 播放；读不到返回 0。"""
+    return send(hwnd, POT_GET_PLAY_STATUS)
+
+
+def _wait_status(hwnd: int, before: int, want: int | None,
+                 tries: int = 5, delay: float = 0.04) -> int:
+    """等状态变化，最多 ~200ms；返回最后一次读到的状态。"""
+    for _ in range(tries):
+        current = play_status(hwnd)
+        if want is None:
+            if current != before:
+                return current
+        elif current == want:
+            return current
+        time.sleep(delay)
+    return play_status(hwnd)
+
+
+# 每个动作期望到达的状态；None 表示「任意变化即可」（切换语义）
+_ACTION_TARGET = {"play_pause": None, "play": 2, "pause": 1, "stop": -1}
+
+
+def control(action: str, hwnd: int | None = None) -> dict:
+    """播放/暂停、停止：优先用 PotPlayer 的 WM_COMMAND 菜单指令并校验生效。
+
+    旧实现只投快捷键，遇到自定义键位、内嵌子窗口、播放器不在前台时全都静默失败，
+    用户看到的是「按钮点了没反应」。现在按「命令 → 播放状态 → 快捷键」三条路依次尝试，
+    每条都用 ``POT_GET_PLAY_STATUS`` 复查是否真的生效，最后如实返回走了哪条。
+    """
+    name = str(action or "").strip()
+    target = int(hwnd or 0) or find_window()
+    if not target:
+        return {"ok": False, "error": "PotPlayer 未运行"}
+    before = play_status(target)
+    want = _ACTION_TARGET.get(name, 0)
+    # 已经是目标状态（例如重复点「停止」）直接当成功，不必再折腾
+    if want not in (None, 0) and before == want:
+        return {"ok": True, "action": name, "state": before, "via": "already"}
+
+    # 注意：这里只登记「怎么发」，不能提前发。三条通道同时发出去会互相打架
+    # （例如暂停命令 + 状态切换 + 空格键 = 连续切换三次，画面看起来毫无反应）。
+    attempts: list[tuple[str, object]] = []
+    if name in POT_CMD:
+        command = POT_CMD[name]
+        attempts.append((f"command:{command}",
+                         lambda: _post(target, WM_COMMAND, command)))
+    status_code = {"play_pause": 0, "play": 2, "pause": 1, "stop": 1}.get(name)
+    if status_code is not None:
+        attempts.append((f"status:{status_code}",
+                         lambda: _post(target, WM_USER, POT_SET_PLAY_STATUS, status_code)))
+    key_action = {"play_pause": "play_pause", "stop": "stop"}.get(name)
+    if key_action:
+        attempts.append((f"key:{binding(key_action)}",
+                         lambda: bool(send_key(key_action, target).get("ok"))))
+
+    if not attempts:
+        return {"ok": False, "error": f"不支持的播放控制：{name}"}
+
+    posted = False
+    for label, send in attempts:
+        if not send():
+            continue
+        posted = True
+        after = _wait_status(target, before, want)
+        if want is None:
+            done = after != before
+        else:
+            done = after == want
+        if done:
+            return {"ok": True, "action": name, "state": after, "via": label}
+    if not posted:
+        return {"ok": False, "error": "指令没有送出去（播放器窗口可能已关闭）"}
+    hint = ""
+    if before == -1:
+        hint = "（播放器当前是停止状态，先点播放再试）"
+    return {"ok": False, "state": play_status(target),
+            "error": f"指令已送出但状态没变，可能是 PotPlayer 版本不认这个命令{hint}"}
+
 
 
 def speed_plan(target: float) -> dict:

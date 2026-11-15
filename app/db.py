@@ -151,11 +151,26 @@ def now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+_WAL_READY: str | None = None
+
+
 def get_conn() -> sqlite3.Connection:
+    """新建一个连接。
+
+    ``PRAGMA journal_mode=WAL`` 会写数据库头并尝试拿锁，实测每次连接要 3~5ms；
+    而 WAL 是**写进库文件**的持久属性，同一个库只需要设一次。
+    这里按「库文件路径」记录，只在没设过的库上执行一次
+    （上层每个列表接口都要多次读设置，累积起来是秒级差距）。
+    注意必须按路径记而不是全局布尔：测试会反复切到临时库。
+    """
+    global _WAL_READY
     config.ensure_dirs()
-    conn = sqlite3.connect(str(config.DB_PATH), timeout=15, check_same_thread=False)
+    path = str(config.DB_PATH)
+    conn = sqlite3.connect(path, timeout=15, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
+    if _WAL_READY != path:
+        conn.execute("PRAGMA journal_mode=WAL")
+        _WAL_READY = path
     conn.execute("PRAGMA foreign_keys=ON")
     conn.execute("PRAGMA busy_timeout=10000")
     return conn
@@ -189,6 +204,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 _INIT_LOCK = threading.Lock()
+# 本进程累计写库次数（见 write_count）：只用于上层缓存失效判断，不参与业务逻辑。
+_WRITE_COUNT = 0
 _INITIALIZED = False
 
 
@@ -223,15 +240,29 @@ def row(sql: str, params: Sequence[Any] = ()) -> dict | None:
 
 
 def execute(sql: str, params: Sequence[Any] = ()) -> int:
+    global _WRITE_COUNT
     with session() as conn:
         cur = conn.execute(sql, params)
+        _WRITE_COUNT += 1
         return cur.lastrowid or cur.rowcount
 
 
 def executemany(sql: str, seq: Iterable[Sequence[Any]]) -> int:
+    global _WRITE_COUNT
     with session() as conn:
         cur = conn.executemany(sql, seq)
+        _WRITE_COUNT += 1
         return cur.rowcount
+
+
+def write_count() -> int:
+    """本进程内的写库次数，供上层缓存判断「数据是否动过」。
+
+    不能用数据库文件的 mtime：守护进程每 3 秒写一次播放进度，
+    mtime 会一直变，缓存永远命中不了。这个计数只统计**同一进程**的写，
+    所以上层还要叠加一次 media_files 指纹来覆盖守护进程 / 其他进程的改动。
+    """
+    return _WRITE_COUNT
 
 
 def get_setting(key: str, default: Any = None) -> str | None:

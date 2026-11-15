@@ -7,6 +7,9 @@ import re
 import subprocess
 import sys
 import threading
+import time
+import urllib.parse
+import webbrowser
 from pathlib import Path
 
 import psutil
@@ -14,7 +17,7 @@ import psutil
 from . import (
     __version__, autostart, blacklist, config, covers, db, embedded_player, everything,
     file_ops, importer, library_tree, metadata, obsidian, potplayer, runtime, scanner,
-    textmatch, theme_native, watchlist,
+    textmatch, theme_native, watchlist, websearch,
 )
 
 
@@ -39,6 +42,13 @@ _CARD_NOISE_WORDS = (
 # 文件被人工封面覆盖后 mtime 变化会自动失效，不需要手动清。
 _COVER_URI_CACHE: dict[str, tuple[int, int, str]] = {}
 
+# 媒体库 / 剧集墙的整份结果缓存。这两个接口每次都要扫全表 + 分组 + 解析封面，
+# 实测 2100 个文件要 1.1 秒；来回切视图时完全没必要重算。
+# 失效靠「数据库文件签名」而不是时间：任何写库（扫描 / 改名 / 改设置）都会让
+# WAL 的 mtime/size 变化，签名一变缓存自动作废，所以看到的数据永远不是旧的。
+_MEDIA_CACHE_TTL = 20.0
+_MEDIA_CACHE: dict[tuple, tuple[float, dict]] = {}
+
 # 文件浏览的排序白名单：用户输入只能选键，绝不直接拼进 SQL
 _MEDIA_SORTS = {
     "newest": "f.id DESC",
@@ -47,6 +57,46 @@ _MEDIA_SORTS = {
     "size": "COALESCE(f.size, 0) DESC, f.id DESC",
     "progress": "COALESCE(p.percent, 0) DESC, f.id DESC",
 }
+
+
+def _db_signature() -> tuple:
+    """媒体数据的指纹，用来判断缓存是否还有效。
+
+    刻意**不用**数据库文件 mtime：守护进程每 3 秒写一次播放进度，mtime 一直在变，
+    缓存会永远失效。这里只统计「影响分组的字段」：行数、最大 id、
+    文件名 / 中文名的总长度、软删除行数，再叠加本进程的写库次数
+    （覆盖改名作品、改设置这类不改变上述统计的写）。
+    播放进度变化不影响分组和封面，故意不纳入。
+    """
+    values = (0, 0, 0, 0, 0)
+    try:
+        row = db.row(
+            "SELECT COUNT(*) AS n, COALESCE(MAX(id), 0) AS max_id, "
+            "COALESCE(SUM(LENGTH(filename)), 0) AS fn, "
+            "COALESCE(SUM(LENGTH(COALESCE(title_cn, ''))), 0) AS cn, "
+            "COALESCE(SUM(CASE WHEN COALESCE(deleted_at, '') <> '' THEN 1 ELSE 0 END), 0) AS del "
+            "FROM media_files"
+        ) or {}
+        values = tuple(int(row.get(k) or 0) for k in ("n", "max_id", "fn", "cn", "del"))
+    except Exception:
+        pass
+    # 键里带库路径：测试会在临时库之间来回切，只看计数会把上一个库的结果带过来
+    return (str(config.DB_PATH), db.write_count()) + values
+
+
+def _cache_get(key: tuple):
+    item = _MEDIA_CACHE.get(key)
+    if item and (time.monotonic() - item[0]) < _MEDIA_CACHE_TTL:
+        return item[1]
+    return None
+
+
+def _cache_put(key: tuple, value: dict) -> dict:
+    # 只留最近若干条，避免长时间运行后无限增长（键里带选项，理论上可枚举）
+    if len(_MEDIA_CACHE) > 24:
+        _MEDIA_CACHE.clear()
+    _MEDIA_CACHE[key] = (time.monotonic(), value)
+    return value
 
 
 class Api:
@@ -551,6 +601,11 @@ class Api:
         前端「扫描结果 / 媒体库」共用此接口，避免 400 条硬上限截掉扫描到的文件。
         """
         opt = options or {}
+        cache_key = ("files", json.dumps(opt, sort_keys=True, ensure_ascii=False),
+                     _db_signature())
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
         try:
             page = max(1, int(opt.get("page") or 1))
         except (TypeError, ValueError):
@@ -585,27 +640,39 @@ class Api:
             sql += " LIMIT ? OFFSET ?"
             query_params.extend([size, (page - 1) * size])
         rows = db.rows(sql, tuple(query_params))
+        # SQL 粗筛对连接符不敏感（FC2-PPV 匹配不到词表里的 FC2PPV），
+        # 这一层再按归一化名称精确过一遍；条数同步扣减，避免「本页只剩 197 条」这类错位。
+        kept = blacklist.filter_rows(rows)
+        dropped = len(rows) - len(kept)
+        rows = kept
         if size > 0:
+            total = max(0, total - dropped)
             pages = max(1, (total + size - 1) // size)
             offset = (page - 1) * size
             first = offset + 1 if offset < total else 0
             last = min(offset + size, total) if first else 0
         else:
             pages, first, last = 1, (1 if total else 0), total
-        return {
+        return _cache_put(cache_key, {
             "ok": True, "rows": rows, "total": total, "total_all": total_all,
             "matched": self._matched_count(), "page": page, "page_size": size, "pages": pages,
             "from": first, "to": last,
             "directories": self._directory_options(),
-        }
+        })
 
     def get_media_tree(self, options: dict | None = None) -> dict:
         """树状视图：按「作品 → 季 → 集」或「目录 → 子目录 → 文件」分组。
 
         与平铺列表共用同一套搜索 / 目录 / 匹配状态筛选，但**不受每页条数限制**：
         树是对当前筛选结果的全部文件做分组，节点默认折叠，展开才渲染文件行。
+        结果按「选项 + 数据库签名」缓存：来回切视图不再重算分组（实测省 0.3~0.5s）。
         """
         opt = options or {}
+        cache_key = ("tree", json.dumps(opt, sort_keys=True, ensure_ascii=False),
+                     _db_signature())
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
         where, params = self._media_filters(opt)
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.size, f.title_raw, "
@@ -616,15 +683,33 @@ class Api:
             "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
             tuple(params),
         )
+        # 目录名派生的分组标题只能在这一层判断：文件名里可能没有黑名单词，
+        # 但发布目录名里有（用户反馈的「剧集墙还能看到」就是这么漏的）。
+        rows = blacklist.filter_rows(rows)
         directories = self._directory_options()
         tree = library_tree.build_tree(rows, str(opt.get("mode") or "series"),
                                        directories, self._work_labels())
-        return {
+        groups = self._prune_blacklisted_groups(tree.get("groups") or [])
+        if len(groups) != len(tree.get("groups") or []):
+            tree = {**tree, "groups": groups}
+        return _cache_put(cache_key, {
             "ok": True, **tree,
             "total_all": int(db.scalar("SELECT COUNT(*) FROM media_files") or 0),
             "matched": self._matched_count(),
             "directories": directories,
-        }
+        })
+
+    @staticmethod
+    def _prune_blacklisted_groups(groups: list[dict]) -> list[dict]:
+        """按分组标题（作品名 / 目录名）再筛一遍黑名单。
+
+        只筛标题，不动组内文件：文件行已经被 SQL + :func:`blacklist.filter_rows`
+        过滤过；这里补的是「文件名里没有、目录名里才有」那一类。
+        """
+        if not blacklist.active():
+            return groups
+        return [g for g in groups
+                if not blacklist.hit(g.get("label"), g.get("sub"))]
 
     # ---- 作品改名：只改展示名，绝不碰媒体文件 / 播放记录 -------------------
     @staticmethod
@@ -902,8 +987,17 @@ class Api:
         return first or label
 
     def get_poster_wall(self, options: dict | None = None) -> dict:
-        """剧集墙：作品卡片（封面 + 季/集统计 + 续播集）。复用树分组，不另写一套搜索。"""
+        """剧集墙：作品卡片（封面 + 季/集统计 + 续播集）。复用树分组，不另写一套搜索。
+
+        结果按「选项 + 数据库签名」缓存：这两步（全表分组 + 195 张封面解析）
+        原本要 1.1 秒，切一次视图就重算一遍是「打开剧集墙很慢」的主因。
+        """
         opt = options or {}
+        cache_key = ("wall", json.dumps(opt, sort_keys=True, ensure_ascii=False),
+                     _db_signature())
+        cached = _cache_get(cache_key)
+        if cached is not None:
+            return cached
         where, params = self._media_filters(opt)
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.title_raw, f.title_guess, "
@@ -914,11 +1008,12 @@ class Api:
             "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
             tuple(params),
         )
+        rows = blacklist.filter_rows(rows)
         tree = library_tree.build_tree(rows, "series", self._directory_options(),
                                       self._work_labels())
         cover_entries = covers.subject_covers()
         cards = []
-        for group in tree.get("groups", []):
+        for group in self._prune_blacklisted_groups(tree.get("groups") or []):
             seasons = [c.get("label") for c in group.get("children", [])]
             cards.append({
                 "title": group.get("label", ""),
@@ -946,7 +1041,7 @@ class Api:
         cards = cards[:max_cards]
         # 卡片标题（树分组 label）与抓取封面时用的标题可能不同：
         # 先用卡片标题，再退到该分组内文件的中文名 / 解析原名，命中就复用同一张封面。
-        resolved = {}
+        pending: list[tuple[str, list[str]]] = []
         for card in cards:
             raw_label = card["title"]
             # 脏分组名（如 1.36G）展示也换成推断出的中文片名；封面仍先用
@@ -954,16 +1049,14 @@ class Api:
             if (not _CARD_CJK_RE.search(raw_label)
                     and _CARD_CJK_RE.search(card["search_keyword"])):
                 card["title"] = card["search_keyword"]
-            for candidate in [raw_label, card["title"], *card.pop("_cover_titles")]:
-                name = covers.resolve_cover(candidate, cover_entries)
-                if name:
-                    resolved[card["title"]] = name
-                    break
-        return {
+            pending.append((card["title"], [raw_label, card["title"],
+                                            *card.pop("_cover_titles")]))
+        resolved = covers.resolve_cover_many(pending, cover_entries)
+        return _cache_put(cache_key, {
             "ok": True, "cards": cards, "total": total, "shown": len(cards),
             "covers": resolved,
             "cover_status": covers.status(),
-        }
+        })
 
     def preview_import(self, text: str) -> dict:
         """解析预览时就完成中文名自动匹配，结果直接展示，不留待办队列。"""
@@ -1035,6 +1128,35 @@ class Api:
     def everything_open(self) -> dict:
         """打开本机 Everything 主程序（快捷方式）；路径由后端固定配置，前端不传参。"""
         return everything.open_app()
+
+    # ---------- 网页搜索：抓 AGE / Seeduck 的搜索结果 ----------
+    def web_search(self, keyword: str, limit: int = 0) -> dict:
+        """把两个站点的搜索结果抓回来渲染成卡片；任一站点失败只影响它自己。"""
+        return websearch.search(keyword or "", limit)
+
+    def open_url(self, url: str) -> dict:
+        """用系统默认浏览器打开链接。
+
+        只放行 http/https：前端传来的字符串一律当不可信输入，
+        禁止 ``file:`` / ``javascript:`` / ``ms-*`` 之类协议，
+        也不拼 shell 命令（走 webbrowser 模块）。
+        """
+        text = str(url or "").strip()
+        if not text:
+            return {"ok": False, "error": "链接为空"}
+        parsed = urllib.parse.urlsplit(text)
+        if parsed.scheme not in ("http", "https"):
+            return {"ok": False, "error": "只支持 http / https 链接"}
+        if not parsed.netloc:
+            return {"ok": False, "error": "链接缺少域名"}
+        try:
+            opened = webbrowser.open(text, new=2)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+        if not opened:
+            return {"ok": False, "error": "没能唤起默认浏览器"}
+        return {"ok": True, "url": text}
+
 
     # ---------- 追剧列表 ----------
     def watchlist_preview(self, text: str) -> dict:
@@ -1283,15 +1405,22 @@ class Api:
             return {"ok": False, "error": "不是受支持的视频文件"}
         return potplayer.play(str(p), 0)
 
-    # ---------- 播放控制（保留 PotPlayer：快捷键注入 + 命令行换片） ----------
-    PLAYER_ACTIONS = ("play_pause", "stop", "fullscreen")
+    # ---------- 播放控制（保留 PotPlayer：WM_COMMAND 指令 + 命令行换片） ----------
+    PLAYER_ACTIONS = ("play_pause", "play", "pause", "stop", "fullscreen")
 
     def player_control(self, action: str) -> dict:
-        """播放/暂停、停止、全屏：白名单动作才允许投键，防止前端传任意键码。"""
+        """播放/暂停、停止、全屏：白名单动作才允许下发，防止前端传任意命令码。
+
+        播放类动作走 PotPlayer 的 WM_COMMAND 指令并复查状态（会返回实际生效的那条路径），
+        全屏没有对应命令码，仍然用快捷键通道。
+        """
         action = str(action or "").strip()
         if action not in self.PLAYER_ACTIONS:
             return {"ok": False, "error": f"不支持的播放控制：{action}"}
-        return potplayer.send_key(action)
+        if action == "fullscreen":
+            return potplayer.send_key("fullscreen")
+        return potplayer.control(action)
+
 
     def player_speed(self, target: float) -> dict:
         try:

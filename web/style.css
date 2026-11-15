@@ -250,10 +250,10 @@ td { color: var(--text); }
 .watched-card > [hidden] { display: none !important; }
 /* 卡片墙自己滚动：`:not(.table-wrap)` 那条会把 .watched-cards 也设成 flex: none，
    高度塌陷后内容溢出被 .content-fill 的 overflow:hidden 裁掉，整页无法下拉。
-   这里用同特异性但更晚声明的规则把 flex 抢回来。 */
-.content-fill > .watched-card > .watched-cards,
-.watched-card > .watched-cards { flex: 1 1 auto; min-height: 0; overflow: auto;
-  align-content: start; padding: 4px 2px 12px; }
+   现在卡片模式不再套 content-fill（整页滚动），外层只当普通块容器，
+   真正排版的 grid 在内层 .poster-grid —— 与剧集墙同一套结构。 */
+.watched-cards { display: block; padding: 4px 2px 12px; }
+.watched-cards .poster-grid { margin-top: 4px; }
 /* border-collapse: collapse 时 th 的 border-bottom 不跟随 sticky，用 box-shadow 补线；
    z-index 保证表头盖住带背景的分组行。 */
 .table-wrap thead th { position: sticky; top: 0; z-index: 2;

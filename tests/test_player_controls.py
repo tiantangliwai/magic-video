@@ -58,18 +58,32 @@ class SendKeyTests(IsolatedDbTestCase):
         self.window.start()
         self.addCleanup(self.window.stop)
 
-    def test_posts_keydown_and_keyup_to_player_window(self):
+    def test_virtual_key_channel_is_preferred(self):
+        """优先用 POT_SEND_VIRTUAL_KEY：不需要窗口焦点，也不受自定义键位影响。"""
         result = potplayer.send_key("play_pause")
         self.assertTrue(result["ok"])
         self.assertEqual(result["key"], "SPACE")
         self.assertEqual(result["hwnd"], 123)
+        self.assertEqual(result["via"], "virtual-key")
         calls = self.fake_user32.PostMessageW.call_args_list
-        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(calls), 1)
         self.assertEqual(calls[0].args[0], 123)
-        self.assertEqual(calls[0].args[1], potplayer.WM_KEYDOWN)
-        self.assertEqual(calls[0].args[2], 0x20)
-        self.assertEqual(calls[1].args[1], potplayer.WM_KEYUP)
-        self.assertGreaterEqual(calls[1].args[3], potplayer._KEYUP_BITS)
+        self.assertEqual(calls[0].args[1], potplayer.WM_USER)
+        self.assertEqual(calls[0].args[2], potplayer.POT_SEND_VIRTUAL_KEY)
+        self.assertEqual(calls[0].args[3], 0x20)      # wParam 命令码 / lParam 虚拟键
+
+    def test_falls_back_to_keydown_when_virtual_key_refused(self):
+        """老版本不认 0x5010 时退回 WM_KEYDOWN + WM_KEYUP，行为保持可用。"""
+        self.fake_user32.PostMessageW.side_effect = [0, 1, 1]
+        result = potplayer.send_key("play_pause")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "wm-keydown")
+        calls = self.fake_user32.PostMessageW.call_args_list
+        self.assertEqual(len(calls), 3)
+        self.assertEqual(calls[1].args[1], potplayer.WM_KEYDOWN)
+        self.assertEqual(calls[1].args[2], 0x20)
+        self.assertEqual(calls[2].args[1], potplayer.WM_KEYUP)
+        self.assertGreaterEqual(calls[2].args[3], potplayer._KEYUP_BITS)
 
     def test_unknown_action_is_rejected(self):
         result = potplayer.send_key("nope")
@@ -143,10 +157,11 @@ class PlayerApiTests(IsolatedDbTestCase):
 
     def test_control_action_is_whitelisted(self):
         api = Api()
-        with mock.patch.object(potplayer, "send_key", return_value={"ok": True}) as send:
+        # 播放类动作现在走 WM_COMMAND 指令通道（potplayer.control），不再投快捷键
+        with mock.patch.object(potplayer, "control", return_value={"ok": True}) as ctl:
             self.assertTrue(api.player_control("play_pause")["ok"])
             self.assertFalse(api.player_control("arbitrary_key")["ok"])
-        self.assertEqual(send.call_count, 1)
+        self.assertEqual(ctl.call_count, 1)
 
     def test_speed_is_whitelisted(self):
         api = Api()
@@ -221,6 +236,81 @@ class FrontendContractTests(unittest.TestCase):
                        "case 'player-play-pause'", "case 'player-fullscreen'",
                        "el.id === 'playerSpeed'", "'pot_key_faster'", "'pot_speed_step'"):
             self.assertIn(needle, self.js, needle)
+
+
+class ControlCommandTests(IsolatedDbTestCase):
+    """WM_COMMAND 指令通道：这是「顶栏按钮点了没反应」的修复点。
+
+    旧实现只投键盘消息，用户自定义过键位、或播放器内嵌成子窗口时就静默失败；
+    现在走 PotPlayer 的菜单命令号，并用播放状态复查是否真的生效。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.fake_user32 = mock.Mock()
+        self.fake_user32.PostMessageW.return_value = 1
+        for patch in (mock.patch.object(potplayer, "_user32", self.fake_user32),
+                      mock.patch.object(potplayer, "find_window", return_value=123)):
+            patch.start()
+            self.addCleanup(patch.stop)
+
+    def _states(self, *values):
+        seq = list(values)
+        return mock.patch.object(
+            potplayer, "play_status",
+            side_effect=lambda hwnd: seq.pop(0) if seq else values[-1])
+
+    def test_play_pause_sends_wm_command_and_verifies(self):
+        # 第一次读是「播放中(2)」，命令送达后变「暂停(1)」
+        with self._states(2, 1):
+            result = potplayer.control("play_pause")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["via"], "command:10014")
+        self.assertEqual(result["state"], 1)
+        self.assertEqual(self.fake_user32.PostMessageW.call_args.args,
+                         (123, potplayer.WM_COMMAND, 10014, 0))
+
+    def test_falls_back_to_play_status_message_then_reports_via(self):
+        # WM_COMMAND 被拒（返回 0）→ 退到 POT_SET_PLAY_STATUS 并生效
+        self.fake_user32.PostMessageW.side_effect = [0, 1]
+        with self._states(2, 2, 2, 1):
+            result = potplayer.control("pause")
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["via"], "status:1")
+
+    def test_reports_failure_when_state_never_changes(self):
+        """三条通道都发出去但状态没变，要如实报错而不是假装成功。"""
+        with mock.patch.object(potplayer, "play_status", return_value=2), \
+                mock.patch.object(potplayer, "send_key", return_value={"ok": True, "key": "SPACE"}):
+            result = potplayer.control("stop")
+        self.assertFalse(result["ok"])
+        self.assertIn("状态没变", result["error"])
+
+    def test_already_in_target_state_is_ok(self):
+        with mock.patch.object(potplayer, "play_status", return_value=-1):
+            result = potplayer.control("stop")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["via"], "already")
+
+    def test_no_player_gives_clear_error(self):
+        with mock.patch.object(potplayer, "find_window", return_value=0):
+            result = potplayer.control("play_pause")
+        self.assertFalse(result["ok"])
+        self.assertIn("未运行", result["error"])
+
+    def test_unknown_action_rejected_without_posting(self):
+        result = potplayer.control("self_destruct")
+        self.assertFalse(result["ok"])
+        self.fake_user32.PostMessageW.assert_not_called()
+
+    def test_api_whitelist_covers_playback_actions_only(self):
+        api = Api()
+        self.assertFalse(api.player_control("prev")["ok"])      # 上下集由前端换片，不走这里
+        self.assertFalse(api.player_control("rm -rf")["ok"])
+        with mock.patch.object(potplayer, "control",
+                               return_value={"ok": True, "via": "command:10014"}) as ctl:
+            self.assertTrue(api.player_control("play_pause")["ok"])
+        ctl.assert_called_once_with("play_pause")
 
 
 if __name__ == "__main__":

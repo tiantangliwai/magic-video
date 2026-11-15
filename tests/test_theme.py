@@ -69,7 +69,7 @@ class ThemeFrontendContractTests(unittest.TestCase):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('data-theme="light"', html)
         self.assertIn('data-action="toggle-theme"', html)
-        self.assertEqual(html.count("<svg"), 12)  # 10 个原有视图 + 追剧列表 + 后台进程
+        self.assertEqual(html.count("<svg"), 13)  # 11 个原有视图 + 追剧列表 + 后台进程 + 网页搜索
         self.assertIn('data-view="posters"', html)
         self.assertIn('data-view="quicksearch"', html)
         self.assertIn('data-view="watchlist"', html)

@@ -46,6 +46,7 @@ const VIEW_META = {
   library: ['媒体库', '扫描到的本地视频文件'],
   posters: ['剧集墙', '按作品展示封面、季数与续播'],
   quicksearch: ['全盘快搜', '整台电脑的视频文件，一搜即播'],
+  websearch: ['网页搜索', '同时搜 AGE动漫 与 Seeduck，结果标明来源'],
   watched: ['看过的列表', '你导入的已观看作品'],
   watchlist: ['追剧列表', '已下载 / 未下载清单，可调整顺序并对应本地剧集'],
   import: ['导入列表', '把看过的动漫一次性记录到数据库'],
@@ -423,7 +424,14 @@ async function playSmart(kind, value, fromStart) {
 // ---------- 播放控制条（保留 PotPlayer，快捷键注入 + 命令行换片） ----------
 async function playerControl(action) {
   const r = await call('player_control', action);
-  toast(r.ok ? `已执行：${action}` : (r.error || '播放控制失败'), r.ok);
+  // 成功时不弹提示（画面本身就是反馈），失败必须说清原因：
+  // 旧实现只投快捷键，键位不对或内嵌成子窗口时就静默失败，用户只看到「点了没反应」。
+  if (!r.ok) {
+    toast(r.error || '播放控制失败', false);
+  } else {
+    updatePlayerChip();
+    syncPlayerBar(true);
+  }
   return r;
 }
 
@@ -905,9 +913,11 @@ function groupWatchedRows(rows) {
   return [...map.values()];
 }
 
-// 卡片墙：每部作品一张封面卡片，只显示一个作品名；封面纯读缓存，不触发抓取
+// 卡片墙：每部作品一张封面卡片，只显示一个作品名；封面纯读缓存，不触发抓取。
+// 结构与剧集墙保持一致：外层是普通块（可滚动），真正排版的 grid 在内层，
+// 避免「grid + 作为 flex 子项」两套布局互相拉扯导致卡片挤成一团。
 function watchedCardsHtml(groups) {
-  return groups.map(g => {
+  const cards = groups.map(g => {
     const cover = watchedCovers[g.key] || watchedCovers[g.title] || watchedCovers[g.cn] || '';
     const art = cover
       ? `<img class="poster-art" src="${cover}" alt="${esc(g.key)}" loading="lazy">`
@@ -928,6 +938,7 @@ function watchedCardsHtml(groups) {
         </div>
       </div></div>`;
   }).join('');
+  return cards ? `<div class="poster-grid">${cards}</div>` : '';
 }
 
 // 只重写列表容器：搜索框不重建，输入焦点与光标始终保留
@@ -941,6 +952,11 @@ function renderWatchedRows() {
       String(v == null ? '' : v).toLowerCase().includes(kw))) : watchedRows;
   const count = document.getElementById('watchedCount');
   const groups = groupWatchedRows(rows);
+  // 卡片墙走整页滚动（和剧集墙一致），表格才需要「吃满高度 + 表头固定」。
+  // 之前卡片模式也套 content-fill，grid 既当 flex 子项又被 overflow 裁剪，
+  // 卡片被压成一条还丢掉标题——这里是那次的修正。
+  const content = document.getElementById('content');
+  if (content) content.classList.toggle('content-fill', watchedViewMode !== 'cards');
   if (count) count.textContent = (kw ? `匹配 ${rows.length} / 共 ${watchedRows.length} 条`
     : `共 ${watchedRows.length} 条`) + (watchedViewMode === 'cards' || watchedGrouped
       ? ` · ${groups.length} 部作品` : '');
@@ -1005,7 +1021,7 @@ async function renderWatched() {
       <button class="btn btn-sm" data-action="clean-watched" title="修正旧版导入残留的脏标题与「- 完」垃圾行">清洗脏数据</button>
       <button class="btn btn-sm" data-action="watched-clear-search">清空搜索</button>
     </div>
-    <div id="watchedCards" class="poster-grid watched-cards" ${cards ? '' : 'hidden'}></div>
+    <div id="watchedCards" class="watched-cards" ${cards ? '' : 'hidden'}></div>
     <div class="table-wrap" ${cards ? 'hidden' : ''}><table><thead><tr><th>作品名</th><th>匹配方式</th><th>季</th><th>集数范围</th><th>导入时间</th><th></th></tr></thead>
     <tbody id="watchedListBody"></tbody></table></div></div>`);
   renderWatchedRows();
@@ -1394,6 +1410,83 @@ async function renderQuickSearch() {
   } catch (e) { /* 能力探测失败不影响检索 */ }
 }
 
+// ---- 网页搜索：抓 AGE动漫 / Seeduck 的搜索结果，标来源、点开走系统浏览器 ----
+const webState = {
+  keyword: '', items: [], errors: {}, links: {}, query: '', loading: false, source: 'all',
+};
+
+function webItems() {
+  if (webState.source === 'all') return webState.items;
+  return webState.items.filter(it => it.source === webState.source);
+}
+
+function webCardHtml(it) {
+  const art = it.cover
+    ? `<img class="poster-art" src="${esc(it.cover)}" alt="${esc(it.title)}" loading="lazy"
+         referrerpolicy="no-referrer">`
+    : `<div class="poster-art poster-placeholder"><span>${esc((it.title || '?').slice(0, 2))}</span></div>`;
+  return `<div class="poster-card">
+    ${art}
+    <div class="poster-body">
+      <div class="poster-title" title="${esc(it.title)}">${esc(it.title)}</div>
+      <div class="poster-tags">
+        <span class="poster-tag ${it.source === 'seeduck' ? 'amber' : ''}">${esc(it.source_label)}</span>
+      </div>
+      ${it.meta ? `<div class="poster-meta">${esc(it.meta)}</div>` : ''}
+      <div class="poster-actions">
+        <button class="btn btn-sm btn-primary" data-action="web-open" data-url="${esc(it.url)}"
+          title="用系统默认浏览器打开详情页">打开网页</button>
+      </div>
+    </div></div>`;
+}
+
+function renderWebResults() {
+  const box = document.getElementById('webResults');
+  if (!box) return;
+  const hint = document.getElementById('webHint');
+  const items = webItems();
+  if (hint) {
+    const parts = [];
+    if (webState.keyword) parts.push(`关键词「${esc(webState.keyword)}」`);
+    parts.push(`${items.length} 个结果`);
+    const errs = Object.entries(webState.errors || {});
+    if (errs.length) parts.push(errs.map(([k, v]) => `${k === 'agedm' ? 'AGE' : 'Seeduck'}：${v}`).join('；'));
+    hint.innerHTML = parts.join(' · ');
+  }
+  if (!items.length) {
+    box.innerHTML = webState.keyword
+      ? empty('这个关键词没搜到结果', '换个写法试试，或直接点上面的站点按钮去站内搜索')
+      : empty('输入关键词开始搜索', '同时检索 AGE动漫 与 Seeduck，结果标明来源');
+    return;
+  }
+  box.innerHTML = `<div class="poster-grid">${items.map(webCardHtml).join('')}</div>`;
+}
+
+async function renderWebSearch() {
+  const sources = [['all', '全部来源'], ['agedm', 'AGE动漫'], ['seeduck', 'Seeduck']];
+  setContent(`<div class="card"><div class="section-head"><h3>网页搜索</h3>
+      <span class="badge blue">AGE动漫 + Seeduck</span></div>
+    <p class="hint">直接检索两个站点的搜索结果，卡片上标明来源；点「打开网页」用系统默认浏览器打开详情页。
+      站点改版或网络不通时，仍可用下面的站点按钮直接去站内搜索。</p>
+    <div class="watched-toolbar">
+      <input class="input" id="webSearch" placeholder="输入动漫名，回车搜索…"
+        value="${esc(webState.query || '')}" autocomplete="off">
+      <button class="btn btn-sm btn-primary" data-action="web-search">搜索</button>
+      <button class="btn btn-sm" data-action="web-link" data-source="agedm">去 AGE 搜索</button>
+      <button class="btn btn-sm" data-action="web-link" data-source="seeduck">去 Seeduck 搜索</button>
+    </div>
+    <div class="btn-row" id="webFilters">
+      ${sources.map(([id, label]) => `<button class="btn btn-sm ${webState.source === id ? 'btn-primary' : ''}"
+        data-action="web-filter" data-source="${id}">${label}</button>`).join('')}
+    </div>
+    <p class="hint" id="webHint"></p>
+    <div id="webResults"></div>
+  </div>`);
+  renderWebResults();
+  const input = document.getElementById('webSearch');
+  if (input) input.focus();
+}
+
 function renderEsResults() {
   const box = document.getElementById('esResults');
   if (!box) return;
@@ -1608,7 +1701,8 @@ async function renderProcesses() {
 
 const RENDERERS = {
   home: renderHome, continue: renderContinue, history: renderHistory, library: renderLibrary,
-  posters: renderPosters, quicksearch: renderQuickSearch, watched: renderWatched,
+  posters: renderPosters, quicksearch: renderQuickSearch, websearch: renderWebSearch,
+  watched: renderWatched,
   watchlist: renderWatchlist, processes: renderProcesses,
   import: renderImport, scan: renderScan, settings: renderSettings,
 };
@@ -2162,6 +2256,60 @@ async function handleAction(action, btn) {
       toast(r.ok ? '已打开 Everything' : (r.error || '打开失败'), !!r.ok);
       return;
     }
+    case 'web-search': {
+      const kw = ((document.getElementById('webSearch') || {}).value || '').trim();
+      if (!kw) { toast('请输入要搜索的动漫名', false); return; }
+      webState.query = kw;
+      if (webState.loading) return;
+      webState.loading = true;
+      btn.disabled = true;
+      const label = btn.textContent;
+      btn.textContent = '搜索中…';
+      try {
+        const r = await call('web_search', kw);
+        webState.keyword = kw;
+        webState.items = r.items || [];
+        webState.errors = r.errors || {};
+        webState.links = r.links || {};
+        renderWebResults();
+        if (!webState.items.length) toast(r.error || '两个站点都没有返回结果', false);
+      } catch (err) {
+        toast(String(err && err.message || err), false);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = label;
+        webState.loading = false;
+      }
+      return;
+    }
+    case 'web-filter': {
+      webState.source = btn.dataset.source || 'all';
+      document.querySelectorAll('[data-action="web-filter"]').forEach(b => {
+        b.classList.toggle('btn-primary', b.dataset.source === webState.source);
+      });
+      renderWebResults();
+      return;
+    }
+    case 'web-link': {
+      // 站点搜索页：解析结果为空时的兜底出口，直接让用户在浏览器里看原站
+      const kw = ((document.getElementById('webSearch') || {}).value || webState.query || '').trim();
+      const source = btn.dataset.source || 'agedm';
+      const url = (webState.links || {})[source];
+      const target = kw
+        ? (source === 'agedm'
+          ? `https://www.agedm.io/search?query=${encodeURIComponent(kw)}`
+          : `https://seeduck.cc/s/${encodeURIComponent(kw)}/`)
+        : (url || '');
+      if (!target) { toast('先输入关键词', false); return; }
+      const r = await call('open_url', target);
+      toast(r.ok ? '已在浏览器打开' : (r.error || '打开失败'), !!r.ok);
+      return;
+    }
+    case 'web-open': {
+      const r = await call('open_url', btn.dataset.url || '');
+      toast(r.ok ? '已在浏览器打开详情页' : (r.error || '打开失败'), !!r.ok);
+      return;
+    }
     case 'play-external':
       await playSmart('path', btn.dataset.path || '', false);
       return;
@@ -2269,6 +2417,12 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key === 'Enter' && ev.target.id === 'esSearch') {
     ev.preventDefault();
     const btn = document.querySelector('[data-action="es-search"]');
+    if (btn) btn.click();
+    return;
+  }
+  if (ev.key === 'Enter' && ev.target.id === 'webSearch') {
+    ev.preventDefault();
+    const btn = document.querySelector('[data-action="web-search"]');
     if (btn) btn.click();
     return;
   }

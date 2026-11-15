@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from functools import lru_cache
 
 from .scanner import parse_filename
 
@@ -69,6 +70,7 @@ _NOISE_WORDS_RE = re.compile(
 )
 
 
+@lru_cache(maxsize=8192)
 def norm_title(text) -> str:
     """标题归一化：全角转半角、大小写统一、去分隔符与残留的季标记。"""
     s = unicodedata.normalize("NFKC", str(text or "")).strip().lower()
@@ -131,26 +133,39 @@ def _is_generic_folder(name: str) -> bool:
     return False
 
 
+# 预编译：旧实现每次调用都 ``re.escape(word)`` 拼新正则，re 的 512 条缓存被冲掉后
+# 会反复走 re._compile。剧集墙 2000 个文件 × 40 个技术词 = 8 万次编译，
+# 实测占 build_tree 一半以上耗时。词表是常量，编译一次即可。
+_NON_WORD_RE = re.compile(r"[\d\W_]+")
+_RANGE_RE = re.compile(r"\d{1,3}\s*[-~+]\s*\d{1,3}")
+_SHORT_TECH_RES = {
+    word: re.compile(r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])")
+    for word in _TECH_WORDS if word.isascii() and len(word) <= 3
+}
+
+
 def _is_tech_token(text: str) -> bool:
     low = str(text or "").strip().lower()
     if not low:
         return True
-    if re.fullmatch(r"[\d\W_]+", low):          # 纯数字 / 标点，如 01-12、2020
+    if _NON_WORD_RE.fullmatch(low):              # 纯数字 / 标点，如 01-12、2020
         return True
-    if _SIZE_TOKEN_RE.match(low):               # 1.36G / 720P 这类体积或分辨率
+    if _SIZE_TOKEN_RE.match(low):                # 1.36G / 720P 这类体积或分辨率
         return True
-    if re.search(r"\d{1,3}\s*[-~+]\s*\d{1,3}", low):
+    if _RANGE_RE.search(low):
         return True
     for word in _TECH_WORDS:
-        if word.isascii() and len(word) <= 3:
+        short = _SHORT_TECH_RES.get(word)
+        if short is not None:
             # 短标记必须独立成词，避免把 Spy×Family / BD 开头的作品名误杀
-            if re.search(r"(?<![a-z0-9])" + re.escape(word) + r"(?![a-z0-9])", low):
+            if short.search(low):
                 return True
         elif word in low:
             return True
     return False
 
 
+@lru_cache(maxsize=4096)
 def _strip_release_noise(text: str) -> str:
     """把发布目录名里的字幕组 / 分辨率 / 集数范围 / 季标记等噪音去掉。"""
     s = unicodedata.normalize("NFKC", str(text or ""))
@@ -169,6 +184,7 @@ def _strip_release_noise(text: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+@lru_cache(maxsize=4096)
 def _folder_label(folder: str) -> tuple[str, str]:
     """从发布目录名提取归并键与展示名；中文片名优先，技术/字幕组噪音逐段剔除。
 

@@ -72,6 +72,11 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 41 | 倍速与上一集 / 下一集按钮**必须能看见**（不能只藏在内嵌播放舞台里） | 用户明确要求（0.1.4 日常迭代） |
 | 42 | 追剧列表的上移 / 下移 / 移回未下载等按钮**要对齐**，并新增**一键置顶** | 用户明确要求（0.1.4 日常迭代） |
 | 43 | 新增**视频黑名单**设置（开关默认开启）：名称包含任一关键词（不区分大小写）的视频在**所有位置**默认不展示；关闭后正常展示全部 | 用户明确要求（0.1.4 日常迭代） |
+| 44 | 快速放映厅的倍速 / 上一集 / 下一集 / 播放暂停**点下去必须真的生效**，不能只是"看起来点了" | 用户明确要求（0.1.4 日常迭代，2026-11-15「快进展厅倍速之类的按钮都没有用」） |
+| 45 | 媒体库与剧集墙打开**要快**：不能因为分组、封面、黑名单判定反复重建索引而卡住 | 用户明确要求（0.1.4 日常迭代） |
+| 46 | 看过的列表卡片墙**不能挤成一堆、不能丢标题**：外层普通块 + 内层 `poster-grid`，禁止整块铺满时把卡片压扁 | 用户明确要求（0.1.4 日常迭代） |
+| 47 | 黑名单必须**彻底生效**：`FC2-PPV-1288` 要被 `FC2PPV` 挡住（两侧去连接符归一化再比），目录名派生出的大卡片标题也要过滤 | 用户明确要求（0.1.4 日常迭代） |
+| 48 | 新增**网页搜索**视图：集成 `agedm.io` 与 `seeduck.cc` 的搜索，把两站结果渲染成本地卡片并**标明来源**；不做内嵌浏览器，点开走系统默认浏览器（`open_url` 只放行 `http/https`） | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -252,6 +257,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。**无季标记的文件直接挂作品组，禁止再生成「未标注季」节点**；分组改名只写 `settings.work_labels_json` 展示映射，绝不 `UPDATE media_files`，树 / 剧集墙 / 整剧树三处必须同源。
 - 展示视图改动：`tests/test_watched_cleanup.py` 必须覆盖卡片墙 / 表格切换、看过的列表默认平铺与单作品名、四种文件视图（cards/series/folder/flat）与扫描页默认 folder、设置页 sticky 工具条、作品改名两端接线；看过的列表取封面只能调 `cover_data_uris` 读缓存，**不得触发后台抓取任务**。
+  - **卡片墙结构固定为「外层普通块 + 内层 `.poster-grid`」**：看过的列表卡片模式**禁止再挂 `content-fill`**，也禁止给 `.watched-cards` 加 `flex: 1` 之类的铺满规则——那会把卡片压扁成一堆、标题被挤没。CSS 断言要盯住 `.watched-cards { display: block` 与 `.watched-cards .poster-grid`。
 - 本地目录跳转改动：`tests/test_watched_folders.py` 必须覆盖目录白名单（绝对路径 / 真实存在 / 非系统目录 / 在扫描根内）、匹配与未匹配分支、文件直接在扫描根内、失效发布目录向上回退 2 层（但**不退到扫描根本身 / 不跨出扫描根**）、只传 `id` 不传路径、`os.startfile` 全程 mock 且失败不抛异常、前端两种视图共用按钮与接口失败降级。**前端绝不把 path 传给后端**；打开动作只允许 `os.startfile`，禁止 `explorer` 命令拼接；`get_watched_list` 返回结构不得为此改动；目录匹配必须复用 `watchlist.media_index()` + `match_files()`，不得另写一套搜索 SQL。
 - 「从播放记录同步」联动：`sync_watched_from_progress()` **按 `(作品名, 季)` 聚合**，同一作品同季只允许一行（区间为 `episode_from`~`episode_to`），并顺带合并历史遗留的 `source='playback'` 每集一条记录（`match_by='user'` 行优先保留）。用例必须覆盖「12 集 → 1 行」「第二次同步 `added=0`」「既有区间被扩展而非新增」「整部行（NULL 区间）覆盖一切」「不同季各自一行」「手动行不动」「同步 → `watched_folders()` 每行都有按钮 → `open_watched_folder(id)` 能打开」整条链路、`title == title_cn` 只匹配一次、不同作品不串目录。**禁止退回「每集调一次 `commit()`」的写法**（判重键含集号，必然刷重复）。`watched_folders()` 的标题缓存**只允许本次调用内有效**，禁止跨调用进程级缓存（改名 / 删除 / 重扫后必须自然重算）。
 - 历史去重改动：`tests/test_continue_dismiss.py` 必须覆盖「同一作品不同集只留最新一条会话、不同作品各留一条、无标题会话按 `file_id` 独立保留、旧会话零删除、人工删最新后露出次新」。`get_history()` 分组键必须是作品标题（中文名 > 推断名），**不得退回按 `file_id` 分组**（那样一部剧每集一条会刷屏）；只收拢展示，不新增 `DELETE FROM watch_sessions`（全项目仍只有 1 处）。
@@ -261,14 +267,28 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 守护自动启动改动：`tests/test_daemon_autostart.py` 必须覆盖默认值、自动拉起 / 已运行不重复 / 关闭不启动、`stop_daemon()`、设置保存的即时生效、源码版与打包版进程识别、前端不再有 `start-daemon` 按钮；**禁止在 `Api.__init__` 拉起进程**，所有 `subprocess.Popen` / `psutil.process_iter` / `proc.terminate()` 一律 mock，绝不真的启停本机托盘守护。
   - **血泪坑**：`Api.save_settings({"daemon_auto_start": 0})` 会立刻调 `_apply_daemon_auto_start()` → `stop_daemon()` 真杀本机守护。曾有一个 `save_settings` 用例漏 mock，导致每跑一次 `run_tests.py` 用户的托盘守护就被杀掉、左下角误显示「后台记录未启动」。因此 `DaemonAutoStartApiTests.setUp` 统一把 `app.api.psutil.process_iter` 钉为空列表、`app.api.subprocess.Popen` 钉为抛 `AssertionError`；新增用例若需真实枚举，必须在自身作用域内层 patch 临时覆盖。任何新增的 `save_settings` 用例都要显式 mock `start_daemon` / `stop_daemon`。
 - 播放控制改动：`tests/test_player_controls.py` 必须覆盖按键消息码（WM_KEYDOWN/WM_KEYUP 与 VK）、无窗口 / 非 Windows / PostMessage 失败降级、键位白名单与非法值回退、倍速步进的精确与不精确分支、上下相邻集排序与边界、设置页保存白名单、前端三文件静态契约。**所有 Win32 调用一律 mock，绝不启动真实播放器**；控制条必须放在 `#playerHost` 之外的 HTML 层，否则会被原生子窗口盖住。
+  - **播放类动作必须走 PotPlayer 官方指令通道**：`potplayer.control()` 优先 `WM_COMMAND`（`play_pause=10014 / play=20001 / pause=20000 / stop=20002 / prev=10123 / next=10124`），再用 `POT_SET_PLAY_STATUS(0x5007)` 兜底，最后才投按键；三条通道**必须按需逐条发送并复查 `POT_GET_PLAY_STATUS(0x5006)`**。**禁止同时发**（一次点击会被连切三次，画面看着毫无变化）。用例必须覆盖「指令生效即返回」「状态没变继续换下一条」「三条全失败要报错」。
+  - 倍速 / 全屏这类没有菜单命令号的动作走 `POT_SEND_VIRTUAL_KEY(0x5010)`（wParam=命令码、lParam=VK，不需要窗口焦点），被拒再投 `WM_KEYDOWN/WM_KEYUP`；返回里必须带 `via` 说明走了哪条通道。
+
 - 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务；改 `app/textmatch.py` 或 `app/covers.py` 还要连带跑 `tests/test_watchlist.py`（关键词变体、两源共享索引、代理断连重试、非 200 换源）与 `tests/test_manual_cover.py`。站点搜索**不能只试完整长标题**。
   - **三条硬约束**：① AGE 候选**只取 `data-original`**（可从百度代理 `src=` 解出原始 CDN），`src` 是所有结果共用的占位图，绝不能进候选；② `_blocks()` 必须以字符串末尾兜底，不能丢最后一块（精确匹配常是最后一块）；③ 匹配按 `exact_pick()` 精确/去季精确 → `strict_pick()`（0.90 + 差值只能是季/续作后缀），**禁止退回 0.62 模糊凑数**，宁可返回未找到也不拿别的作品的图。Seeduck 优先用 `/s/<kw>/` 搜索页 `<h2>` 短标题，不用固定首页池凑数。
   - 人工封面：`source='manual'` 优先级最高，`is_manual()` 按**缓存文件名**（哈希）判定（标题含空格/大小写时 `lower(title_cn)` 会对不上）；`fetch_one()` 连 `force=True` 也不能覆盖，`cover_titles()` 要排除人工作品；`set_cover()` 三种来源都必须校验魔数与大小。
 - Everything 改动：`tests/test_everything.py` + `tests/test_everything_open.py` 必须覆盖空串回退默认路径、Error 8 / `-svc` 会话隔离的可操作提示、HTTP Basic Auth、`open_app()` 只用后端固定路径且 `os.startfile` 全 mock。**绝不修改用户 `Everything.ini` 或重启其服务进程**；核心引擎闭源，禁止尝试「下载源码编译集成」。
 - 看过的列表季数编辑：`tests/test_watched_season.py` 必须覆盖 `set_watched_season()` 只改 `season_no`、三种输入格式、留空清空、负数/超范围拒绝、前端 `watchedEditField` 字段分支与失焦保存；**不得复用 `update_watched` 改季数**，改名链路的隐藏中文名域契约必须保留。
 - 视频黑名单改动：`tests/test_blacklist.py` 必须覆盖默认开启、分隔符解析与去重、不区分大小写的包含匹配、`%`/`_` 转义、SQL 片段只含 `filename`/`title_guess`/`title_cn`（**不含 `path`**）、媒体库四种视图 / 剧集墙 / 看过的列表 / 历史 / 继续观看 / 统计 / 追剧本地匹配 / 快搜结果全部被过滤、**只隐藏不删行**、关闭开关后全部恢复、`save_settings` 白名单。新增任何「返回视频名称列表」的 API 都必须接入 `blacklist`，否则视为缺陷。
+  - **两段式匹配**：SQL 只用 `LIKE` 粗筛（便宜），Python 侧两侧去掉 `- _ . · 空格（含全角）` 归一化后再 `in` 精筛——这样 `FC2PPV` 才能挡住 `FC2-PPV-1288`、`MIDA` 挡住 `MIDA_077`。**禁止把多层 `replace()` 塞进 `WHERE`**：38 词 × 3 字段 OR 展开会让 SQLite 逐词重算 replace 链（实测 2100 行多 110 ms）。
+  - **目录名派生的分组标题**（剧集墙卡片标题、媒体库树分组名）文件名里可能根本没有关键词，必须再由 `_prune_blacklisted_groups()` 做一次 Python 侧判断，否则「剧集墙还能看到黑名单剧集」必然复发。
+  - 关键词与开关读取必须有进程内快照（键 = 库路径 + `db.write_count()`），**禁止每次 `hit()` 都 `db.get_setting()`**：每次 `get_conn()` 都会新开连接，190 个分组能耗掉 2 秒。
+
+- 网页搜索改动：`tests/test_websearch.py` 必须覆盖 AGE / Seeduck 两站真实页面片段的解析（`data-original` 原始 CDN、`src` 占位图必须被丢掉、`<h2>` 短标题）、相对链接补全、`http://` 升级为 `https://`、两站并行 + 单站失败降级、缓存命中不联网、黑名单过滤、`open_url` 白名单（只放行 `http/https`，`file:` / `javascript:` / `ms-*` / 相对路径全拒）、前端 nav / `VIEW_META` / `RENDERERS` 三者同步。
+  - **不做内嵌浏览器**：pywebview + WebView2 加载第三方站点要处理登录 / 广告 / 脚本冲突，代价远大于收益。只抓搜索结果这一层渲染成本地卡片，点开走系统默认浏览器（`webbrowser.open`，**禁止拼 shell 命令**）。
+  - 解析器与封面抓取共用同一套硬约束（AGE 只认 `data-original`、Seeduck 用 `<h2>`），改任何一边都要连带跑 `tests/test_covers.py`。
 - 追剧置顶 / 按钮对齐：`tests/test_watchlist_top.py` 必须覆盖同栏置顶、已置顶不移动、跨栏隔离、连续置顶、未知 id、`downloaded` 不变，以及 `.wl-ops .btn-icon` 等宽 + 整组右对齐 + 窄窗口换行的 CSS 契约。
 - 播放条常驻 / 媒体库性能：控制条必须同时存在于顶栏（`#playerBar`，独立窗口也能用）与内嵌舞台；`get_player_status().file_id` 要能回填 `currentPlaying`；封面 data URI 必须走「后端 mtime 缓存 + 前端 `coverUriCache`」两层，**禁止在每个视图里各写一次 `call('cover_data_uris')`**。
+  - **结果缓存必须按「数据指纹」失效，禁止用文件 mtime**：守护进程每 3 秒写播放进度，`library.db` / `-wal` 的 mtime 一直在变，用 mtime 会永远命中不了（表现为「加了缓存还是慢」）。指纹 = `(库路径, db.write_count(), 行数, MAX(id), SUM(LENGTH(filename)), SUM(LENGTH(title_cn)), 软删行数)`，播放进度故意不纳入。
+  - 三处固定热点不许复发：`library_tree._is_tech_token` **不得每次 `re.escape()` 现拼正则**（会冲掉 re 的 512 条缓存，2020 文件 × 40 词 ≈ 8 万次编译）；批量取封面**必须走 `covers.resolve_cover_many()`**（禁止逐张 `resolve_cover` 重建归一化索引 + 逐个 `stat()`）；`db.get_conn()` 的 `PRAGMA journal_mode=WAL` **按库路径只设一次**。
+  - 进程缓存键**必须带库路径**：测试反复切临时库，只靠写计数会把上一个库的数据带过来；`tests/base.py::reset_module_state()` 要清 `api._MEDIA_CACHE` / `websearch.clear_cache()` / `blacklist.invalidate()`。
+
 - 追剧列表 / 后台进程改动：`tests/test_watchlist.py` 必须覆盖解析与编号边界、顺序/状态调整幂等、短英文泛词不误命中、进程状态只读、**新增左侧导航必须同步 `VIEW_META` / `RENDERERS` / nav 三者键集合**；`process_status()` 用例必须显式 mock `daemon_running` 与 `subprocess.Popen`，绝不启停本机守护。
 - 剧集墙改动：「查看分集」必须带 `search_keyword`；脏分组名（如 `1.36G`）要退回组内 `title_cn` 或文件名括号里的中文片名；卡片不得再出现「播放下一集」或封面抓取控件。
 - 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
@@ -338,6 +358,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | PotPlayer | `D:\tool\DAUM\PotPlayer\PotPlayerMini64.exe`，窗口类 `PotPlayer64` |
 | 进度回读 | `WM_USER(0x0400)` + `0x5002` 总时长 / `0x5004` 当前位置 / `0x5006` 状态（实测成功） |
 | 续播参数 | `/seek=hh:mm:ss` `/current` `/autoplay`（官方 `CmdLine64.txt`） |
+| 播放控制 | `WM_COMMAND(0x0111)`：`10014` 播放暂停 / `20001` 播放 / `20000` 暂停 / `20002` 停止 / `10123` 上一集 / `10124` 下一集；`WM_USER(0x0400)`：`0x5007` 设状态、`0x5008` 切集、`0x5010` 发虚拟键（免焦点，2023-08-30 后版本）。实测 `via=command:10014` 生效 |
 | WebView2 | Edge WebView2 157 已安装，pywebview `gui="edgechromium"`；必须 `private_mode=True`、不传 `background_color` |
 | 原生标题栏 | 由 DWM 绘制、CSS 管不到；`app/theme_native.py::apply()` 用 `DWMWA_USE_IMMERSIVE_DARK_MODE=20`（旧系统回退 19）同步，实测可设可读回 `dark=1`；`DWMWA_CAPTION_COLOR=35` 本机返回失败，静默忽略即可 |
 | Everything | `D:\tool\Everything\Everything.exe` + 官方 `es.exe`（ES-1.1.0.38）都在。但 Everything 1.4.1.1032 以 `-svc`（会话 0 服务）运行，**es.exe 连不上 IPC（Error 8）**，`http_server_enabled=0`；要全盘检索需用户在 Everything 选项启用 HTTP 服务并填地址。核心引擎闭源、无法编译进本软件（详见 `docs/FEATURES.md` §22-C） |
@@ -364,3 +385,5 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 加 CLI 命令 | `cli.py` 的 `choices` 与分支 + README 第 5 节 |
 | 改 Obsidian 笔记内容 | `app/obsidian.py` 的 `render_*` + `tests/test_obsidian.py`；改路线图请改 `docs/OPTIMIZATION.md` |
 | 发新版 | 走第 3.2 节清单，跑 `tests/test_docs.py` 验证一致性 |
+| 加/改网页搜索或播放指令 | `app/websearch.py`（解析 → 合并 → 来源标记 → `open_url` 白名单）或 `app/potplayer.py::control()`（`WM_COMMAND` → `POT_SET_PLAY_STATUS` → 按键，逐条退让），配 `tests/test_websearch.py` / `tests/test_player_controls.py` |
+| 视图打开变慢 | 先看 `app/api.py::_db_signature`（缓存是否真命中）→ `blacklist` 是否每次开连接 → `library_tree._is_tech_token` 是否现拼正则 → 封面是否逐张 `resolve_cover` |

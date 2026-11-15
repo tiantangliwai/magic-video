@@ -21,6 +21,12 @@ def reset_module_state() -> None:
     metadata._ONLINE_ERROR = ""
     metadata._CFG_CACHE = None
     metadata._CFG_AT = 0.0
+    # 新增的进程内缓存（媒体库结果 / 网页搜索 / 黑名单词表）也要清，
+    # 否则上一个用例的临时库数据会漏到下一个用例里。
+    from app import api, blacklist, websearch
+    api._MEDIA_CACHE.clear()
+    websearch.clear_cache()
+    blacklist.invalidate()
 
 
 class IsolatedDbTestCase(unittest.TestCase):

@@ -357,7 +357,9 @@ class FrontendContractTests(unittest.TestCase):
 
     def test_settings_actions_are_sticky_in_css(self):
         self.assertIn(".settings-actions { position: sticky", self.css)
-        self.assertIn(".watched-card > .watched-cards", self.css)
+        # 卡片墙改成「外层普通块 + 内层 grid」（与剧集墙同结构），不再靠 flex 撑高
+        self.assertIn(".watched-cards { display: block", self.css)
+        self.assertIn(".watched-cards .poster-grid", self.css)
 
     def test_double_click_and_focusout_autosave(self):
         for token in ('data-edit-watched="', "addEventListener('dblclick'",

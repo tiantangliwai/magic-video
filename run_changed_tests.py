@@ -39,17 +39,20 @@ IMPACT: dict[str, tuple[str, ...]] = {
                    "tests.test_manual_cover", "tests.test_everything_open",
                    "tests.test_blacklist", "tests.test_watchlist_top"),
     "app/db.py": ("tests.test_api", "tests.test_manual_cleanup", "tests.test_watcher",
-                  "tests.test_continue_dismiss"),
+                  "tests.test_continue_dismiss", "tests.test_blacklist"),
     "app/config.py": ("tests.test_packaging", "tests.test_startup", "tests.test_theme",
                       "tests.test_everything_open", "tests.test_blacklist"),
     "app/blacklist.py": ("tests.test_media_browser", "tests.test_media_tree",
                          "tests.test_watched_list", "tests.test_watchlist",
-                         "tests.test_quicksearch"),
-    "app/library_tree.py": ("tests.test_media_tree", "tests.test_covers"),
+                         "tests.test_quicksearch", "tests.test_blacklist",
+                         "tests.test_websearch"),
+    "app/library_tree.py": ("tests.test_media_tree", "tests.test_covers",
+                            "tests.test_blacklist"),
     "app/importer.py": ("tests.test_importer", "tests.test_importer_realworld",
                         "tests.test_watched_cleanup", "tests.test_watched_list",
                         "tests.test_sync_dedupe"),
-    "app/covers.py": ("tests.test_covers", "tests.test_watchlist", "tests.test_manual_cover"),
+    "app/covers.py": ("tests.test_covers", "tests.test_watchlist", "tests.test_manual_cover",
+                      "tests.test_websearch"),
     "app/watchlist.py": ("tests.test_watchlist", "tests.test_watched_folders",
                          "tests.test_watchlist_top", "tests.test_blacklist"),
     "app/textmatch.py": ("tests.test_watchlist", "tests.test_covers"),
@@ -70,6 +73,7 @@ IMPACT: dict[str, tuple[str, ...]] = {
     "app/scanner.py": ("tests.test_scanner", "tests.test_manual_cleanup"),
     "app/metadata.py": ("tests.test_metadata", "tests.test_importer"),
     "app/obsidian.py": ("tests.test_obsidian",),
+    "app/websearch.py": ("tests.test_websearch", "tests.test_blacklist"),
     "app/__init__.py": ("tests.test_docs",),
 }
 
@@ -97,6 +101,8 @@ FRONTEND_MODULES: tuple[str, ...] = (
     # 视频黑名单设置页 / 追剧列表置顶按钮的前端契约
     "tests.test_blacklist",
     "tests.test_watchlist_top",
+    # 网页搜索视图 / 看过的列表卡片墙结构（外层块 + 内层 grid）的前端契约
+    "tests.test_websearch",
 )
 
 DOC_PATHS = ("README.md", "AGENTS.md", "CHANGELOG.md")
