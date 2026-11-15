@@ -16,7 +16,8 @@ class ImpactMappingTests(unittest.TestCase):
     def test_shared_api_maps_cross_module_contracts(self):
         mods = modules_for("app/api.py")
         for expected in ("tests.test_api", "tests.test_media_browser",
-                         "tests.test_manual_cleanup", "tests.test_watched_cleanup"):
+                         "tests.test_manual_cleanup", "tests.test_watched_cleanup",
+                         "tests.test_player_controls"):
             self.assertIn(expected, mods)
 
     def test_frontend_file_only_maps_frontend_contracts(self):
@@ -26,6 +27,12 @@ class ImpactMappingTests(unittest.TestCase):
         self.assertIn("tests.test_watchlist", mods)
         self.assertNotIn("tests.test_obsidian", mods)
         self.assertIn("tests.test_theme", modules_for("web/style.css"))
+
+    def test_player_controls_map_to_contracts(self):
+        self.assertIn("tests.test_player_controls", modules_for("app/potplayer.py"))
+        self.assertEqual(modules_for("tests/test_player_controls.py"),
+                         {"tests.test_player_controls"})
+        self.assertIn("tests.test_player_controls", modules_for("web/app.js"))
 
     def test_watchlist_and_keyword_modules_map_to_contracts(self):
         """追剧列表 / 关键词模块共用同一套契约，改任一处都要连带验证。"""

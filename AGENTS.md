@@ -46,6 +46,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 26 | 剧集墙**不要「播放下一集」按钮**；「查看分集」跳转必须带搜索词，否则跳过去会忘记在看什么 | 用户明确要求（0.1.4 日常迭代） |
 | 27 | 新增「后台进程管理」独立标签，用来启停 / 查看后台进程和剧集图片缓存进度；后台抓取封面整合进去，**不再在剧集墙展示** | 用户明确要求（0.1.4 日常迭代） |
 | 28 | 封面抓取失败率高：不要用全名，改用文件名中的关键字多试几次，从 AGE动漫 / SeedHub 两个网址获取对应背景图 | 用户明确要求（0.1.4 日常迭代） |
+| 29 | 播放器使用优化：播放/停止键居中、上一集/下一集按钮、倍速下拉 1.25/1.5/2、全屏按钮移到右下角。**PotPlayer 闭源、GitHub 无官方源码，不下载不集成第三方同名仓库**；用软件内控制层实现（用户确认：保留 PotPlayer 加控制层，同时调研开源内核） | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -217,6 +218,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 看过的列表解析 / 清洗 / 同步改动：`tests/test_watched_cleanup.py` 必须覆盖解析防再犯、清洗幂等与 `match_by='user'` 保护、区间覆盖判重、守护断点兜底与前端静态契约；清洗函数**只改 `title/title_cn/match_by`**，保留 `raw_text`、季、集、备注。
 - 守护自动启动改动：`tests/test_daemon_autostart.py` 必须覆盖默认值、自动拉起 / 已运行不重复 / 关闭不启动、`stop_daemon()`、设置保存的即时生效、源码版与打包版进程识别、前端不再有 `start-daemon` 按钮；**禁止在 `Api.__init__` 拉起进程**，所有 `subprocess.Popen` / `psutil.process_iter` / `proc.terminate()` 一律 mock，绝不真的启停本机托盘守护。
   - **血泪坑**：`Api.save_settings({"daemon_auto_start": 0})` 会立刻调 `_apply_daemon_auto_start()` → `stop_daemon()` 真杀本机守护。曾有一个 `save_settings` 用例漏 mock，导致每跑一次 `run_tests.py` 用户的托盘守护就被杀掉、左下角误显示「后台记录未启动」。因此 `DaemonAutoStartApiTests.setUp` 统一把 `app.api.psutil.process_iter` 钉为空列表、`app.api.subprocess.Popen` 钉为抛 `AssertionError`；新增用例若需真实枚举，必须在自身作用域内层 patch 临时覆盖。任何新增的 `save_settings` 用例都要显式 mock `start_daemon` / `stop_daemon`。
+- 播放控制改动：`tests/test_player_controls.py` 必须覆盖按键消息码（WM_KEYDOWN/WM_KEYUP 与 VK）、无窗口 / 非 Windows / PostMessage 失败降级、键位白名单与非法值回退、倍速步进的精确与不精确分支、上下相邻集排序与边界、设置页保存白名单、前端三文件静态契约。**所有 Win32 调用一律 mock，绝不启动真实播放器**；控制条必须放在 `#playerHost` 之外的 HTML 层，否则会被原生子窗口盖住。
 - 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务；改 `app/textmatch.py` 或 `app/covers.py` 还要连带跑 `tests/test_watchlist.py`（关键词变体、两源共享索引、代理断连重试、非 200 换源）。站点搜索**不能只试完整长标题**。
 - 追剧列表 / 后台进程改动：`tests/test_watchlist.py` 必须覆盖解析与编号边界、顺序/状态调整幂等、短英文泛词不误命中、进程状态只读、**新增左侧导航必须同步 `VIEW_META` / `RENDERERS` / nav 三者键集合**；`process_status()` 用例必须显式 mock `daemon_running` 与 `subprocess.Popen`，绝不启停本机守护。
 - 剧集墙改动：「查看分集」必须带 `search_keyword`；脏分组名（如 `1.36G`）要退回组内 `title_cn` 或文件名括号里的中文片名；卡片不得再出现「播放下一集」或封面抓取控件。

@@ -60,6 +60,28 @@
         </div>
       </div>
       <div class="player-host" id="playerHost"><div class="player-holder">正在启动 PotPlayer…</div></div>
+      <!-- 控制条独立于 #playerHost：它是 HTML 层，不会被 SetParent 进来的原生子窗口盖住。
+           播放/停止居中，上一集/下一集与倍速在同组，全屏固定在右下角。 -->
+      <div class="player-controls">
+        <div class="player-controls-side"><span class="hint" id="playerEpisodeHint"></span></div>
+        <div class="player-controls-center">
+          <button class="btn btn-sm" data-action="player-prev" title="上一集">⏮ 上一集</button>
+          <button class="btn btn-sm btn-primary player-play" id="playerPlayPause"
+                  data-action="player-play-pause" title="播放 / 暂停">▶ 播放/暂停</button>
+          <button class="btn btn-sm" data-action="player-stop" title="停止">■ 停止</button>
+          <button class="btn btn-sm" data-action="player-next" title="下一集">下一集 ⏭</button>
+          <select class="input player-speed" id="playerSpeed" aria-label="播放倍速">
+            <option value="1">1.0×</option>
+            <option value="1.25">1.25×</option>
+            <option value="1.5">1.5×</option>
+            <option value="2">2.0×</option>
+          </select>
+        </div>
+        <div class="player-controls-side right">
+          <button class="btn btn-sm" data-action="player-fullscreen" id="playerFullscreen"
+                  title="全屏 / 还原（内嵌模式下为放大播放区）">⛶ 全屏</button>
+        </div>
+      </div>
     </div>
   </main>
 </div>

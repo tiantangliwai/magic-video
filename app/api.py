@@ -734,6 +734,9 @@ class Api:
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
             "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
             "everything_es_path", "everything_http_url", "embed_player", "daemon_auto_start",
+            # 播放快捷键绑定与倍速步进：PotPlayer 各版本键位不同，允许在设置里改
+            "pot_key_play_pause", "pot_key_stop", "pot_key_faster", "pot_key_slower",
+            "pot_key_reset_speed", "pot_key_fullscreen", "pot_speed_step",
         }
         for key, value in (data or {}).items():
             if key not in allowed:
@@ -924,6 +927,74 @@ class Api:
         if p.suffix.lower() not in config.VIDEO_EXTS:
             return {"ok": False, "error": "不是受支持的视频文件"}
         return potplayer.play(str(p), 0)
+
+    # ---------- 播放控制（保留 PotPlayer：快捷键注入 + 命令行换片） ----------
+    PLAYER_ACTIONS = ("play_pause", "stop", "fullscreen")
+
+    def player_control(self, action: str) -> dict:
+        """播放/暂停、停止、全屏：白名单动作才允许投键，防止前端传任意键码。"""
+        action = str(action or "").strip()
+        if action not in self.PLAYER_ACTIONS:
+            return {"ok": False, "error": f"不支持的播放控制：{action}"}
+        return potplayer.send_key(action)
+
+    def player_speed(self, target: float) -> dict:
+        try:
+            value = float(target)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "倍速必须是数字"}
+        if value not in potplayer.SPEED_PRESETS:
+            return {"ok": False, "error": "只支持 1.0 / 1.25 / 1.5 / 2.0 倍速"}
+        return potplayer.apply_speed(value)
+
+    def player_bindings(self) -> dict:
+        """设置页读取当前键位与步进（不暴露任意配置，只读播放控制相关项）。"""
+        return {
+            "ok": True,
+            "keys": {name: potplayer.binding(name) for name in potplayer.DEFAULT_KEY_BINDINGS},
+            "step": potplayer.speed_step(),
+            "presets": list(potplayer.SPEED_PRESETS),
+            "steps": list(potplayer.SPEED_STEPS),
+            "key_choices": sorted(potplayer.VK_CODES),
+        }
+
+    def player_adjacent(self, file_id: int, direction: str = "next") -> dict:
+        """按「作品 → 季 → 集」找上一集/下一集；只返回目标，播放仍由前端统一发起。
+
+        复用 get_media_tree 的分组结果，保证与媒体库/剧集墙看到的是同一套顺序。
+        """
+        try:
+            fid = int(file_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "文件 id 无效"}
+        step = -1 if str(direction) == "prev" else 1
+        tree = self.get_media_tree({"mode": "series"})
+        for group in tree.get("groups", []):
+            files: list[dict] = []
+
+            def walk(node: dict) -> None:
+                files.extend(node.get("files") or [])
+                for child in node.get("children") or []:
+                    walk(child)
+
+            walk(group)
+            if not any(int(f.get("id") or 0) == fid for f in files):
+                continue
+            ordered = sorted(files, key=library_tree._file_order)
+            ids = [int(f["id"]) for f in ordered if f.get("id") is not None]
+            if fid not in ids:
+                return {"ok": False, "error": "该文件不在剧集序列中"}
+            index = ids.index(fid) + step
+            if index < 0 or index >= len(ids):
+                return {"ok": False, "error": "已经是第一集" if step < 0 else "已经是最后一集"}
+            target = ordered[index]
+            return {
+                "ok": True, "file_id": ids[index],
+                "title": target.get("display_title") or target.get("title_guess") or target.get("filename"),
+                "direction": "next" if step > 0 else "prev",
+                "index": index + 1, "total": len(ids),
+            }
+        return {"ok": False, "error": "找不到该文件所属的剧集分组"}
 
     # ---------- 软件内嵌播放（失败自动降级为外部播放） ----------
     def embed_status(self) -> dict:

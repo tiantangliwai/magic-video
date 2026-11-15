@@ -33,7 +33,8 @@ sys.path.insert(0, str(ROOT))
 # 只登记真实的跨模块依赖，别把整库都塞进来，否则就失去「增量」的意义。
 IMPACT: dict[str, tuple[str, ...]] = {
     "app/api.py": ("tests.test_media_browser", "tests.test_media_tree",
-                   "tests.test_manual_cleanup", "tests.test_watched_cleanup"),
+                   "tests.test_manual_cleanup", "tests.test_watched_cleanup",
+                   "tests.test_player_controls"),
     "app/db.py": ("tests.test_api", "tests.test_manual_cleanup", "tests.test_watcher"),
     "app/config.py": ("tests.test_packaging", "tests.test_startup", "tests.test_theme"),
     "app/library_tree.py": ("tests.test_media_tree", "tests.test_covers"),
@@ -44,7 +45,8 @@ IMPACT: dict[str, tuple[str, ...]] = {
     "app/textmatch.py": ("tests.test_watchlist", "tests.test_covers"),
     "app/everything.py": ("tests.test_everything", "tests.test_quicksearch"),
     "app/embedded_player.py": ("tests.test_embedded_player", "tests.test_potplayer"),
-    "app/potplayer.py": ("tests.test_potplayer", "tests.test_embedded_player"),
+    "app/potplayer.py": ("tests.test_potplayer", "tests.test_embedded_player",
+                         "tests.test_player_controls"),
     "app/theme_native.py": ("tests.test_theme_native", "tests.test_theme"),
     "app/watcher.py": ("tests.test_watcher", "tests.test_watched_cleanup"),
     "app/daemon.py": ("tests.test_daemon_autostart",),
@@ -68,6 +70,7 @@ FRONTEND_MODULES: tuple[str, ...] = (
     "tests.test_watched_cleanup",
     "tests.test_manual_cleanup",
     "tests.test_watchlist",
+    "tests.test_player_controls",
     "tests.test_daemon_autostart",
     "tests.test_media_browser",
     "tests.test_media_tree",

@@ -155,6 +155,17 @@ html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #33
 .player-host { flex: 1; min-height: 0; position: relative; background: #05060a; overflow: hidden; }
 .player-holder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #7c8494; font-size: 13px; pointer-events: none; }
+/* 播放控制条：所有按钮都在 HTML 层，原生播放器窗口盖不住 */
+.player-controls { height: 54px; flex: none; display: flex; align-items: center; justify-content: space-between;
+  gap: 10px; padding: 0 18px; border-top: 1px solid var(--border); background: var(--surface); }
+.player-controls-side { flex: 1 1 0; min-width: 0; display: flex; align-items: center; }
+.player-controls-side.right { justify-content: flex-end; }
+.player-controls-center { flex: none; display: flex; align-items: center; gap: 8px; }
+.player-play { min-width: 108px; }
+.player-speed { width: auto; min-width: 96px; padding: 6px 8px; font-size: 12px; }
+/* 放大模式：舞台盖过顶栏但保留底部控制条，全屏按钮仍在右下角 */
+.player-stage.stage-zoom { top: 0; }
+.player-stage.stage-zoom .player-stage-bar { display: none; }
 
 .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-bottom: 20px; }
 .stat { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 15px 17px; }

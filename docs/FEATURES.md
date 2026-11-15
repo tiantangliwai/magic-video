@@ -558,7 +558,40 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 19. 尚未实现（明确边界，避免误判为缺陷）
+## 19. 播放控制条（0.1.4 日常迭代）
+
+对应需求：播放/停止键居中，支持上一集和下一集按钮，调整倍速的按钮与下拉框 1.25 / 1.5 / 2，全屏按钮调整到右下角。用户同时提出「从 GitHub 下载 PotPlayer 源码彻底集成」——**经核实 PotPlayer 是 Kakao/Daum 闭源专有软件，官方从未公开源码，GitHub 上只有皮肤/插件类第三方仓库，不具备集成条件**；用户确认改为「保留 PotPlayer + 软件内控制层」，另并行调研开源内核。
+实现文件：`app/potplayer.py`（按键通道与倍速计划）、`app/api.py`（`player_control` / `player_speed` / `player_bindings` / `player_adjacent`）、`web/index.html` / `web/app.js` / `web/style.css`（控制条）。
+
+### 需求与验收标准
+
+| # | 验收标准 |
+|---|---|
+| 19-1 | 控制条在 `#playerHost` **之外**的 HTML 层，播放/暂停与停止按钮居中，上一集/下一集与倍速下拉同组，全屏按钮在右下角；不会被 `SetParent` 进来的原生窗口遮挡 |
+| 19-2 | 运行时控制只走动作白名单（play_pause / stop / fullscreen），用 `PostMessage(WM_KEYDOWN/WM_KEYUP)` 投到播放器 HWND；找不到窗口、非 Windows、投递失败都返回明确错误，不抛异常 |
+| 19-3 | 键位与倍速步进可在设置里改；非法键名回退默认值；步进只认 0.1 / 0.25 / 0.5，脏配置不会导致连按几十次 |
+| 19-4 | 倍速下拉只有 1.0 / 1.25 / 1.5 / 2.0；每次先复位到 1.0 再按 N 次加速，与当前倍速无关；步进到不了时**如实返回实际倍速**，不假装精确 |
+| 19-5 | 上一集/下一集复用 `get_media_tree` 的同一套「作品 → 季 → 集」分组与 `_file_order` 排序，跨季连续，首集/末集给明确提示；播放仍由前端 `playSmart` 统一发起，断点与历史照常记录 |
+| 19-6 | 内嵌模式的「全屏」只放大软件内播放区（隐藏标题条、重排画面），**不触发 PotPlayer 自身全屏**（子窗口全屏会脱离父窗口）；仅独立窗口模式才把全屏键发给播放器 |
+
+### 数据流
+
+```
+控制条按钮 -> Api.player_control(action) -> potplayer.send_key(action)
+   -> binding() 读设置(白名单 VK_CODES) -> PostMessageW(hwnd, WM_KEYDOWN/WM_KEYUP)
+倍速下拉 -> Api.player_speed(1.25) -> speed_plan() 算次数 -> apply_speed()
+   -> send_key(reset_speed) + N × send_key(faster) -> 返回 wanted/actual/exact
+上一集/下一集 -> Api.player_adjacent(file_id, direction)
+   -> get_media_tree(mode=series) 分组 -> _file_order 排序 -> 取相邻 id
+   -> 前端 playSmart('id', id, true) -> play_embedded / play_file
+```
+
+对应测试：`tests/test_player_controls.py`（27 个用例：键位与设置覆盖、Win32 消息码与失败分支、倍速步进精确/不精确、调用序列、API 白名单、相邻集排序与边界、前端三文件静态契约）。所有 `PostMessageW` / `MapVirtualKeyW` 均 mock，绝不启动真实播放器。
+
+---
+
+## 20. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、封面人工确认与多站点兜底。
+- 换用 mpv / libVLC 等开源内核（正在调研，未决定是否迁移；当前仍是 PotPlayer 控制层方案）。
 - 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。

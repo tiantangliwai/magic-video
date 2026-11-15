@@ -50,6 +50,11 @@ try:  # 非 Windows 平台也能安全导入本模块（纯函数与测试仍可
     _user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
     _user32.IsWindow.argtypes = [wintypes.HWND]
     _user32.IsWindow.restype = wintypes.BOOL
+    # 运行时控制：把按键消息直接投到 PotPlayer 窗口（内嵌时是 WS_CHILD，没有键盘焦点）
+    _user32.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+    _user32.PostMessageW.restype = wintypes.BOOL
+    _user32.MapVirtualKeyW.argtypes = [wintypes.UINT, wintypes.UINT]
+    _user32.MapVirtualKeyW.restype = wintypes.UINT
 except (AttributeError, OSError):  # pragma: no cover - 仅在非 Windows 触发
     _user32 = None
 
@@ -230,3 +235,111 @@ def seek_current(ms: int) -> bool:
         return False
     send(hwnd, POT_SET_CURRENT_TIME, max(0, int(ms)))
     return True
+
+
+# ---------------------------------------------------------------- 运行时播放控制
+# PotPlayer 没有公开的运行时控制 API：WM_USER 命令码只覆盖「状态回读 + seek」，
+# CmdLine64.txt 也只有启动参数。播放/暂停、停止、倍速、全屏只能把快捷键投到
+# 播放器窗口。内嵌后窗口是 WS_CHILD、通常没有键盘焦点，所以用 PostMessage
+# 直接投递 WM_KEYDOWN/WM_KEYUP，而不是只作用于前台线程的 SendInput。
+WM_KEYDOWN = 0x0100
+WM_KEYUP = 0x0101
+_KEYUP_BITS = 0xC0000000  # 转换位(31) + 先前按下位(30)
+
+VK_CODES = {
+    "SPACE": 0x20, "ENTER": 0x0D, "ESC": 0x1B, "S": 0x53,
+    "C": 0x43, "X": 0x58, "Z": 0x5A, "P": 0x50,
+    "LEFT": 0x25, "UP": 0x26, "RIGHT": 0x27, "DOWN": 0x28,
+    "PAGEUP": 0x21, "PAGEDOWN": 0x22,
+}
+
+# 默认键位取 PotPlayer 常见默认绑定；各版本/用户自定义可能不同，
+# 全部可在「设置 → 播放控制」里覆盖，避免换个版本整套按钮失效。
+DEFAULT_KEY_BINDINGS = {
+    "play_pause": "SPACE",
+    "stop": "S",
+    "faster": "C",
+    "slower": "X",
+    "reset_speed": "Z",
+    "fullscreen": "ENTER",
+}
+KEY_SETTINGS = {name: f"pot_key_{name}" for name in DEFAULT_KEY_BINDINGS}
+SPEED_PRESETS = (1.0, 1.25, 1.5, 2.0)
+SPEED_STEPS = (0.1, 0.25, 0.5)
+DEFAULT_SPEED_STEP = 0.1
+
+
+def binding(action: str) -> str:
+    """读一个动作的键位：设置里存的值必须落在白名单里，否则用默认值。"""
+    default = DEFAULT_KEY_BINDINGS.get(action, "")
+    if not default:
+        return ""
+    try:
+        value = str(db.get_setting(KEY_SETTINGS[action], default) or default).strip().upper()
+    except Exception:
+        return default
+    return value if value in VK_CODES else default
+
+
+def speed_step() -> float:
+    """倍速快捷键每次改变多少；只认固定档位，杜绝脏配置导致按几十次。"""
+    try:
+        value = float(db.get_setting("pot_speed_step", DEFAULT_SPEED_STEP))
+    except Exception:
+        return DEFAULT_SPEED_STEP
+    return value if value in SPEED_STEPS else DEFAULT_SPEED_STEP
+
+
+def send_key(action: str, hwnd: int | None = None) -> dict:
+    """把 action 对应的按键投到 PotPlayer 窗口。不依赖键盘焦点。"""
+    vk = VK_CODES.get(binding(action), 0)
+    if not vk:
+        return {"ok": False, "error": f"未知的播放控制动作：{action}"}
+    target = int(hwnd or 0) or find_window()
+    if not target:
+        return {"ok": False, "error": "PotPlayer 未运行"}
+    if _user32 is None:
+        return {"ok": False, "error": "当前系统不支持 Win32 按键注入"}
+    try:
+        scan = int(_user32.MapVirtualKeyW(vk, 0) or 0)
+        down = (scan << 16) | 1
+        up = (scan << 16) | _KEYUP_BITS | 1
+        ok_down = _user32.PostMessageW(target, WM_KEYDOWN, vk, down)
+        ok_up = _user32.PostMessageW(target, WM_KEYUP, vk, up)
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    if not (ok_down and ok_up):
+        return {"ok": False, "error": "按键投递失败（播放器窗口可能已关闭）"}
+    return {"ok": True, "action": action, "key": binding(action), "hwnd": target}
+
+
+def speed_plan(target: float) -> dict:
+    """从 1.0 出发算要按几次加速键；步进到不了时返回最近可达值，不假装精确。"""
+    step = speed_step()
+    try:
+        wanted = float(target)
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "倍速必须是数字"}
+    if wanted <= 0 or wanted > 4:
+        return {"ok": False, "error": "倍速超出支持范围"}
+    presses = max(0, min(int(round((wanted - 1.0) / step)), 40))
+    actual = round(1.0 + presses * step, 2)
+    return {
+        "ok": True, "wanted": wanted, "actual": actual, "presses": presses,
+        "step": step, "exact": abs(actual - wanted) < 1e-6,
+    }
+
+
+def apply_speed(target: float, hwnd: int | None = None) -> dict:
+    """先复位到 1.0，再按 N 次加速键 —— 结果与当前倍速无关，可重复调用。"""
+    plan = speed_plan(target)
+    if not plan["ok"]:
+        return plan
+    reset = send_key("reset_speed", hwnd)
+    if not reset["ok"]:
+        return reset
+    for _ in range(plan["presses"]):
+        one = send_key("faster", hwnd)
+        if not one["ok"]:
+            return one
+    return plan

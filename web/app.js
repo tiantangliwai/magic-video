@@ -7,6 +7,7 @@ let searchTimer = null;
 let currentTheme = 'light';
 let embeddedMode = true;            // 软件内播放开关（设置存 SQLite）；失败自动降级外部播放
 let playerStageActive = false;      // 播放舞台是否已展开
+let currentPlaying = { fileId: null, path: null, title: '' };  // 上一集/下一集据此定位
 let embedSyncTimer = null;          // 仅内嵌播放期间存在，退出立即清掉
 let embedResizeTimer = null;
 let daemonAutoStart = true;         // 设置里是否允许自动开启后台记录
@@ -217,19 +218,23 @@ async function refreshEmbedState() {
 }
 
 async function playSmart(kind, value, fromStart) {
+  const byPath = kind === 'path';
+  const started = { fileId: byPath ? null : Number(value), path: byPath ? String(value) : null,
+    title: byPath ? String(value).split(/[\\/]/).pop() : '' };
   if (!embeddedMode) {
-    const r = (kind === 'path')
+    const r = byPath
       ? await call('play_external', value)
       : await call('play_file', Number(value), fromStart);
+    if (r.ok) currentPlaying = started;
     toast(r.ok ? (r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放` : '已开始播放')
       : (r.error || '播放失败'), r.ok);
     return;
   }
   // 先把舞台展开再发起调用：Python 侧要等 PotPlayer 窗口出现，属于异步等待，
   // 界面此时仍可交互，不会像以前那样「点了没反应」。
-  openPlayerStage(kind === 'path' ? String(value).split(/[\\/]/).pop() : '正在载入…');
+  openPlayerStage(byPath ? started.title : '正在载入…');
   const rect = hostRect();
-  const r = (kind === 'path')
+  const r = byPath
     ? await call('play_embedded_path', value, rect)
     : await call('play_embedded', Number(value), fromStart, rect);
   if (!r.ok) {
@@ -238,16 +243,54 @@ async function playSmart(kind, value, fromStart) {
     return;
   }
   if (!r.embedded) {
+    currentPlaying = started;
     await stopEmbedded(true);
     toast(r.reason || '已自动降级为独立窗口播放', true);
     return;
   }
+  currentPlaying = { ...started, title: r.title || started.title };
   const titleEl = document.getElementById('playerStageTitle');
-  if (titleEl) titleEl.textContent = r.title || '正在播放';
+  if (titleEl) titleEl.textContent = currentPlaying.title || '正在播放';
+  const hintEl = document.getElementById('playerEpisodeHint');
+  if (hintEl) hintEl.textContent = currentPlaying.title || '';
   const holder = document.querySelector('#playerStage .player-holder');
   if (holder) holder.textContent = '';
   startEmbedSync();
   toast(r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放（软件内）` : '已在软件内开始播放');
+}
+
+// ---------- 播放控制条（保留 PotPlayer，快捷键注入 + 命令行换片） ----------
+async function playerControl(action) {
+  const r = await call('player_control', action);
+  toast(r.ok ? `已执行：${action}` : (r.error || '播放控制失败'), r.ok);
+  return r;
+}
+
+async function playerAdjacent(direction) {
+  if (!currentPlaying.fileId) { toast('请先从媒体库或剧集墙播放一集', false); return; }
+  const r = await call('player_adjacent', currentPlaying.fileId, direction);
+  if (!r.ok) { toast(r.error || '没有相邻剧集', false); return; }
+  toast(`${direction === 'prev' ? '上一集' : '下一集'}：${r.title}（${r.index}/${r.total}）`);
+  await playSmart('id', r.file_id, true);
+}
+
+async function setPlayerSpeed(value) {
+  const r = await call('player_speed', Number(value));
+  if (!r.ok) { toast(r.error || '倍速设置失败', false); return; }
+  toast(r.exact ? `倍速已设为 ${r.actual}×`
+    : `已设为 ${r.actual}×（本机步进 ${r.step}，${value}× 无法精确到达；可在「设置 → 播放控制」把步进改成 0.25）`, true);
+}
+
+function toggleStageZoom() {
+  const stage = document.getElementById('playerStage');
+  if (!stage || stage.hidden) return;
+  // 内嵌时 PotPlayer 是子窗口，触发它自身全屏会脱离父窗口并破坏布局。
+  // 因此只把播放区放大到整个窗口；独立窗口模式才把全屏键投给播放器。
+  const zoomed = stage.classList.toggle('stage-zoom');
+  const btn = document.getElementById('playerFullscreen');
+  if (btn) btn.textContent = zoomed ? '⛶ 还原' : '⛶ 全屏';
+  if (zoomed && playerStageActive) call('embed_sync', hostRect()).catch(() => {});
+  if (!embeddedMode) call('player_control', 'fullscreen').catch(() => {});
 }
 
 function progressItem(r, actions) {
@@ -789,6 +832,25 @@ async function renderSettings() {
       ${switchHtml('recording_enabled', isOn(s.recording_enabled), '启用播放记录', '关闭后守护进程不再写入历史')}
       ${switchHtml('autostart', isOn(s.autostart_enabled), '开机自动启动后台记录', '写当前用户注册表 Run 项，无需管理员权限')}
     </div>
+    <div class="card"><h3>播放控制键位</h3>
+      <div class="notice">PotPlayer 不提供公开的运行时控制接口，播放/暂停、停止、倍速、全屏是把<b>快捷键投递到播放器窗口</b>实现的。
+      不同版本默认键位可能不同，可在 PotPlayer 里按 F5 → 快捷键核对后在此修改。填的是键名（如 <span class="mono">SPACE</span> / <span class="mono">C</span> / <span class="mono">ENTER</span>），无效值会自动回退默认。</div>
+      <div class="grid-2">
+        <div class="field"><label>播放 / 暂停</label><input class="input" id="set-pot_key_play_pause" value="${esc(s.pot_key_play_pause || 'SPACE')}"></div>
+        <div class="field"><label>停止</label><input class="input" id="set-pot_key_stop" value="${esc(s.pot_key_stop || 'S')}"></div>
+        <div class="field"><label>加速</label><input class="input" id="set-pot_key_faster" value="${esc(s.pot_key_faster || 'C')}"></div>
+        <div class="field"><label>减速</label><input class="input" id="set-pot_key_slower" value="${esc(s.pot_key_slower || 'X')}"></div>
+        <div class="field"><label>恢复正常倍速</label><input class="input" id="set-pot_key_reset_speed" value="${esc(s.pot_key_reset_speed || 'Z')}"></div>
+        <div class="field"><label>全屏（独立窗口时）</label><input class="input" id="set-pot_key_fullscreen" value="${esc(s.pot_key_fullscreen || 'ENTER')}"></div>
+      </div>
+      <div class="field"><label>倍速快捷键每次步进</label>
+        <select class="input" id="set-pot_speed_step">
+          <option value="0.1" ${String(s.pot_speed_step || '0.1') === '0.1' ? 'selected' : ''}>0.1×（默认，1.25× 会就近到 1.2 或 1.3）</option>
+          <option value="0.25" ${String(s.pot_speed_step) === '0.25' ? 'selected' : ''}>0.25×（推荐，1.25 / 1.5 / 2.0 全部精确）</option>
+          <option value="0.5" ${String(s.pot_speed_step) === '0.5' ? 'selected' : ''}>0.5×</option>
+        </select>
+        <div class="tip">倍速下拉每次先按「恢复正常倍速」归 1.0，再按 N 次「加速」，结果与当前倍速无关。步进 0.1 时 1.25× 无法精确到达，界面会提示实际值。</div></div>
+    </div>
     <div class="card"><h3>中文名自动匹配</h3>
       <div class="notice">只在<b>导入列表 / 扫描目录 / 手动点「重新匹配」</b>时执行，没有定时任务。
       顺序：内置离线词典 → 本地已学对照 → 在线 Bangumi（未命中且允许联网时才查）。结果当场入库并展示。
@@ -1313,6 +1375,11 @@ async function handleAction(action, btn) {
       return;
     }
     case 'embed-stop': await stopEmbedded(); return;
+    case 'player-play-pause': await playerControl('play_pause'); return;
+    case 'player-stop': await playerControl('stop'); return;
+    case 'player-prev': await playerAdjacent('prev'); return;
+    case 'player-next': await playerAdjacent('next'); return;
+    case 'player-fullscreen': toggleStageZoom(); return;
     case 'toggle-theme': {
       const next = currentTheme === 'dark' ? 'light' : 'dark';
       applyTheme(next);                       // 先本地生效，不等后端往返
@@ -1512,7 +1579,9 @@ async function handleAction(action, btn) {
     case 'save-settings': {
       const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent', 'http_proxy',
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
-        'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url'];
+        'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url',
+        'pot_key_play_pause', 'pot_key_stop', 'pot_key_faster', 'pot_key_slower',
+        'pot_key_reset_speed', 'pot_key_fullscreen', 'pot_speed_step'];
       const data = {};
       keys.forEach(k => { const el = document.getElementById('set-' + k); if (el) data[k] = el.value; });
       // 所有开关（含 daemon_auto_start / autostart / embed_player）由 data-setting 统一收集
@@ -1792,6 +1861,7 @@ document.addEventListener('keydown', (ev) => {
 
 document.addEventListener('change', (ev) => {
   const el = ev.target;
+  if (el.id === 'playerSpeed') { setPlayerSpeed(el.value); return; }
   const handlers = {
     fileDir: () => { fileListState.directory_id = Number(el.value) || 0; },
     fileMatch: () => { fileListState.match_state = el.value; },
