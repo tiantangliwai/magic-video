@@ -458,7 +458,50 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 16. 尚未实现（明确边界，避免误判为缺陷）
+## 16. 人工清理：删记录 / 删本地文件，观看记录不自动删除（0.1.4 日常迭代）
+
+对应需求：历史记录支持人工删除；剧集全部看完后支持人工删除本地文件；**但观看记录不要自动删除**。
+实现文件：`app/file_ops.py`（回收站安全）、`app/api.py`（`delete_history_session` /
+`get_delete_candidates` / `delete_local_files`）、`app/library_tree.py`（`all_done` /
+`removable_count` / `file_ids`）、`app/db.py`（`media_files.deleted_at`）、
+`app/scanner.py`（文件恢复后清标记）、`web/app.js`（确认框与入口）、`web/style.css`（模态框样式）。
+
+### 需求与验收标准
+
+| # | 验收标准 |
+|---|---|
+| 16-1 | 「历史记录」每行有「删除」按钮，确认后只删 `watch_sessions` 一行；`watch_progress` / `media_files` / `watched_list` 行数不变 |
+| 16-2 | 后端全项目只有 `Api.delete_history_session` 一处 `DELETE FROM watch_sessions`；守护、扫描、导入、会话关闭时都没有自动清理 |
+| 16-3 | 单集清理入口只在 `completed=1` 的文件上出现；整部清理入口只在 `all_done`（分组内每一集都看完）且 `removable_count>0` 时出现 |
+| 16-4 | 删除前 `get_delete_candidates()` 返回权威清单（路径、大小、可否删除与原因）；整部删除时后端重新构建分组校验 id 全部属于该作品，伪造 id 整体拒绝 |
+| 16-5 | 二次确认框列出全部路径、合计大小与明确危险警告，默认焦点在「取消」，Esc / 点遮罩都取消；没有任何自动或定时触发点 |
+| 16-6 | 文件用 `SHFileOperationW(FO_DELETE + FOF_ALLOWUNDO)` 移入回收站；拒绝相对路径、非视频、符号链接、系统目录；接口失败只报错，绝不降级为永久删除；单次上限 300 |
+| 16-7 | **数据库零 DELETE**：成功只 `UPDATE media_files.deleted_at`；因 `watch_progress` / `watch_sessions` 是 `ON DELETE CASCADE`，删行会连带清掉记录，所以绝不删行。进度、断点、会话、看过的列表全部保留 |
+| 16-8 | 已移除的文件显示「本地文件已移除」badge 并隐藏清理按钮；从回收站恢复后扫描一次自动清 `deleted_at`；文件缺失时扫描只跳过、不删记录 |
+| 16-9 | `play_file()` 遇到 `deleted_at` 且文件不存在时给出「本地文件已移入回收站；观看记录已保留」的明确提示 |
+
+### 数据流
+
+```
+历史页点「删除」 ──确认──> DELETE FROM watch_sessions WHERE id=?   （仅此一行）
+                          └─ watch_progress / media_files / watched_list 不动
+
+已看完单集 / 整部点「删除本地文件」 ──确认──> get_delete_candidates()
+   └─> delete_local_files() 二次校验 ──> file_ops.trash_file() → Windows 回收站
+       └─> UPDATE media_files SET deleted_at=now()   （零 DELETE，观看记录全部保留）
+文件从回收站恢复 + 扫描 ──> UPDATE media_files SET deleted_at=NULL
+```
+
+对应测试：`tests/test_manual_cleanup.py`（36 个用例：路径安全与永久删除防线、
+历史单条删除、整剧看完判定、清单预览、伪造 id 拒绝、失败不落标记、
+重复删除跳过、记录零删除、扫描恢复与保留、前端与静态契约）。
+隐藏窗口真机冒烟：历史页 11 个删除按钮、继续观看 4 个单集清理按钮、
+确认框默认焦点为取消且列出完整路径、卡片与树节点在 `all_done` 时渲染清理按钮。
+测试中所有回收站调用均 mock，`file_ops._shell_trash` 在 `setUp` 全局钉死，绝不真删文件。
+
+---
+
+## 17. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、封面人工确认与多站点兜底。
 - 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。

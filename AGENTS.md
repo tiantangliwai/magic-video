@@ -41,6 +41,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 21 | **后台记录默认自动启动**，不要再在左下角/总览让用户点「启动」，但可以在设置里关闭；左下角只留状态指示 | 用户明确要求（0.1.4 日常迭代） |
 | 22 | 界面与数据体验 11 项：默认数据目录迁到 `D:\magicvideo`、窗口标题改软件名、媒体库树状改「剧集展示」、双击输入框即改并失焦自动保存、看过的列表脏数据清洗 + 从播放记录同步、列表撑满与表头固定、计数移到卡片右上角、顶栏主题即时切换、封面进度可见、切回窗口即时刷新、关闭播放器断点兜底 | 用户明确要求（0.1.4 日常迭代） |
 | 23 | **全盘快搜（Everything）要单独占一个左侧导航名称**，不再作为「剧集墙」页里的附属卡片 | 用户明确要求（0.1.4 日常迭代） |
+| 24 | **历史记录支持人工删除；整部剧看完后支持人工删除本地文件；但观看记录绝不自动删除**。本地文件只能移入回收站，数据库零 `DELETE`，进度/会话/看过的列表全部保留 | 用户明确要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -87,10 +88,11 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 **日常需求 = 一次轻量迭代（默认路径）**：
 
-1. 改代码 + 补对应单测，跑 `python run_tests.py` 全绿（改了 Python / JS 再补 `compileall` / `node --check`）。
-2. 只更新**本次真正受影响**的功能/使用说明；版本号、CHANGELOG、TESTING 报告留给发版时统一处理。
-3. 按 3.3 规范提交，可 `git push origin master`。
+1. 改代码 + 补对应单测，**只跑增量 / 受影响用例**：`python run_changed_tests.py`（按 git 改动自动映射），或 `python -m unittest tests.test_xxx`；改了 Python / JS 再补 `compileall` / `node --check`。
+2. 只更新**本次真正受影响**的功能/使用说明；版本号、CHANGELOG 留给发版时统一处理。
+3. 按 3.3 规范提交。
 4. 追加当天工作日志。
+5. **`git push` / 打 tag 之前**必须跑一次全量 `python run_tests.py`，全绿才推（见 3.0.1）。
 
 **默认禁止（除非用户明确要求）**：
 
@@ -98,6 +100,22 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - ❌ 跑 `build_dist.py` 重出 ZIP / MSI、做 `exe --selftest` 与产物验收。
 - ❌ `git tag` / 推 tag / 为每个需求写一段 CHANGELOG。
 - ❌ 自动同步 Obsidian 笔记（默认 `obsidian_auto_sync=0`，需要时手动同步一次即可）。
+
+### 3.0.1 测试节奏（用户 2026-11-15 追加，优先级最高）
+
+> 用户原话：「调整后续的开发逻辑只跑增量和影响到逻辑的单元测试，不要全量跑，仅在推送和打tag时全量跑单元测试」。
+
+| 时机 | 跑什么 |
+|---|---|
+| 日常改代码 / 补用例 / 改文档 | `python run_changed_tests.py`（按 git 变更自动挑模块）；精确控制用 `--module tests.test_x` / `--only` / `--list`，已提交想回看用 `--base HEAD~1` |
+| 只改了前端语法 / 纯文案 | `node --check web/app.js` 或对应模块即可，不必跑全量 Python 用例 |
+| **`git push` 之前** | `python run_tests.py` 全量，必须全绿才推 |
+| **打 tag / 发版之前** | `compileall` + `node --check` + `run_tests.py` 全量 + 打包链验收 |
+| `tests/base.py` / 数据库 schema 改动 | 基类影响全部用例 → 直接 `--all` 全量 |
+
+- `run_changed_tests.py` 的 `IMPACT` / `FRONTEND_MODULES` 是「改动 → 受影响用例」的单一真源，新增模块顺手补一行；共享文件只映射到最小契约集，跨模块影响用 `--module` 追加。
+- 增量运行**不写** `data/test_last.json`（那是全量门禁快照，供 Obsidian 自测报告读取）。
+- 全量是最终兜底：增量全绿**不能**替代推送前的全量。
 
 **触发完整发版的唯一条件**：用户明确说「发版 / 打包 / 出安装包 / 打个 tag / 发布一个版本 / 升版本」等。此时才一次性走 3.2 清单：升版本 → 补齐累积的 CHANGELOG → 重出 ZIP + MSI → 验收产物 → 打 tag 并推送。
 
@@ -173,11 +191,11 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 ## 5. 测试门禁
 
-- 新增/修改任何 `app/` 逻辑 → 必须在 `tests/` 里补对应用例。
+- 新增/修改任何 `app/` 逻辑 → 必须在 `tests/` 里补对应用例；**日常只跑受影响模块**（`run_changed_tests.py`），**推送 / 打 tag 前**才跑 `run_tests.py` 全量（见 3.0.1）。
 - 涉及数据库 → 继承 `IsolatedDbTestCase`；**严禁**在测试中连接真实 `data/library.db`。
 - 涉及网络 → 基类的 `search_online` mock 已禁用真实请求；要测在线分支就本地 patch 假数据。
 - 涉及 PotPlayer → mock `read_status` / `resolve_media` / `subprocess.Popen`，不真的启动播放器。
-- **仅显式发版时**：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过；日常提交只需 `run_tests.py` 全绿（见 3.0）。
+- **推送 / 打 tag 前**：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过；日常改动只跑增量（见 3.0.1）。
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。
 - 启动 / 单实例改动：`tests/test_startup.py` 必须覆盖互斥锁、已有窗口置前、js_api 反射安全与 `./start` 脚本；主题改动必须同时跑 `tests/test_theme.py` 与 `tests/test_theme_native.py`（DWM 原生标题栏、降级路径、CSS `color-scheme` 契约）。
@@ -187,6 +205,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
   - **血泪坑**：`Api.save_settings({"daemon_auto_start": 0})` 会立刻调 `_apply_daemon_auto_start()` → `stop_daemon()` 真杀本机守护。曾有一个 `save_settings` 用例漏 mock，导致每跑一次 `run_tests.py` 用户的托盘守护就被杀掉、左下角误显示「后台记录未启动」。因此 `DaemonAutoStartApiTests.setUp` 统一把 `app.api.psutil.process_iter` 钉为空列表、`app.api.subprocess.Popen` 钉为抛 `AssertionError`；新增用例若需真实枚举，必须在自身作用域内层 patch 临时覆盖。任何新增的 `save_settings` 用例都要显式 mock `start_daemon` / `stop_daemon`。
 - 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务。
 - 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
+- 人工删除改动：`tests/test_manual_cleanup.py` 必须覆盖回收站路径安全、零 `DELETE FROM media_files`、历史单条删除、整剧看完判定、清单预览与伪造 id 拒绝、失败不落标记、扫描恢复标记、前端静态契约；所有 `SHFileOperationW` 调用一律 mock（`file_ops._shell_trash` 在 `setUp` 全局钉死），**绝不真删文件**；本地文件只走回收站 + `UPDATE deleted_at`，观看记录只能由用户逐条人工删除。
 - **仅用户要求发版或改打包链时**：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
 - 窗口冒烟：`webview.create_window(..., hidden=True)` + 线程内 `evaluate_js` 检查 8 页渲染，完成后 `destroy()`。
 
@@ -197,7 +216,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 1. 读 `AGENTS.md` 与 `docs/FEATURES.md`，确认不违反第 1 节需求基线。
 2. 先写/补测试（允许先红），再改实现，跑到全绿。
 3. 只同步**本次受影响**的功能/使用说明；版本号、CHANGELOG、TESTING 报告留到发版时统一处理（见 3.0）。
-4. 语法检查 + 完整测试；仅当界面有可见改动才做窗口冒烟。
+4. 语法检查 + **增量测试**（见 3.0.1）；仅当界面有可见改动才做窗口冒烟。推送前再跑一次全量。
 5. 按 3.3 规范提交；**仅用户明确要求发版**时才走 3.2 清单、构建产物并打 tag。
 6. 把有长期价值的结论追加到 `.workbuddy/memory/YYYY-MM-DD.md`。
 
@@ -227,6 +246,8 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - ❌ 引入账号体系、公网服务、数据库上云（除非用户明确要求）。
 - ❌ 用文件路径之外的东西当主键却不迁移旧数据；删表重建导致历史丢失。
 - ❌ 在文件不可达时自动删除 `media_files` / 进度 / 会话记录。
+- ❌ 自动删除观看记录（守护、扫描、导入、会话关闭都不清理；只有「历史记录」页逐条人工删除）。
+- ❌ 永久删除本地文件（`os.remove` / `unlink` / `rmtree` 一律禁止，只能 `FOF_ALLOWUNDO` 进回收站，且必须用户二次确认）。
 - ❌ 让在线刮削阻塞导入、扫描或播放记录；必须短超时 + 整批降级。
 - ❌ 用一个长事务同时包住网络请求和数据库写。
 - ❌ 提交 `data/*.db`、日志、临时测试产物。

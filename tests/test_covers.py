@@ -172,12 +172,16 @@ class CoverFlowTests(IsolatedDbTestCase):
             self.assertEqual(covers.clean_candidate(good), good.strip("\u200c").strip(), good)
 
     def test_cover_titles_prioritizes_chinese_names_from_watched_list(self):
-        # 英文文件名在本地库里数量极多，但刮削源只对中文名有稳定结果
+        # 英文文件名在本地库里数量极多，但刮削源只对中文名有稳定结果。
+        # 临时目录名带随机后缀，偶尔会碰巧通过 clean_candidate() 变成剧集墙卡片标题
+        # （tier 0）而让本用例偶发失败；这里钉掉卡片标题，专门验证清单中文名的优先级。
+        # 卡片标题本身的优先级由 test_cover_titles_puts_poster_card_labels_first 覆盖。
         for i in range(12):
             self.media(f"Goblin Slayer - {i:02d}.mkv", title_guess="Goblin Slayer")
         from app import db
         db.execute("INSERT INTO watched_list(title, title_cn) VALUES ('原文本', '葬送的芙莉莲')")
-        titles = covers.cover_titles()
+        with mock.patch.object(covers, "poster_labels", return_value=[]):
+            titles = covers.cover_titles()
         self.assertEqual(titles[0], "葬送的芙莉莲")
         self.assertIn("Goblin Slayer", titles)
 

@@ -69,7 +69,9 @@ CREATE TABLE IF NOT EXISTS media_files (
     subject_id    INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
     status        TEXT NOT NULL DEFAULT 'new',
     created_at    TEXT NOT NULL DEFAULT (datetime('now','localtime')),
-    updated_at    TEXT
+    updated_at    TEXT,
+    -- 人工把本地文件移入回收站的时间；只做标记，绝不删行（watch_progress / watch_sessions 是 CASCADE 外键）
+    deleted_at    TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_media_filename ON media_files(filename);
 CREATE INDEX IF NOT EXISTS ix_media_subject ON media_files(subject_id);
@@ -159,7 +161,7 @@ def session():
 def _migrate(conn: sqlite3.Connection) -> None:
     """为已存在的旧库补列：只 ALTER ADD COLUMN，不重建表、不丢已有播放记录。"""
     additions = {
-        "media_files": (("title_cn", "TEXT"), ("match_by", "TEXT")),
+        "media_files": (("title_cn", "TEXT"), ("match_by", "TEXT"), ("deleted_at", "TEXT")),
         "watched_list": (("match_by", "TEXT"),),
     }
     for table, columns in additions.items():

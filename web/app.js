@@ -94,6 +94,72 @@ function empty(text, sub) {
   return `<div class="empty"><div class="big">${esc(text)}</div><div>${esc(sub || '')}</div></div>`;
 }
 
+// 危险操作的二次确认：列出全部受影响路径，默认焦点在「取消」，Esc / 点遮罩都算取消。
+// WebView2 的原生 confirm 不可靠且放不下一长串路径，所以用自己的模态框。
+function confirmDialog({ title, message, note = '', items = [], confirmText = '确认删除' }) {
+  return new Promise(resolve => {
+    const layer = document.createElement('div');
+    layer.className = 'modal-layer';
+    layer.innerHTML = `<div class="modal-box" role="dialog" aria-modal="true">
+      <h3>${esc(title)}</h3>
+      <div class="modal-warning">⚠️ 此操作非常危险，可能导致不可逆的数据丢失！</div>
+      <p class="modal-msg">${esc(message)}</p>
+      ${note ? `<p class="modal-note">${esc(note)}</p>` : ''}
+      ${items.length ? `<div class="modal-list">${items.map(t => `<div class="mono">${esc(t)}</div>`).join('')}</div>` : ''}
+      <div class="modal-actions">
+        <button class="btn" data-modal="cancel">取消</button>
+        <button class="btn btn-danger" data-modal="ok">${esc(confirmText)}</button>
+      </div>
+    </div>`;
+    document.body.appendChild(layer);
+    const done = (value) => {
+      layer.remove();
+      document.removeEventListener('keydown', onKey);
+      resolve(value);
+    };
+    const onKey = (e) => { if (e.key === 'Escape') done(false); };
+    layer.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-modal]');
+      if (btn) done(btn.dataset.modal === 'ok');
+      else if (e.target === layer) done(false);
+    });
+    document.addEventListener('keydown', onKey);
+    const cancel = layer.querySelector('[data-modal="cancel"]');
+    if (cancel) cancel.focus();
+  });
+}
+
+function fmtSize(bytes) {
+  const n = Number(bytes || 0);
+  if (n >= 1024 * 1024 * 1024) return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+  if (n >= 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${Math.round(n / 1024)} KB`;
+}
+
+// 删除本地文件的统一流程：先向后端取权威清单 → 二次确认 → 才真正移入回收站。
+async function confirmAndDeleteLocalFiles(ids, groupId) {
+  const preview = await call('get_delete_candidates', ids, groupId);
+  if (!preview.ok) { toast(preview.error || '无法准备删除清单', false); return; }
+  const usable = (preview.files || []).filter(f => f.deletable);
+  const skipped = (preview.files || []).length - usable.length;
+  if (!usable.length) { toast('没有可删除的本地文件（可能已移除或尚未看完）'); return; }
+  const total = usable.reduce((sum, f) => sum + num(f.size), 0);
+  const ok = await confirmDialog({
+    title: groupId ? `删除「${preview.title || '这部作品'}」的本地文件` : '删除本地视频文件',
+    message: `以下 ${usable.length} 个文件（合计 ${fmtSize(total)}）将被移入 Windows 回收站，可从回收站恢复。`
+      + '观看进度、历史记录、看过的列表和媒体库记录会全部保留，不会自动删除。',
+    note: skipped ? `另有 ${skipped} 个文件已移除或不符合条件，将自动跳过。` : '',
+    items: usable.map(f => f.path),
+    confirmText: `移入回收站（${usable.length} 个）`,
+  });
+  if (!ok) return;
+  const r = await call('delete_local_files', usable.map(f => f.id), groupId);
+  if (r.deleted) toast(`已移入回收站 ${r.deleted} 个文件 · 观看记录全部保留`, r.failed === 0);
+  else toast((r.errors && r.errors[0]) || '没有文件被删除', false);
+  if (r.failed) toast(`另有 ${r.failed} 个文件删除失败，记录已保留`, false);
+  await refresh();
+}
+
 // ---------- 软件内播放舞台 ----------
 // PotPlayer 是原生窗口：这里只负责给出一块「舞台」的屏幕矩形，
 // 由 Python 侧用 SetParent 把播放器摆进去；失败会自动降级为独立窗口播放。
@@ -244,28 +310,39 @@ async function renderContinue() {
   setContent(`<div class="card"><h3>继续观看</h3>
     <p class="hint">点击「继续观看」会用 PotPlayer 从上次的位置打开，播放过程按设置页的间隔自动记录。</p>
     <div class="list">${list.length ? list.map(r => progressItem(r)).join('') : empty('暂无进行中的播放', '先扫描目录并播放一集试试')}</div></div>
-    <div class="card"><h3>已看完（可纠错）</h3>
-    <p class="hint">标错或想重看时，点「标记未看」即可恢复；观看历史不会被删除。</p>
+    <div class="card"><h3>已看完（可纠错 / 可清理本地文件）</h3>
+    <p class="hint">标错或想重看时点「标记未看」即可恢复；观看历史不会被删除。已看完的单集可人工把本地文件移入回收站，
+      <b>观看进度、历史记录与看过的列表全部保留</b>。整部剧全部看完后，「剧集墙」和「媒体库 → 剧集展示」里会出现整部清理入口。</p>
     <div class="list">${done.length ? done.map(r => `<div class="item">
       <div class="thumb">✓</div>
       <div class="body"><div class="name">${esc(r.display_title || r.filename)}
-        ${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}</div>
+        ${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}
+        ${r.deleted_at ? '<span class="badge amber">本地文件已移除</span>' : ''}</div>
         <div class="meta">${esc(r.filename || '')} · 最近 ${esc(shortDate(r.last_played_at))}</div></div>
       <div class="right"><div class="btn-row" style="justify-content:flex-end">
         <button class="btn btn-primary btn-sm" data-action="mark-unwatched" data-id="${r.file_id}">标记未看</button>
         <button class="btn btn-sm" data-action="reset-progress" data-id="${r.file_id}">重置进度</button>
+        ${r.deleted_at ? '' : `<button class="btn btn-sm btn-danger" data-action="delete-local-file"
+          data-id="${r.file_id}" title="把这一集的本地文件移入回收站">删除本地文件</button>`}
       </div></div></div>`).join('') : empty('还没有已看完的条目', '进度达到设置页的阈值后会自动出现在这里')}</div></div>`);
 }
 
 async function renderHistory() {
   const list = await call('get_history', 200);
-  setContent(`<div class="card"><h3>历史记录</h3><p class="hint">共 ${list.length} 次观看会话，按时间倒序。</p>
+  setContent(`<div class="card"><h3>历史记录</h3>
+    <p class="hint">共 ${list.length} 次观看会话，按时间倒序。可人工删除单条记录；
+      <b>软件不会自动删除任何观看记录</b>，删除一条会话也不会影响播放进度、本地文件或看过的列表。</p>
     <div class="list">${list.length ? list.map(r => `<div class="item">
       <div class="thumb">⌚</div>
       <div class="body"><div class="name">${esc(r.display_title || r.filename || '未知文件')}
         ${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}</div>
-        <div class="meta">${esc(shortDate(r.started_at))} → ${esc(shortDate(r.ended_at))}</div></div>
-      <div class="right">${fmtMs(r.from_ms)} → ${fmtMs(r.to_ms)}<br><span class="mono">最远 ${fmtMs(r.max_ms)}</span></div>
+        <div class="meta">${esc(shortDate(r.started_at))} → ${esc(shortDate(r.ended_at))}
+          ${r.path ? `<span class="mono" title="${esc(r.path)}"> · ${esc(r.filename || '')}</span>` : ''}</div></div>
+      <div class="right">${fmtMs(r.from_ms)} → ${fmtMs(r.to_ms)}<br><span class="mono">最远 ${fmtMs(r.max_ms)}</span>
+        <div class="btn-row" style="justify-content:flex-end;margin-top:6px">
+          <button class="btn btn-sm btn-danger" data-action="delete-history" data-id="${num(r.id)}"
+            data-name="${esc(r.display_title || r.filename || '未知文件')}">删除</button>
+        </div></div>
     </div>`).join('') : empty('还没有历史记录', '播放任意视频后会自动出现在这里')}</div></div>`);
 }
 
@@ -348,6 +425,7 @@ function fileListRows(rows) {
         ${ep}${r.title_cn ? '<span class="badge green">已匹配中文</span>' : ''}
         <span class="badge ${tone}">${esc(label)}</span>
         ${num(r.completed) === 1 ? '<span class="badge green">已看完</span>' : ''}
+        ${r.deleted_at ? '<span class="badge amber">本地文件已移除</span>' : ''}
       </div>
       <div class="meta">${esc(r.filename)}</div>
       <div class="mono">${esc(r.path)}</div></div>
@@ -355,6 +433,9 @@ function fileListRows(rows) {
         <div class="btn-row" style="justify-content:flex-end;margin-top:6px">
           <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.id}">播放</button>
           <button class="btn btn-sm" data-action="play-start" data-id="${r.id}">从头播放</button>
+          ${num(r.completed) === 1 && !r.deleted_at
+            ? `<button class="btn btn-sm btn-danger" data-action="delete-local-file" data-id="${r.id}"
+                title="把这一集的本地文件移入回收站，观看记录保留">删除文件</button>` : ''}
         </div></div>
     </div>`;
   }).join('');
@@ -382,6 +463,11 @@ function treeNodeHtml(node, depth) {
   const play = node.next_file_id
     ? `<button class="btn btn-sm" data-action="play" data-id="${num(node.next_file_id)}">${num(node.playing_count) ? '继续观看' : '播放下一集'}</button>`
     : '';
+  // 整部剧全部看完后才出现人工清理入口；已移除的文件不算，避免重复点
+  const cleanup = node.kind === 'series' && node.all_done && num(node.removable_count) > 0
+    ? `<button class="btn btn-sm btn-danger" data-action="delete-series-files"
+        data-node="${esc(node.id)}" title="把这部作品的全部本地文件移入回收站，观看记录保留">删除整部本地文件</button>`
+    : '';
   const children = open
     ? `<div class="tree-children">
         ${node.children.map(c => treeNodeHtml(c, depth + 1)).join('')}
@@ -395,7 +481,9 @@ function treeNodeHtml(node, depth) {
       <span class="tree-label">${esc(node.label)}</span>
       <span class="tree-sub">${esc(node.sub || '')}</span>
       ${badges}
-      <span class="tree-actions">${play}</span>
+      ${node.kind === 'series' && node.all_done && num(node.removable_count) === 0
+        ? '<span class="badge amber">本地文件已移除</span>' : ''}
+      <span class="tree-actions">${play}${cleanup}</span>
     </div>${children}</div>`;
 }
 
@@ -795,12 +883,18 @@ function posterCardHtml(card, cover) {
   const playBtn = card.next_file_id
     ? `<button class="btn btn-primary btn-sm" data-action="play" data-id="${card.next_file_id}">播放下一集</button>`
     : '';
+  const cleanup = card.all_done && num(card.removable_count) > 0
+    ? `<button class="btn btn-sm btn-danger" data-action="delete-series-files"
+        data-node="${esc(card.group_id)}" title="整部已看完：把本地文件移入回收站，观看记录保留">清理本地文件</button>`
+    : '';
+  const removedTag = card.all_done && num(card.removable_count) === 0
+    ? '<span class="poster-tag amber">本地文件已移除</span>' : '';
   return `<div class="poster-card">${art}
     <div class="poster-body">
       <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
       <div class="poster-meta">${num(card.file_count)} 集${card.watched_count ? ` · 已看 ${num(card.watched_count)}` : ''}</div>
-      <div class="poster-tags">${seasons}${progress}</div>
-      <div class="poster-actions">${playBtn}
+      <div class="poster-tags">${seasons}${progress}${removedTag}</div>
+      <div class="poster-actions">${playBtn}${cleanup}
         <button class="btn btn-sm" data-action="goto" data-view="library">查看分集</button></div>
     </div></div>`;
 }
@@ -1087,6 +1181,31 @@ async function handleAction(action, btn) {
       if (watchedEditing === rid) watchedEditing = 0;
       renderWatchedRows();
       toast('已删除');
+      return;
+    }
+    case 'delete-history': {
+      const sid = Number(id);
+      const name = btn.dataset.name || '这条观看会话';
+      const ok = await confirmDialog({
+        title: '删除这一条观看记录',
+        message: `将删除「${name}」的这一条观看会话。本地文件、播放进度、断点与看过的列表都会保留。`,
+        note: '只删这一条会话记录，删除后不可恢复；软件不会自动删除任何观看记录。',
+        items: [],
+        confirmText: '删除这条记录',
+      });
+      if (!ok) return;
+      const r = await call('delete_history_session', sid);
+      if (!r.ok) { toast(r.error || '删除失败', false); return; }
+      toast('已删除该条观看记录 · 文件与进度均保留');
+      await refresh();
+      return;
+    }
+    case 'delete-local-file': {
+      await confirmAndDeleteLocalFiles([Number(id)], '');
+      return;
+    }
+    case 'delete-series-files': {
+      await confirmAndDeleteLocalFiles([], btn.dataset.node || '');
       return;
     }
     case 'mark-watched': {

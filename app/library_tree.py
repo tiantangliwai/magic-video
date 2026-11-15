@@ -301,6 +301,16 @@ def _finalize(node: dict) -> None:
     node["playing_count"] = sum(1 for f in files if _playing(f))
     node["next_file_id"] = _next_file_id(files)
     node["files"] = sorted(node["files"], key=_file_order) if node["files"] else []
+    # 「整部剧全部看完」判定只用于界面上是否出现人工删除入口；
+    # file_ids 供后端二次校验，避免前端伪造 id 删到别的作品。
+    is_series = node["kind"] == "series"
+    node["all_done"] = is_series and bool(files) and node["watched_count"] == len(files)
+    node["removable_count"] = (
+        sum(1 for f in files if _completed(f) and not f.get("deleted_at")) if is_series else 0
+    )
+    node["file_ids"] = (
+        [int(f["id"]) for f in files if f.get("id") is not None] if node["all_done"] else []
+    )
     hint = node["_hint"]
     if node["kind"] == "series":
         node["sub"] = (hint + " · " if hint else "") + f"{len(node['children'])} 季 · {len(files)} 集"

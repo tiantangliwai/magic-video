@@ -159,9 +159,18 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 skipped += 1
                 continue
             info = parse_filename(path.name)
-            existing = db.row("SELECT id, size, mtime FROM media_files WHERE path = ?", (str(path),))
+            existing = db.row(
+                "SELECT id, size, mtime, deleted_at FROM media_files WHERE path = ?", (str(path),)
+            )
             if existing:
-                if existing["size"] != stat.st_size or abs((existing["mtime"] or 0) - stat.st_mtime) > 1:
+                changed = (existing["size"] != stat.st_size
+                           or abs((existing["mtime"] or 0) - stat.st_mtime) > 1)
+                # 文件从回收站恢复 / 重新下载后，清掉「本地文件已移除」标记；
+                # 观看进度、历史与看过的列表始终不动。
+                if existing["deleted_at"]:
+                    db.execute("UPDATE media_files SET deleted_at = NULL WHERE id = ?",
+                               (existing["id"],))
+                if changed:
                     db.execute(
                         "UPDATE media_files SET size = ?, mtime = ?, updated_at = ? WHERE id = ?",
                         (stat.st_size, stat.st_mtime, db.now(), existing["id"]),

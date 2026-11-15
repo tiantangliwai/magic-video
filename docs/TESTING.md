@@ -5,6 +5,22 @@
 
 ---
 
+## 0. 测试节奏（2026-11-15 用户约定）
+
+| 时机 | 命令 | 说明 |
+|---|---|---|
+| 日常改代码 / 补用例 / 改文档 | `python run_changed_tests.py` | 按 `git diff` 变更映射受影响模块，`--list` 只预览、`--module` 追加、`--only` 只跑显式模块、`--base HEAD~1` 回看已提交改动 |
+| 只改前端语法 / 文案 | `node --check web/app.js` | 不必跑全量 Python 用例 |
+| **`git push` 前** | `python run_tests.py` | 全量必须全绿 |
+| **打 tag / 发版前** | `compileall` + `node --check` + `run_tests.py` | 另加打包链验收 |
+| `tests/base.py` / schema 改动 | `python run_changed_tests.py --all` | 基类影响全部用例，脚本会拒绝只跑增量 |
+
+- 影响面表 = `run_changed_tests.py` 的 `IMPACT`（跨模块依赖）与 `FRONTEND_MODULES`（前端静态契约），契约由 `tests/test_changed_tests.py` 守护。
+- 增量运行不写 `data/test_last.json`；该文件只由全量 `run_tests.py` 更新，供 Obsidian 自测报告笔记读取。
+- 全量是推送前的最终兜底，增量全绿不替代全量。
+
+---
+
 ## 1. 结论
 
 | 项目 | 结果 |

@@ -10,10 +10,13 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, config, covers, db, embedded_player, everything, importer,
-    library_tree, metadata, obsidian, potplayer, runtime, scanner, theme_native,
+    __version__, autostart, config, covers, db, embedded_player, everything, file_ops,
+    importer, library_tree, metadata, obsidian, potplayer, runtime, scanner, theme_native,
 )
 
+
+# 单次人工删除的文件数上限：一部剧通常十几到几十集，给足余量又防误传整库
+_MAX_DELETE_FILES = 300
 
 # 文件浏览的排序白名单：用户输入只能选键，绝不直接拼进 SQL
 _MEDIA_SORTS = {
@@ -101,7 +104,7 @@ class Api:
 
     def get_continue_watching(self, limit: int = 50) -> list[dict]:
         return db.rows(
-            "SELECT p.*, f.filename, f.path, f.title_guess, "
+            "SELECT p.*, f.filename, f.path, f.title_guess, f.deleted_at, "
             "COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "f.season_no, f.episode_no "
             "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
@@ -113,7 +116,7 @@ class Api:
     def get_completed(self, limit: int = 50) -> list[dict]:
         """已看完的条目，供「继续观看」页做纠错（标记未看 / 重看）。"""
         return db.rows(
-            "SELECT p.*, f.filename, f.path, f.title_guess, "
+            "SELECT p.*, f.filename, f.path, f.title_guess, f.deleted_at, "
             "COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "f.season_no, f.episode_no "
             "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
@@ -166,6 +169,22 @@ class Api:
             "ORDER BY s.started_at DESC LIMIT ?",
             (int(limit),),
         )
+
+    def delete_history_session(self, session_id) -> dict:
+        """人工删除单条观看会话；只删这一行，绝不触碰文件、进度或看过的列表。
+
+        历史记录没有「自动清理」：本方法是 watch_sessions 唯一的删除入口，
+        只能由用户在历史页点「删除」并二次确认后调用。
+        """
+        try:
+            sid = int(session_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "记录编号无效", "deleted": 0}
+        row = db.row("SELECT id FROM watch_sessions WHERE id = ?", (sid,))
+        if not row:
+            return {"ok": False, "error": "记录不存在或已删除", "deleted": 0}
+        db.execute("DELETE FROM watch_sessions WHERE id = ?", (sid,))
+        return {"ok": True, "deleted": 1, "kept_progress": True, "kept_files": True}
 
     def get_watched_list(self, limit: int = 500, keyword: str = "") -> list[dict]:
         """看过的列表：按作品名 / 中文名 / 导入原文 / 备注搜索；limit <= 0 表示全部。
@@ -362,7 +381,7 @@ class Api:
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.size, f.title_raw, "
             "f.title_guess, f.title_cn, f.match_by, f.season_no, f.episode_no, f.year, "
-            "f.status, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            "f.status, f.deleted_at, COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
@@ -375,6 +394,171 @@ class Api:
             "total_all": int(db.scalar("SELECT COUNT(*) FROM media_files") or 0),
             "matched": self._matched_count(),
             "directories": directories,
+        }
+
+    # ---- 人工清理：历史记录 / 已看完剧集的本地文件 -------------------------
+    @staticmethod
+    def _normalize_ids(file_ids) -> list[int]:
+        if file_ids is None:
+            return []
+        if isinstance(file_ids, (int, float, str)):
+            file_ids = [file_ids]
+        out: list[int] = []
+        try:
+            iterator = iter(file_ids)
+        except TypeError:
+            return out
+        for value in iterator:
+            try:
+                fid = int(value)
+            except (TypeError, ValueError):
+                continue
+            if fid > 0 and fid not in out:
+                out.append(fid)
+        return out
+
+    @staticmethod
+    def _full_series_tree() -> dict:
+        """不带筛选地重建「作品 → 季 → 集」分组，用于后端独立校验整部剧是否看完。"""
+        rows = db.rows(
+            "SELECT f.id, f.dir_id, f.path, f.filename, f.size, f.title_raw, "
+            "f.title_guess, f.title_cn, f.match_by, f.season_no, f.episode_no, f.year, "
+            "f.status, f.deleted_at, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            "p.position_ms, p.percent, p.completed, p.last_played_at "
+            "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+            "ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC"
+        )
+        return library_tree.build_tree(rows, "series", Api._directory_options())
+
+    @classmethod
+    def _find_series_group(cls, group_id: str) -> dict | None:
+        for group in cls._full_series_tree().get("groups", []):
+            if group.get("id") == group_id:
+                return group
+        return None
+
+    @staticmethod
+    def _delete_candidate(fid: int) -> dict:
+        """列出一个待删文件并给出能否删除的理由；只读，不改任何东西。"""
+        row = db.row(
+            "SELECT f.id, f.filename, f.path, f.size, f.status, f.deleted_at, "
+            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            "COALESCE(p.completed, 0) AS completed "
+            "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+            "WHERE f.id = ?",
+            (fid,),
+        )
+        if not row:
+            return {"id": fid, "filename": "", "path": "", "size": 0,
+                    "display_title": "", "deletable": False, "reason": "记录不存在"}
+        path = str(row["path"] or "")
+        safe, why = file_ops.is_safe_video_path(path)
+        exists = False
+        if safe:
+            try:
+                exists = Path(path).is_file()
+            except OSError:
+                exists = False
+        if row["deleted_at"]:
+            reason = "本地文件已移入回收站"
+        elif str(row["status"] or "") == "external":
+            reason = "外部打开记录没有本地文件路径"
+        elif int(row["completed"] or 0) != 1:
+            reason = "这一集还没看完"
+        elif not safe:
+            reason = why
+        elif not exists:
+            reason = "文件不存在或已被移动"
+        else:
+            reason = ""
+        return {
+            "id": int(row["id"]), "filename": row["filename"], "path": path,
+            "size": int(row["size"] or 0), "display_title": row["display_title"],
+            "deletable": not reason, "reason": reason,
+        }
+
+    def get_delete_candidates(self, file_ids=None, group_id: str = "") -> dict:
+        """删除前的清单预览：给界面确认框列出完整路径，并标出哪些能删。
+
+        group_id 非空时按整部作品取文件，并强制要求「全部集都已看完」。
+        """
+        gid = str(group_id or "").strip()
+        title = ""
+        if gid:
+            group = self._find_series_group(gid)
+            if not group:
+                return {"ok": False, "error": "找不到该作品分组，请刷新后重试", "files": []}
+            if not group.get("all_done"):
+                return {"ok": False, "error": "这部作品还有未看完的集数，不能删除本地文件", "files": []}
+            ids = list(group.get("file_ids") or [])
+            title = str(group.get("label") or "")
+        else:
+            ids = self._normalize_ids(file_ids)
+        if not ids:
+            return {"ok": False, "error": "没有可删除的本地文件", "files": []}
+        if len(ids) > _MAX_DELETE_FILES:
+            return {"ok": False, "error": f"一次最多处理 {_MAX_DELETE_FILES} 个文件，请分批操作",
+                    "files": []}
+        files = [self._delete_candidate(fid) for fid in ids]
+        return {
+            "ok": True, "group_id": gid, "title": title, "files": files,
+            "deletable_count": sum(1 for f in files if f["deletable"]),
+            "keeps_records": True,
+        }
+
+    def delete_local_files(self, file_ids=None, group_id: str = "") -> dict:
+        """人工把已看完的本地视频文件移入回收站；**数据库零 DELETE**。
+
+        只有界面二次确认后才会调用。成功的文件只 ``UPDATE deleted_at``，
+        因此 watch_progress / watch_sessions / watched_list / media_files 全部保留，
+        观看记录不会因为文件被删而自动消失。
+        """
+        ids = self._normalize_ids(file_ids)
+        if not ids:
+            return {"ok": False, "error": "没有选中文件", "deleted": 0,
+                    "skipped": 0, "failed": 0, "errors": [], "kept_records": True}
+        if len(ids) > _MAX_DELETE_FILES:
+            return {"ok": False, "error": f"一次最多处理 {_MAX_DELETE_FILES} 个文件，请分批操作",
+                    "deleted": 0, "skipped": 0, "failed": 0, "errors": [], "kept_records": True}
+        gid = str(group_id or "").strip()
+        if gid:
+            group = self._find_series_group(gid)
+            if not group:
+                return {"ok": False, "error": "找不到该作品分组，请刷新后重试", "deleted": 0,
+                        "skipped": 0, "failed": 0, "errors": [], "kept_records": True}
+            if not group.get("all_done"):
+                return {"ok": False, "error": "这部作品还有未看完的集数，已全部拒绝", "deleted": 0,
+                        "skipped": 0, "failed": 0, "errors": [], "kept_records": True}
+            allowed = set(group.get("file_ids") or [])
+            if not set(ids).issubset(allowed):
+                return {"ok": False, "error": "包含不属于该作品的文件，已全部拒绝", "deleted": 0,
+                        "skipped": 0, "failed": 0, "errors": [], "kept_records": True}
+
+        deleted = skipped = failed = 0
+        errors: list[str] = []
+        removed: list[int] = []
+        for fid in ids:
+            cand = self._delete_candidate(fid)
+            if not cand["deletable"]:
+                skipped += 1
+                continue
+            result = file_ops.trash_file(cand["path"])
+            if not result.get("ok"):
+                failed += 1
+                if len(errors) < 8:
+                    errors.append(f"{cand['filename']}：{result.get('error') or '删除失败'}")
+                continue
+            # 只打标记，绝不 DELETE：外键是 ON DELETE CASCADE，删行会连带清掉观看记录
+            db.execute(
+                "UPDATE media_files SET deleted_at = ?, updated_at = ? WHERE id = ?",
+                (db.now(), db.now(), fid),
+            )
+            deleted += 1
+            removed.append(fid)
+        return {
+            "ok": deleted > 0 and failed == 0, "deleted": deleted,
+            "skipped": skipped, "failed": failed, "errors": errors,
+            "file_ids": removed, "kept_records": True,
         }
 
     @staticmethod
@@ -406,7 +590,7 @@ class Api:
         where, params = self._media_filters(opt)
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.title_raw, f.title_guess, "
-            "f.title_cn, f.match_by, f.season_no, f.episode_no, "
+            "f.title_cn, f.match_by, f.season_no, f.episode_no, f.deleted_at, "
             "COALESCE(f.title_cn, f.title_guess) AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
@@ -427,6 +611,9 @@ class Api:
                 "season_count": len(seasons),
                 "seasons": seasons[:12],
                 "sub": group.get("sub", ""),
+                "group_id": group.get("id", ""),
+                "all_done": bool(group.get("all_done")),
+                "removable_count": int(group.get("removable_count") or 0),
                 "_cover_titles": self._group_cover_titles(group),
             })
         keyword = str(opt.get("keyword") or "").strip().lower()
@@ -589,6 +776,8 @@ class Api:
             raise ValueError("找不到该文件记录")
         path = record["path"]
         if not Path(path).exists():
+            if record["deleted_at"]:
+                raise ValueError("本地文件已移入回收站；观看记录已保留，恢复文件后再播放")
             raise ValueError("文件不在扫描库中或已被移动，请先扫描所在目录")
         position = 0
         if not from_start:
