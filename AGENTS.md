@@ -62,6 +62,28 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 ## 3. 版本管理
 
+### 3.0 发版节奏（用户 2026-11-15 明确要求，优先级最高）
+
+> **不要每来一个需求就打包、打 tag。** 用户原话：「不要我每一个需求都打包，打tag」。
+
+**日常需求 = 一次轻量迭代（默认路径）**：
+
+1. 改代码 + 补对应单测，跑 `python run_tests.py` 全绿（改了 Python / JS 再补 `compileall` / `node --check`）。
+2. 只更新**本次真正受影响**的功能/使用说明；版本号、CHANGELOG、TESTING 报告留给发版时统一处理。
+3. 按 3.3 规范提交，可 `git push origin master`。
+4. 追加当天工作日志。
+
+**默认禁止（除非用户明确要求）**：
+
+- ❌ 升 `__version__`、改 `web/index.html` 的 `app.js?v=` 缓存串、逐个同步各文档版本号。
+- ❌ 跑 `build_dist.py` 重出 ZIP / MSI、做 `exe --selftest` 与产物验收。
+- ❌ `git tag` / 推 tag / 为每个需求写一段 CHANGELOG。
+- ❌ 自动同步 Obsidian 笔记（默认 `obsidian_auto_sync=0`，需要时手动同步一次即可）。
+
+**触发完整发版的唯一条件**：用户明确说「发版 / 打包 / 出安装包 / 打个 tag / 发布一个版本 / 升版本」等。此时才一次性走 3.2 清单：升版本 → 补齐累积的 CHANGELOG → 重出 ZIP + MSI → 验收产物 → 打 tag 并推送。
+
+**版本号只在发版时变**：两次发版之间的多个需求共用同一个 `__version__`（当前 `0.1.4`），`tests/test_docs.py` 的版本一致性守护不会因日常提交而失败。不要为「记录进度」提前改版本或提前打 tag；已有 `v0.1.0`~`v0.1.4` 保持不动，不回溯、不删除。
+
 ### 3.1 规则
 
 - 语义化版本 `MAJOR.MINOR.PATCH`；**唯一真源**是 `app/__init__.py` 的 `__version__`，禁止在其他代码里硬编码版本号（User-Agent 等一律引用该常量）。
@@ -136,9 +158,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 涉及数据库 → 继承 `IsolatedDbTestCase`；**严禁**在测试中连接真实 `data/library.db`。
 - 涉及网络 → 基类的 `search_online` mock 已禁用真实请求；要测在线分支就本地 patch 假数据。
 - 涉及 PotPlayer → mock `read_status` / `resolve_media` / `subprocess.Popen`，不真的启动播放器。
-- 发版前：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过。
+- **仅显式发版时**：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过；日常提交只需 `run_tests.py` 全绿（见 3.0）。
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
-- 改打包链 / 发带产物的版本：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
+- **仅用户要求发版或改打包链时**：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
 - 窗口冒烟：`webview.create_window(..., hidden=True)` + 线程内 `evaluate_js` 检查 8 页渲染，完成后 `destroy()`。
 
 ---
@@ -147,9 +169,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 1. 读 `AGENTS.md` 与 `docs/FEATURES.md`，确认不违反第 1 节需求基线。
 2. 先写/补测试（允许先红），再改实现，跑到全绿。
-3. 同步更新受影响的文档（README / FEATURES / TESTING / CHANGELOG）。
-4. 语法检查 + 完整测试 + 窗口冒烟。
-5. 按 3.3 规范提交；若是发版，走 3.2 清单并打 tag。
+3. 只同步**本次受影响**的功能/使用说明；版本号、CHANGELOG、TESTING 报告留到发版时统一处理（见 3.0）。
+4. 语法检查 + 完整测试；仅当界面有可见改动才做窗口冒烟。
+5. 按 3.3 规范提交；**仅用户明确要求发版**时才走 3.2 清单、构建产物并打 tag。
 6. 把有长期价值的结论追加到 `.workbuddy/memory/YYYY-MM-DD.md`。
 
 ---
@@ -164,6 +186,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - ❌ 让在线刮削阻塞导入、扫描或播放记录；必须短超时 + 整批降级。
 - ❌ 用一个长事务同时包住网络请求和数据库写。
 - ❌ 提交 `data/*.db`、日志、临时测试产物。
+- ❌ 未经用户明确要求就升版本 / 重出 ZIP、MSI / 打 tag / 自动同步 Obsidian（见 3.0）。
 
 ---
 

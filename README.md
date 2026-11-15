@@ -212,7 +212,7 @@ python run_tests.py
 | 项目工作日志与长期笔记 | `.workbuddy/memory/` | ❌ 已忽略 |
 | Obsidian 同步笔记 | vault 内 `Magic Video/`（仓库之外） | ❌ 不入库、不受 git 管理 |
 
-发版规则、提交规范与「每次交付必须同步更新哪些文件」写在 `AGENTS.md`；变更历史见 `CHANGELOG.md`。
+发版节奏（**日常需求不打包、不打 tag**，只有明确要求发版才统一出版本与产物）、提交规范与交付文件清单写在 `AGENTS.md` 第 3 节；变更历史见 `CHANGELOG.md`。
 
 ### 版本输出一览
 

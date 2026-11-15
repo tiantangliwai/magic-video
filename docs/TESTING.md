@@ -172,7 +172,9 @@ python run_tests.py            :: 或 python cli.py test
 
 ---
 
-## 6. 发版门禁（每次提交前）
+## 6. 发版门禁（仅用户明确要求发版时执行）
+
+> 日常需求提交只需 `python run_tests.py` 全绿（改了 Python / JS 再补 `compileall` / `node --check`）。以下清单是发版专属，见 `AGENTS.md` 3.0 —— 不要每个需求都打包、打 tag。
 
 - [ ] `compileall` 通过
 - [ ] `node --check web/app.js` 通过
