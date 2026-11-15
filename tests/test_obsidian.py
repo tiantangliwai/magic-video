@@ -11,7 +11,7 @@ from tests.base import IsolatedDbTestCase
 
 FAKE_GIT = {
     "commit": "abc1234", "subject": "test: 示例提交", "committed_at": "2026-11-15 01:00:00",
-    "branch": "master", "tag": "v0.4.0", "recent": ["abc1234 test: 示例提交"], "dirty": False,
+    "branch": "master", "tag": "v0.1.3", "recent": ["abc1234 test: 示例提交"], "dirty": False,
 }
 
 
@@ -33,7 +33,7 @@ class ObsidianTestCase(IsolatedDbTestCase):
             p.start()
         # 造一份测试结果快照，模拟 run_tests.py 已跑过
         (self.tmp / "test_last.json").write_text(json.dumps({
-            "timestamp": "2026-11-15 01:00:00", "version": "0.4.0", "python": "3.13.14",
+            "timestamp": "2026-11-15 01:00:00", "version": "0.1.3", "python": "3.13.14",
             "total": 128, "passed": 128, "failures": 0, "errors": 0, "skipped": 0,
             "success": True, "duration_sec": 1.9,
             "modules": {"tests.test_db": 12, "tests.test_obsidian": 16},

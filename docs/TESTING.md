@@ -1,4 +1,4 @@
-# 自测与单元测试报告 · v0.4.0
+# 自测与单元测试报告 · v0.1.3
 
 > 执行时间：2026-11-15；环境：Windows 10 专业版 / Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157。
 > 本报告只记录**实际跑过的命令与真实输出**，未实测的能力不会写成「通过」。
@@ -34,7 +34,7 @@
 | `tests/test_smoke.py` | 2 | 端到端串联（导入 → 扫描 → 播放记录 → 续播 → 纠错 → 历史）、测试库隔离验证 |
 | `tests/test_docs.py` | 10 | 版本语义化、交付文档齐备（含 `docs/OBSIDIAN.md`）、版本一致、gitignore、依赖格式、前端、无定时任务残留、Obsidian 接线与文档版本 |
 | `tests/test_obsidian.py` | 26 | vault 探测与多选不猜、路径穿越防护、首次生成 6 篇笔记、同名用户笔记不覆盖、AUTO 区块外批注保留、frontmatter 用户字段保留、日志事件去重、历史快照去重、命名空间外零改动、路线图解析、结果渲染、状态查询、API 桥接与设置白名单 |
-| **合计** | **144** | v0.4.0 新增 28 项（26 项 Obsidian + 2 项文档守护） |
+| **合计** | **144** | v0.1.3 新增 28 项（26 项 Obsidian + 2 项文档守护） |
 
 ### 隔离机制
 
@@ -49,13 +49,13 @@
 
 ---
 
-## 3. TDD 过程与发现的缺陷（v0.3.0 历史记录）
+## 3. TDD 过程与发现的缺陷（v0.1.2 历史记录）
 
 按「先写测试看红 → 修实现到绿」执行，共三轮：
 
 | 轮次 | 结果 |
 |---|---|
-| 第 1 轮（v0.3.0） | 116 用例，15 失败 + 10 错误（25 项红） |
+| 第 1 轮（v0.1.2） | 116 用例，15 失败 + 10 错误（25 项红） |
 | 第 2 轮 | 1 失败 + 3 错误（其中 3 项为文档尚未产出） |
 | 第 3 轮 | 1 失败（仅缺 `docs/TESTING.md`） |
 | 最终 | **全绿** |
@@ -119,13 +119,13 @@ python cli.py test      → 调用 run_tests.py，结果与直接运行一致
 ### 4.2 旧数据保留
 
 ```
-version: 0.3.0
+version: 0.1.2
 media:   1 条，status=external，title_cn=更衣人偶坠入爱河，match_by=native
 sessions: 1 条    progress: 1 条（761929ms / 53.65% / completed=0）
 watched: 0 条     aliases: 267 条
 ```
 
-v0.1.0 的真实观看会话与断点进度在 v0.2.0 迁移和 v0.3.0 重构后**完整保留**。
+v0.1.0 的真实观看会话与断点进度在 v0.1.1 迁移和 v0.1.2 重构后**完整保留**。
 
 ### 4.3 原生窗口与前后端桥接
 
@@ -194,7 +194,7 @@ python run_tests.py            :: 或 python cli.py test
 
 ---
 
-## 8. v0.4.0 增量自测（Obsidian 集成）
+## 8. v0.1.3 增量自测（Obsidian 集成）
 
 ### 8.1 TDD 增量
 
@@ -221,7 +221,7 @@ python cli.py obsidian sync                                             :: 首�
 ```json
 {"ok": true, "created": 6, "updated": 0, "skipped": {}, "log": "created",
  "roadmap_items": 17, "test": {"total": 144, "passed": 144, "failures": 0, "errors": 0},
- "commit": "2d87892", "version": "0.4.0"}
+ "commit": "2d87892", "version": "0.1.3"}
 ```
 
 生成文件 7 个（约 40 KB）：6 篇笔记 + `06 开发日志/2026-11-15.md`，含 frontmatter、`managed-by` 标记、
@@ -245,7 +245,7 @@ AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0�
 `webview.create_window(..., hidden=True)` + 线程内 `evaluate_js`：
 
 - 8 个页面全部渲染成功，`len(innerHTML)` 385–4104，无「页面加载失败」；
-- `js_api` 暴露 **35 个方法**（v0.3.0 为 31），新增 4 个 Obsidian 桥接方法就绪；
+- `js_api` 暴露 **35 个方法**（v0.1.2 为 31），新增 4 个 Obsidian 桥接方法就绪；
 - 设置页：`Obsidian 知识沉淀` 卡片 ✅、`obsidian-sync` 按钮 ✅、`obsidian_auto_sync` 开关 ✅；
 - `typeof window.pywebview.api.obsidian_sync` → `function`。
 

@@ -1,4 +1,4 @@
-# 功能规格说明书 · Magic Video v0.4.0
+# 功能规格说明书 · Magic Video v0.1.3
 
 > 本文件定义「做完了」的判定标准。每条需求都给出可验证的验收条件，供开发、测试与后续 Agent 对照。
 > 需求基线见 `AGENTS.md` 第 1 节；变更历史见 `CHANGELOG.md`。
@@ -209,7 +209,7 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 
 ---
 
-## 8. Obsidian 知识沉淀（v0.4.0）
+## 8. Obsidian 知识沉淀（v0.1.3）
 
 ### 需求与验收标准
 
