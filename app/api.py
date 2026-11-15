@@ -10,8 +10,8 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, config, db, importer, library_tree, metadata, obsidian, potplayer,
-    runtime, scanner,
+    __version__, autostart, config, covers, db, embedded_player, everything, importer,
+    library_tree, metadata, obsidian, potplayer, runtime, scanner,
 )
 
 
@@ -27,13 +27,16 @@ _MEDIA_SORTS = {
 
 class Api:
     def __init__(self):
-        self.window = None
+        # 必须是私有属性：pywebview 会 dir() 深度反射 js_api，公开持有 Window
+        # 会把 .NET WinForms 控件树整个遍历一遍（CoreWebView2 getter 即在此抛
+        # E_NOINTERFACE 并刷屏报错），同时严重拖慢启动。下划线开头会被跳过。
+        self._window = None
         self._last_scan: dict | None = None
         db.init_db()
         metadata.ensure_builtin_loaded()
 
     def attach_window(self, window) -> None:
-        self.window = window
+        self._window = window
 
     def get_app_info(self) -> dict:
         return {
@@ -42,7 +45,21 @@ class Api:
             "db_path": str(config.DB_PATH),
             "potplayer": potplayer.potplayer_exe(),
             "python": sys.version.split()[0],
+            "theme": self._theme(),
         }
+
+    @staticmethod
+    def _theme() -> str:
+        value = str(db.get_setting("theme", config.DEFAULTS["theme"])).strip().lower()
+        return value if value in ("light", "dark") else "light"
+
+    def set_theme(self, theme: str) -> dict:
+        """切换黑/白展示风格；只接受两个值，避免非法输入。"""
+        wanted = str(theme or "").strip().lower()
+        if wanted not in ("light", "dark"):
+            return {"ok": False, "error": "主题只支持 light / dark"}
+        db.set_setting("theme", wanted)
+        return {"ok": True, "theme": wanted}
 
     def get_stats(self) -> dict:
         return db.row(
@@ -335,6 +352,48 @@ class Api:
             "directories": directories,
         }
 
+    def get_poster_wall(self, options: dict | None = None) -> dict:
+        """剧集墙：作品卡片（封面 + 季/集统计 + 续播集）。复用树分组，不另写一套搜索。"""
+        opt = options or {}
+        where, params = self._media_filters(opt)
+        rows = db.rows(
+            "SELECT f.id, f.dir_id, f.path, f.filename, f.title_raw, f.title_guess, "
+            "f.title_cn, f.match_by, f.season_no, f.episode_no, "
+            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            "p.position_ms, p.percent, p.completed, p.last_played_at "
+            "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+            "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
+            tuple(params),
+        )
+        tree = library_tree.build_tree(rows, "series", self._directory_options())
+        cards = []
+        for group in tree.get("groups", []):
+            seasons = [c.get("label") for c in group.get("children", [])]
+            cards.append({
+                "title": group.get("label", ""),
+                "file_count": group.get("file_count", 0),
+                "watched_count": group.get("watched_count", 0),
+                "playing_count": group.get("playing_count", 0),
+                "next_file_id": group.get("next_file_id"),
+                "season_count": len(seasons),
+                "seasons": seasons[:12],
+                "sub": group.get("sub", ""),
+            })
+        keyword = str(opt.get("keyword") or "").strip().lower()
+        if keyword:
+            cards = [c for c in cards if keyword in c["title"].lower()]
+        try:
+            max_cards = max(1, min(int(opt.get("limit") or 300), 2000))
+        except (TypeError, ValueError):
+            max_cards = 300
+        total = len(cards)
+        cards = cards[:max_cards]
+        return {
+            "ok": True, "cards": cards, "total": total, "shown": len(cards),
+            "covers": covers.cover_map([c["title"] for c in cards]),
+            "cover_status": covers.status(),
+        }
+
     def preview_import(self, text: str) -> dict:
         """解析预览时就完成中文名自动匹配，结果直接展示，不留待办队列。"""
         return importer.preview(text or "")
@@ -357,6 +416,7 @@ class Api:
             "potplayer_path", "poll_interval_sec", "complete_percent", "recording_enabled",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
             "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
+            "everything_es_path", "everything_http_url", "embed_player",
         }
         for key, value in (data or {}).items():
             if key not in allowed:
@@ -378,6 +438,47 @@ class Api:
             obsidian.set_options(vault=str(data["obsidian_vault"]).strip())
         return self.get_settings()
 
+    # ---------- Everything 快速检索 ----------
+    def everything_capabilities(self) -> dict:
+        return everything.capabilities()
+
+    def everything_search(self, keyword: str, limit: int = 200) -> dict:
+        return everything.search(keyword, limit)
+
+    # ---------- 动漫封面 ----------
+    def cover_status(self) -> dict:
+        return covers.status()
+
+    def start_cover_fetch(self, limit: int = 0, force: bool = False) -> dict:
+        """用户手动触发的一次性后台任务；不是定时任务，也不自动随启动运行。"""
+        return covers.start_job(limit=limit, force=force)
+
+    def cancel_cover_fetch(self) -> dict:
+        return covers.cancel_job()
+
+    def cover_data_uris(self, titles: list[str]) -> dict:
+        """把已缓存的封面转成 data URI（WebView2 无法直接 file:// 读程序数据目录）。
+
+        逐张限制大小，单张异常跳过；返回 {title: data:image/...;base64,...}。
+        """
+        import base64
+        import mimetypes
+        out: dict[str, str] = {}
+        for title in (titles or [])[:400]:
+            name = covers.local_cover(str(title))
+            if not name:
+                continue
+            path = config.COVER_DIR / name
+            try:
+                if not path.is_file() or path.stat().st_size > 3 * 1024 * 1024:
+                    continue
+                mime = mimetypes.guess_type(name)[0] or "image/jpeg"
+                encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                out[str(title)] = f"data:{mime};base64,{encoded}"
+            except Exception:
+                continue
+        return out
+
     def get_directories(self) -> list[dict]:
         return scanner.list_directories()
 
@@ -396,9 +497,9 @@ class Api:
     def choose_directory(self) -> dict:
         try:
             import webview
-            if not self.window:
+            if not self._window:
                 return {"ok": False, "error": "窗口尚未就绪，请直接粘贴路径"}
-            result = self.window.create_file_dialog(webview.FOLDER_DIALOG)
+            result = self._window.create_file_dialog(webview.FOLDER_DIALOG)
             if result and len(result):
                 return {"ok": True, "path": result[0]}
             return {"ok": False, "error": "已取消"}
@@ -418,22 +519,80 @@ class Api:
     def get_last_scan(self) -> dict | None:
         return self._last_scan
 
-    def play_file(self, file_id: int, from_start: bool = False) -> dict:
+    @staticmethod
+    def _play_target(file_id: int, from_start: bool) -> tuple[str, int, str]:
+        """解析播放目标：(路径, 断点毫秒, 展示标题)；不合法直接抛 ValueError。"""
         record = db.row("SELECT * FROM media_files WHERE id = ?", (int(file_id),))
         if not record:
-            return {"ok": False, "error": "找不到该文件记录"}
+            raise ValueError("找不到该文件记录")
         path = record["path"]
         if not Path(path).exists():
-            return {"ok": False, "error": "文件不在扫描库中或已被移动，请先扫描所在目录"}
+            raise ValueError("文件不在扫描库中或已被移动，请先扫描所在目录")
         position = 0
         if not from_start:
             progress = db.row("SELECT position_ms, completed FROM watch_progress WHERE file_id = ?", (record["id"],))
             if progress and not progress["completed"]:
                 position = progress["position_ms"] or 0
+        title = record["title_cn"] or record["title_guess"] or record["filename"]
+        return path, position, title
+
+    def play_file(self, file_id: int, from_start: bool = False) -> dict:
+        try:
+            path, position, _title = self._play_target(file_id, from_start)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
         result = potplayer.play(path, position)
         if result.get("ok"):
             result["position_ms"] = position
         return result
+
+    def play_external(self, path: str) -> dict:
+        """播放一个不在扫描库里的本地文件（Everything 全盘检索结果用）。"""
+        p = Path(str(path or "").strip())
+        if not p.is_file():
+            return {"ok": False, "error": "文件不存在或已被移动"}
+        if p.suffix.lower() not in config.VIDEO_EXTS:
+            return {"ok": False, "error": "不是受支持的视频文件"}
+        return potplayer.play(str(p), 0)
+
+    # ---------- 软件内嵌播放（失败自动降级为外部播放） ----------
+    def embed_status(self) -> dict:
+        state = embedded_player.status()
+        state["enabled"] = bool(db.get_int("embed_player", config.DEFAULTS["embed_player"]))
+        return state
+
+    def set_embed_player(self, enabled: bool) -> dict:
+        wanted = 1 if enabled in (True, 1, "1", "true", "on") else 0
+        db.set_setting("embed_player", wanted)
+        return {"ok": True, "enabled": bool(wanted)}
+
+    def play_embedded(self, file_id: int, from_start: bool = False, rect: dict | None = None) -> dict:
+        try:
+            path, position, title = self._play_target(file_id, from_start)
+        except ValueError as exc:
+            return {"ok": False, "error": str(exc)}
+        result = embedded_player.play(path, position, rect)
+        if result.get("ok"):
+            result["title"] = title
+        return result
+
+    def play_embedded_path(self, path: str, rect: dict | None = None) -> dict:
+        """全盘快搜结果（不在扫描库）也走软件内播放。"""
+        p = Path(str(path or "").strip())
+        if not p.is_file():
+            return {"ok": False, "error": "文件不存在或已被移动"}
+        if p.suffix.lower() not in config.VIDEO_EXTS:
+            return {"ok": False, "error": "不是受支持的视频文件"}
+        result = embedded_player.play(str(p), 0, rect)
+        if result.get("ok"):
+            result["title"] = p.name
+        return result
+
+    def embed_sync(self, rect: dict | None = None) -> dict:
+        return embedded_player.sync(embedded_player.rect_from_css(rect))
+
+    def embed_stop(self) -> dict:
+        return embedded_player.detach()
 
     def open_data_folder(self) -> dict:
         config.ensure_dirs()

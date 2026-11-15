@@ -97,6 +97,9 @@ DEFAULTS = {
     "window_width": 1180,
     "window_height": 780,
     "minimize_to_tray": 1,
+    "theme": "light",  # 展示风格：light(白) / dark(黑)，存 SQLite 而非 localStorage（窗口是 private_mode）
+    # 默认在软件内播放 PotPlayer；任何一步嵌入失败都会自动降级为独立窗口
+    "embed_player": 1,
     # Obsidian 知识沉淀：vault 留空表示自动探测（仅有一个 vault 时才自动采用）
     "obsidian_vault": "",
     "obsidian_folder": "Magic Video",

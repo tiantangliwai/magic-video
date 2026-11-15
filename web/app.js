@@ -4,17 +4,35 @@ let currentView = 'home';
 let lastPreviewRows = [];
 let inited = false;
 let searchTimer = null;
+let currentTheme = 'light';
+let embeddedMode = true;            // 软件内播放开关（设置存 SQLite）；失败自动降级外部播放
+let playerStageActive = false;      // 播放舞台是否已展开
+let embedSyncTimer = null;          // 仅内嵌播放期间存在，退出立即清掉
+let embedResizeTimer = null;
+
+// 展示风格：黑 / 白两套。存在 SQLite 设置表里（WebView2 用 private_mode，localStorage 不持久）。
+function applyTheme(theme) {
+  currentTheme = theme === 'dark' ? 'dark' : 'light';
+  document.documentElement.setAttribute('data-theme', currentTheme);
+  const icon = document.getElementById('themeIcon');
+  const label = document.getElementById('themeLabel');
+  if (icon) icon.textContent = currentTheme === 'dark' ? '☀' : '☾';
+  if (label) label.textContent = currentTheme === 'dark' ? '浅色' : '深色';
+}
 
 // 看过的列表：一次载入全量后本地即时过滤，行内改名只局部刷新表格
 let watchedRows = [];
 let watchedKeyword = '';
 let watchedEditing = 0;
+let watchedGrouped = true;          // 同一作品的多季收拢成一组，避免列表散成一片
+const watchedOpen = new Set();     // 已展开的分组 key
 
 const VIEW_META = {
   home: ['总览', '你的播放进度一目了然'],
   continue: ['继续观看', '从上次中断的位置接着看'],
   history: ['历史记录', '每次观看的时间与进度'],
   library: ['媒体库', '扫描到的本地视频文件'],
+  posters: ['剧集墙', '按作品展示封面、季数与续播'],
   watched: ['看过的列表', '你导入的已观看作品'],
   import: ['导入列表', '把看过的动漫一次性记录到数据库'],
   scan: ['扫描目录', '添加已下载视频的存放位置'],
@@ -71,6 +89,93 @@ function setContent(html) { document.getElementById('content').innerHTML = html;
 
 function empty(text, sub) {
   return `<div class="empty"><div class="big">${esc(text)}</div><div>${esc(sub || '')}</div></div>`;
+}
+
+// ---------- 软件内播放舞台 ----------
+// PotPlayer 是原生窗口：这里只负责给出一块「舞台」的屏幕矩形，
+// 由 Python 侧用 SetParent 把播放器摆进去；失败会自动降级为独立窗口播放。
+function hostRect() {
+  const host = document.getElementById('playerHost');
+  if (!host) return { x: 0, y: 74, w: 960, h: 540, dpr: 1 };
+  const r = host.getBoundingClientRect();
+  return { x: r.left, y: r.top, w: r.width, h: r.height, dpr: window.devicePixelRatio || 1 };
+}
+
+function openPlayerStage(title) {
+  const stage = document.getElementById('playerStage');
+  if (!stage) return;
+  document.getElementById('playerStageTitle').textContent = title || '正在播放';
+  document.getElementById('playerStageHint').textContent = '播放器已嵌入本窗口，进度照常自动记录';
+  const holder = stage.querySelector('.player-holder');
+  if (holder) holder.textContent = '正在启动 PotPlayer…';
+  stage.hidden = false;
+  playerStageActive = true;
+}
+
+function startEmbedSync() {
+  clearInterval(embedSyncTimer);
+  embedSyncTimer = setInterval(async () => {
+    if (!playerStageActive) return;
+    try { await call('embed_sync', hostRect()); } catch (e) { /* 窗口关闭时忽略 */ }
+  }, 700);
+}
+
+async function stopEmbedded(silent) {
+  if (!playerStageActive) return;
+  playerStageActive = false;
+  clearInterval(embedSyncTimer);
+  embedSyncTimer = null;
+  const stage = document.getElementById('playerStage');
+  if (stage) stage.hidden = true;
+  try { await call('embed_stop'); } catch (e) { /* 已退出时忽略 */ }
+  if (!silent) toast('已退出内嵌，PotPlayer 在独立窗口继续播放');
+}
+
+async function refreshEmbedState() {
+  try {
+    const s = await call('embed_status');
+    embeddedMode = !!s.enabled;
+    const btn = document.getElementById('embedToggle');
+    if (!btn) return;
+    btn.classList.toggle('on', embeddedMode);
+    document.getElementById('embedLabel').textContent = embeddedMode ? '内嵌播放' : '独立窗口';
+    btn.title = embeddedMode ? '当前：软件内播放（点击改为独立窗口）'
+      : (s.available ? '当前：独立窗口播放（点击改为软件内）' : '当前系统不支持窗口内嵌');
+  } catch (e) { /* 后端尚未就绪时忽略 */ }
+}
+
+async function playSmart(kind, value, fromStart) {
+  if (!embeddedMode) {
+    const r = (kind === 'path')
+      ? await call('play_external', value)
+      : await call('play_file', Number(value), fromStart);
+    toast(r.ok ? (r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放` : '已开始播放')
+      : (r.error || '播放失败'), r.ok);
+    return;
+  }
+  // 先把舞台展开再发起调用：Python 侧要等 PotPlayer 窗口出现，属于异步等待，
+  // 界面此时仍可交互，不会像以前那样「点了没反应」。
+  openPlayerStage(kind === 'path' ? String(value).split(/[\\/]/).pop() : '正在载入…');
+  const rect = hostRect();
+  const r = (kind === 'path')
+    ? await call('play_embedded_path', value, rect)
+    : await call('play_embedded', Number(value), fromStart, rect);
+  if (!r.ok) {
+    await stopEmbedded(true);
+    toast(r.error || '播放失败', false);
+    return;
+  }
+  if (!r.embedded) {
+    await stopEmbedded(true);
+    toast(r.reason || '已自动降级为独立窗口播放', true);
+    return;
+  }
+  const titleEl = document.getElementById('playerStageTitle');
+  if (titleEl) titleEl.textContent = r.title || '正在播放';
+  const holder = document.querySelector('#playerStage .player-holder');
+  if (holder) holder.textContent = '';
+  startEmbedSync();
+  toast(r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放（软件内）` : '已在软件内开始播放');
 }
 
 function progressItem(r, actions) {
@@ -393,6 +498,19 @@ function watchedRowHtml(r) {
   </tr>`;
 }
 
+// 与后端 importer.group_watched 同构：按中文名（回退作品名）折叠
+function groupWatchedRows(rows) {
+  const map = new Map();
+  rows.forEach(r => {
+    const key = String(r.title_cn || r.title || '').trim() || '(未命名)';
+    if (!map.has(key)) map.set(key, { key, label: key, title: r.title, seasons: new Set(), rows: [] });
+    const g = map.get(key);
+    g.rows.push(r);
+    if (r.season_no) g.seasons.add(Number(r.season_no));
+  });
+  return [...map.values()];
+}
+
 // 只重写 tbody：搜索框不重建，输入焦点与光标始终保留
 function renderWatchedRows() {
   const box = document.getElementById('watchedListBody');
@@ -402,12 +520,28 @@ function renderWatchedRows() {
     [r.title, r.title_cn, r.raw_text, r.note].some(v =>
       String(v == null ? '' : v).toLowerCase().includes(kw))) : watchedRows;
   const count = document.getElementById('watchedCount');
-  if (count) count.textContent = kw
-    ? `匹配 ${rows.length} / 共 ${watchedRows.length} 条`
-    : `共 ${watchedRows.length} 条`;
-  box.innerHTML = rows.length ? rows.map(watchedRowHtml).join('')
-    : `<tr><td colspan="7">${empty(kw ? '没有匹配的作品' : '还没有导入',
-        kw ? '换个关键词，或点「清空搜索」' : '到「导入列表」粘贴你的动漫清单')}</td></tr>`;
+  const groups = groupWatchedRows(rows);
+  if (count) count.textContent = (kw ? `匹配 ${rows.length} / 共 ${watchedRows.length} 条`
+    : `共 ${watchedRows.length} 条`) + (watchedGrouped ? ` · ${groups.length} 部作品` : '');
+  if (!rows.length) {
+    box.innerHTML = `<tr><td colspan="7">${empty(kw ? '没有匹配的作品' : '还没有导入',
+      kw ? '换个关键词，或点「清空搜索」' : '到「导入列表」粘贴你的动漫清单')}</td></tr>`;
+    return;
+  }
+  if (!watchedGrouped) { box.innerHTML = rows.map(watchedRowHtml).join(''); return; }
+  // 搜索时自动展开命中的分组，结果多时也不至于一屏全是组头
+  const autoOpen = !!kw && groups.length <= 12;
+  box.innerHTML = groups.map(g => {
+    const open = autoOpen || watchedOpen.has(g.key) || g.rows.length === 1;
+    const seasons = [...g.seasons].sort((a, b) => a - b);
+    const summary = seasons.length ? `${seasons.length} 季（S${seasons.join(' / S')}）` : '未标注季';
+    const head = `<tr class="watched-group-row"><td colspan="7">
+      <button class="watched-group-toggle" data-action="watched-group-toggle" data-key="${esc(g.key)}">
+        <span class="tree-caret">${open ? '▾' : '▸'}</span>
+        <b>${esc(g.label)}</b><span class="watched-group-meta">${g.rows.length} 条 · ${esc(summary)}</span>
+      </button></td></tr>`;
+    return head + (open ? g.rows.map(watchedRowHtml).join('') : '');
+  }).join('');
 }
 
 async function renderWatched() {
@@ -417,6 +551,7 @@ async function renderWatched() {
     <p class="hint">你手动导入的已观看作品。可直接在下面改名、按名称即时搜索；中文名在导入那一刻已自动匹配，手改后会被记住。</p>
     <div class="watched-toolbar">
       <input class="input" id="watchedSearch" placeholder="搜索作品名 / 中文名 / 导入原文 / 备注…" value="${esc(watchedKeyword)}" autocomplete="off">
+      <button class="btn btn-sm" data-action="watched-view-mode">${watchedGrouped ? '切换为平铺' : '按作品分组'}</button>
       <span class="hint" id="watchedCount"></span>
       <button class="btn btn-sm" data-action="watched-clear-search">清空搜索</button>
     </div>
@@ -449,10 +584,13 @@ function renderPreview(data) {
   const onlineNote = m.online_available
     ? '在线检索已启用（连通性在本次导入时实测）'
     : '在线检索已降级为离线词典；可在设置里配置代理后点「重新匹配」';
+  const groupCount = (data.groups || []).length;
   document.getElementById('previewBox').innerHTML = `<div class="notice">
-    解析出 ${data.total} 条 · 重复 ${data.duplicates} 条（导入时自动跳过）·
+    解析出 <b>${num(groupCount || data.total)}</b> 部作品 / ${data.total} 条记录（多季作品会拆成「作品 + 季」）·
+    重复 ${data.duplicates} 条（导入时自动跳过）·
     自动匹配 ${num(m.matched)} 条（离线词典 ${num(m.by_builtin)} / 在线 ${num(m.by_online)}）·
-    未匹配 ${data.unmatched_cn} 条<br><span class="hint">${esc(onlineNote)}；中文名列可直接编辑，改动会记入词典。</span></div>
+    未匹配 ${data.unmatched_cn} 条<br><span class="hint">${esc(onlineNote)}；中文名列可直接编辑，改动会记入词典。
+    已自动忽略「（完）」「剧场版说明」「括号集数」等标记。</span></div>
     <div class="table-wrap"><table><thead><tr><th>作品名</th><th>中文名（可编辑）</th><th>季</th><th>集数</th><th>匹配状态</th></tr></thead><tbody>
     ${lastPreviewRows.length ? lastPreviewRows.map((r, i) => {
       const [label, tone] = r.duplicate ? ['已存在', 'amber'] : (MATCH_LABEL[r.match_by] || ['—', '']);
@@ -526,6 +664,8 @@ async function renderSettings() {
       <div class="field"><label>PotPlayer 可执行文件路径</label>
         <input class="input" id="set-potplayer_path" value="${esc(s.potplayer_path)}">
         <div class="tip">${s.potplayer_exists ? '已找到该文件' : '⚠ 文件不存在，请修正路径'}</div></div>
+      ${switchHtml('embed_player', isOn(s.embed_player), '在软件内播放 PotPlayer',
+        '播放器窗口直接嵌入本软件；嵌入失败会自动切回独立窗口，播放和历史记录都不中断')}
       <div class="field"><label>播放状态轮询间隔（秒）</label>
         <input class="input" type="number" min="1" max="30" id="set-poll_interval_sec" value="${esc(s.poll_interval_sec)}"></div>
       <div class="field"><label>自动标记「已看完」的进度阈值（%）</label>
@@ -555,6 +695,18 @@ async function renderSettings() {
           <input class="input" type="number" id="set-window_width" value="${esc(s.window_width)}">
           <input class="input" type="number" id="set-window_height" value="${esc(s.window_height)}">
         </div><div class="tip">下次启动生效</div></div>
+      <div class="field"><label>展示风格</label>
+        <div class="tip">点右上角「深色 / 浅色」即可切换黑白两套主题，设置会保存到本机数据库。</div></div>
+    </div>
+    <div class="card"><h3>全盘快搜（Everything）</h3>
+      <p class="hint">默认优先用 es.exe，其次 Everything 的 HTTP 服务；两者都没启用时自动降级为媒体库检索，功能始终可用。</p>
+      <div class="field"><label>es.exe 路径（可选）</label>
+        <input class="input" id="set-everything_es_path" value="${esc(s.everything_es_path || '')}" placeholder="D:\\tool\\Everything\\es.exe">
+        <div class="tip">本机 D:\\tool\\Everything 目前只有 Everything.exe。要使用全盘检索，可从 Everything 官网下载 es.exe 放到该目录。</div></div>
+      <div class="field"><label>Everything HTTP 服务地址（可选）</label>
+        <input class="input" id="set-everything_http_url" value="${esc(s.everything_http_url || '')}" placeholder="例如 http://127.0.0.1:8080">
+        <div class="tip">需在 Everything 选项里启用 HTTP 服务并设定端口。</div></div>
+      <div class="btn-row"><button class="btn btn-sm" data-action="goto" data-view="posters">去全盘快搜 / 剧集墙</button></div>
     </div></div>
     <div class="card"><h3>Obsidian 知识沉淀</h3>
       <div class="notice">把<b>开发流程、自测结果、优化路线图、功能缺口</b>自动写进 vault 下独立的
@@ -583,9 +735,147 @@ async function renderSettings() {
     </div><p class="hint" style="margin:14px 0 0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
 }
 
+// ---------- 剧集墙：卡片式展示（参考 SeedHub / AGE动漫 的作品墙） ----------
+let posterState = { keyword: '', cards: [], covers: {}, status: {}, loading: false };
+let esState = { keyword: '', rows: [], source: '', hint: '' };
+let coverPollTimer = null;
+
+// 只在「后台抓取任务运行中」才轮询，任务结束立即停，不是常驻定时器
+function coverPollStart() {
+  if (coverPollTimer) return;
+  const tick = async () => {
+    try {
+      const s = await call('cover_status');
+      posterState.status = s;
+      renderCoverStatus();
+      if (!s.running) {
+        clearInterval(coverPollTimer); coverPollTimer = null;
+        await loadPosterWall();
+        return;
+      }
+    } catch (e) {
+      clearInterval(coverPollTimer); coverPollTimer = null;
+    }
+  };
+  coverPollTimer = setInterval(tick, 1500);
+  tick();
+}
+
+function posterCardHtml(card, cover) {
+  const art = cover
+    ? `<img class="poster-art" src="${cover}" alt="${esc(card.title)}" loading="lazy">`
+    : `<div class="poster-art poster-placeholder"><span>${esc((card.title || '?').slice(0, 2))}</span></div>`;
+  const seasons = card.season_count > 1 ? `<span class="poster-tag">${card.season_count} 季</span>` : '';
+  const progress = card.playing_count ? `<span class="poster-tag amber">在看 ${num(card.playing_count)}</span>` : '';
+  const playBtn = card.next_file_id
+    ? `<button class="btn btn-primary btn-sm" data-action="play" data-id="${card.next_file_id}">播放下一集</button>`
+    : '';
+  return `<div class="poster-card">${art}
+    <div class="poster-body">
+      <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
+      <div class="poster-meta">${num(card.file_count)} 集${card.watched_count ? ` · 已看 ${num(card.watched_count)}` : ''}</div>
+      <div class="poster-tags">${seasons}${progress}</div>
+      <div class="poster-actions">${playBtn}
+        <button class="btn btn-sm" data-action="goto" data-view="library">查看分集</button></div>
+    </div></div>`;
+}
+
+function renderPosterCards() {
+  const box = document.getElementById('posterGrid');
+  if (!box) return;
+  const kw = posterState.keyword.trim().toLowerCase();
+  const cards = kw ? posterState.cards.filter(c => c.title.toLowerCase().includes(kw)) : posterState.cards;
+  const count = document.getElementById('posterCount');
+  if (count) count.textContent = `${cards.length} 部作品 · 已有封面 ${Object.keys(posterState.covers).length} 张`;
+  box.innerHTML = cards.length
+    ? cards.map(c => posterCardHtml(c, posterState.covers[c.title])).join('')
+    : empty('还没有作品卡片', '先在「扫描目录」添加视频目录；抓取封面后会显示海报');
+}
+
+function renderCoverStatus() {
+  const el = document.getElementById('posterStatus');
+  if (!el) return;
+  const s = posterState.status || {};
+  el.textContent = s.running
+    ? `后台抓取中… ${num(s.done)} / ${num(s.total)}（成功 ${num(s.ok)} · 失败 ${num(s.failed)}）`
+    : `已缓存 ${num(s.cached)} 张封面${s.finished_at ? ` · 上次任务成功 ${num(s.ok)} / ${num(s.total)}` : ''}`;
+}
+
+async function loadPosterWall() {
+  if (posterState.loading) return;
+  posterState.loading = true;
+  try {
+    const data = await call('get_poster_wall', { keyword: posterState.keyword });
+    posterState.cards = data.cards || [];
+    posterState.covers = data.covers || {};
+    posterState.status = data.cover_status || {};
+    // 有缓存的封面用 data URI 补齐（后端一次性返回，避免 file:// 跨域）
+    const titles = Object.keys(posterState.covers);
+    if (titles.length) posterState.covers = await call('cover_data_uris', titles);
+    renderPosterCards();
+    renderCoverStatus();
+  } catch (err) {
+    const box = document.getElementById('posterGrid');
+    if (box) box.innerHTML = empty('剧集墙加载失败', String(err && err.message || err));
+  } finally {
+    posterState.loading = false;
+  }
+}
+
+async function renderPosters() {
+  setContent(`<div class="card"><div class="section-head"><h3>剧集墙</h3>
+      <span class="badge blue" id="posterCount">正在统计…</span></div>
+    <p class="hint">按作品展示海报、季数与续播入口。封面由后台任务从 AGE动漫 / SeedHub 抓取后缓存到本地，
+      没抓到时用首字占位；<b>不会自动定时抓取</b>，点下面的按钮才启动一次。</p>
+    <div class="watched-toolbar">
+      <input class="input" id="posterSearch" placeholder="搜索作品名…" value="${esc(posterState.keyword)}" autocomplete="off">
+      <button class="btn btn-sm" data-action="poster-refresh">刷新</button>
+      <button class="btn btn-sm btn-primary" data-action="cover-fetch">后台抓取封面</button>
+      <button class="btn btn-sm" data-action="cover-cancel">停止</button>
+      <span class="hint" id="posterStatus">检查封面…</span>
+    </div>
+    <div id="posterGrid" class="poster-grid">${empty('正在加载剧集墙', '读取媒体库分组…')}</div>
+  </div>
+  <div class="card"><h3>全盘快搜（Everything）</h3>
+    <p class="hint">关键词直接搜整台电脑的视频文件；本机未装 es.exe / 未开 HTTP 服务时，自动降级为媒体库检索。</p>
+    <div class="watched-toolbar">
+      <input class="input" id="esSearch" placeholder="输入文件名关键词，回车检索…" value="${esc(esState.keyword)}" autocomplete="off">
+      <button class="btn btn-sm btn-primary" data-action="es-search">检索</button>
+      <span class="hint" id="esHint"></span>
+    </div>
+    <div id="esResults" class="list"></div>
+  </div>`);
+  await loadPosterWall();
+  renderEsResults();
+  const input = document.getElementById('posterSearch');
+  if (input) input.focus();
+}
+
+function renderEsResults() {
+  const box = document.getElementById('esResults');
+  if (!box) return;
+  const hint = document.getElementById('esHint');
+  if (hint) hint.textContent = esState.hint ? `来源：${esState.source} · ${esState.hint}` : '';
+  if (!esState.rows.length) {
+    box.innerHTML = esState.keyword ? empty('没有结果', '换个关键词试试') : '';
+    return;
+  }
+  box.innerHTML = esState.rows.slice(0, 200).map(r => `<div class="item">
+    <div class="thumb">▶</div>
+    <div class="body"><div class="name">${esc(r.filename)}</div>
+      <div class="meta mono">${esc(r.path)}</div>
+      <div class="meta">${r.in_library ? '已在媒体库' : '库外文件'}${r.title_cn ? ` · ${esc(r.title_cn)}` : ''}</div></div>
+    <div class="right"><div class="btn-row">
+      ${r.in_library
+        ? `<button class="btn btn-primary btn-sm" data-action="play" data-id="${r.file_id}">续播</button>`
+        : `<button class="btn btn-primary btn-sm" data-action="play-external" data-path="${esc(r.path)}">播放</button>`}
+    </div></div></div>`).join('');
+}
+
 const RENDERERS = {
   home: renderHome, continue: renderContinue, history: renderHistory, library: renderLibrary,
-  watched: renderWatched, import: renderImport, scan: renderScan, settings: renderSettings,
+  posters: renderPosters, watched: renderWatched, import: renderImport, scan: renderScan,
+  settings: renderSettings,
 };
 
 async function refresh() {
@@ -637,12 +927,32 @@ async function updateDaemonState() {
 async function handleAction(action, btn) {
   const id = btn.dataset.id;
   switch (action) {
-    case 'goto': switchView(btn.dataset.view); return;
-    case 'play': case 'play-start': {
-      const r = await call('play_file', Number(id), action === 'play-start');
-      toast(r.ok ? (r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放` : '已开始播放') : r.error, r.ok);
+    case 'goto':
+      if (playerStageActive) await stopEmbedded(true);
+      switchView(btn.dataset.view);
+      return;
+    case 'toggle-embed': {
+      const r = await call('set_embed_player', !embeddedMode);
+      embeddedMode = !!r.enabled;
+      refreshEmbedState();
+      toast(embeddedMode ? '已开启软件内播放（失败会自动降级）' : '已改为独立窗口播放');
       return;
     }
+    case 'embed-resync': {
+      const r = await call('embed_sync', hostRect());
+      toast(r.ok ? '画面位置已重排' : (r.error || '重排失败'), r.ok);
+      return;
+    }
+    case 'embed-stop': await stopEmbedded(); return;
+    case 'toggle-theme': {
+      const next = currentTheme === 'dark' ? 'light' : 'dark';
+      applyTheme(next);                       // 先本地生效，不等后端往返
+      try { await call('set_theme', next); } catch (e) { toast('主题已切换，但未能保存', false); }
+      return;
+    }
+    case 'play': case 'play-start':
+      await playSmart('id', id, action === 'play-start');
+      return;
     case 'edit-watched': {
       watchedEditing = Number(id);
       renderWatchedRows();
@@ -662,6 +972,17 @@ async function handleAction(action, btn) {
       watchedEditing = 0;
       renderWatchedRows();
       toast(r.learned ? '名称已更新，中文名已记住' : '名称已更新');
+      return;
+    }
+    case 'watched-view-mode': {
+      watchedGrouped = !watchedGrouped;
+      await renderWatched();
+      return;
+    }
+    case 'watched-group-toggle': {
+      const key = btn.dataset.key;
+      if (watchedOpen.has(key)) watchedOpen.delete(key); else watchedOpen.add(key);
+      renderWatchedRows();
       return;
     }
     case 'watched-clear-search': {
@@ -795,11 +1116,12 @@ async function handleAction(action, btn) {
     case 'save-settings': {
       const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent', 'http_proxy',
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
-        'obsidian_vault', 'obsidian_folder'];
+        'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url'];
       const data = {};
       keys.forEach(k => { const el = document.getElementById('set-' + k); if (el) data[k] = el.value; });
       document.querySelectorAll('[data-setting]').forEach(el => { data[el.dataset.setting] = el.dataset.value; });
       await call('save_settings', data);
+      await refreshEmbedState();
       toast('设置已保存');
       return;
     }
@@ -819,6 +1141,31 @@ async function handleAction(action, btn) {
       break;
     }
     case 'open-data': await call('open_data_folder'); return;
+    case 'poster-refresh': await loadPosterWall(); toast('剧集墙已刷新'); return;
+    case 'cover-fetch': {
+      const r = await call('start_cover_fetch', 0, false);
+      toast(r.ok ? `已启动后台抓取（${r.total} 部作品）` : (r.error || '启动失败'), r.ok);
+      coverPollStart();
+      return;
+    }
+    case 'cover-cancel': {
+      await call('cancel_cover_fetch');
+      toast('已请求停止，当前这一张完成后即停');
+      return;
+    }
+    case 'es-search': {
+      const kw = (document.getElementById('esSearch') || {}).value || '';
+      esState.keyword = kw.trim();
+      const r = await call('everything_search', esState.keyword, 200);
+      esState.rows = r.rows || [];
+      esState.source = r.source || '';
+      esState.hint = r.hint || '';
+      renderEsResults();
+      return;
+    }
+    case 'play-external':
+      await playSmart('path', btn.dataset.path || '', false);
+      return;
     case 'obsidian-sync': {
       btn.disabled = true; btn.textContent = '正在同步…';
       try {
@@ -848,7 +1195,11 @@ async function handleAction(action, btn) {
 
 document.addEventListener('click', async (ev) => {
   const nav = ev.target.closest('.nav-item');
-  if (nav) { switchView(nav.dataset.view); return; }
+  if (nav) {
+    if (playerStageActive) await stopEmbedded(true);   // 离开播放页 -> 播放器还原为独立窗口，播放不中断
+    switchView(nav.dataset.view);
+    return;
+  }
   const sw = ev.target.closest('[data-setting]');
   if (sw) {
     const on = sw.dataset.value !== '1';
@@ -875,6 +1226,11 @@ document.addEventListener('input', (ev) => {
     renderWatchedRows();
     return;
   }
+  if (el.id === 'posterSearch') {
+    posterState.keyword = el.value;
+    renderPosterCards();   // 已有卡片本地过滤，不发请求
+    return;
+  }
   if (el.id !== 'fileSearch') return;
   const value = el.value;
   clearTimeout(searchTimer);
@@ -887,6 +1243,12 @@ document.addEventListener('input', (ev) => {
 
 // 改名行内编辑：Enter 保存、Esc 取消
 document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Enter' && ev.target.id === 'esSearch') {
+    ev.preventDefault();
+    const btn = document.querySelector('[data-action="es-search"]');
+    if (btn) btn.click();
+    return;
+  }
   if (!watchedEditing) return;
   const id = ev.target.id;
   if (id !== 'watchedEditTitle' && id !== 'watchedEditCn') return;
@@ -921,14 +1283,25 @@ async function init() {
   try {
     const info = await call('get_app_info');
     document.getElementById('versionText').textContent = `v${info.version} · 数据仅存本机`;
+    applyTheme(info.theme);
   } catch (e) { /* 忽略 */ }
+  await refreshEmbedState();
   await refresh();
   await updateDaemonState();
   await updatePlayerChip();
   setInterval(updatePlayerChip, 3000);
   setInterval(updateDaemonState, 15000);
-  setInterval(() => { if (currentView === 'home') refresh(); }, 12000);
+  setInterval(() => { if (currentView === 'home' && !playerStageActive) refresh(); }, 12000);
 }
+
+// 窗口缩放 / DPI 变化时把原生播放器重新摆回舞台矩形
+window.addEventListener('resize', () => {
+  if (!playerStageActive) return;
+  clearTimeout(embedResizeTimer);
+  embedResizeTimer = setTimeout(() => {
+    if (playerStageActive) call('embed_sync', hostRect()).catch(() => {});
+  }, 120);
+});
 
 window.addEventListener('pywebviewready', init);
 if (apiReady()) init();

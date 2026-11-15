@@ -30,15 +30,64 @@ POT_GET_PLAY_STATUS = 0x5006
 STATE_LABEL = {-1: "stopped", 1: "paused", 2: "playing"}
 WINDOW_CLASSES = ("PotPlayer64", "PotPlayer", "PotPlayerMini64")
 
+# SendMessageW 是同步的：PotPlayer 卡住/正忙时会把调用线程挂住（界面每 3 秒轮询一次，
+# 一旦挂住整个窗口就"卡住"）。改用 SendMessageTimeoutW + SMTO_ABORTIFHUNG，超时即返回 0。
+SMTO_ABORTIFHUNG = 0x0002
+SEND_TIMEOUT_MS = 300
+
 try:  # 非 Windows 平台也能安全导入本模块（纯函数与测试仍可用）
     _user32 = ctypes.windll.user32
     _user32.FindWindowW.argtypes = [wintypes.LPCWSTR, wintypes.LPCWSTR]
     _user32.FindWindowW.restype = wintypes.HWND
     _user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
     _user32.SendMessageW.restype = ctypes.c_longlong
+    _user32.SendMessageTimeoutW.argtypes = [
+        wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM,
+        wintypes.UINT, wintypes.UINT, ctypes.POINTER(ctypes.c_ssize_t),
+    ]
+    _user32.SendMessageTimeoutW.restype = ctypes.c_longlong
     _user32.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    _user32.GetClassNameW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    _user32.IsWindow.argtypes = [wintypes.HWND]
+    _user32.IsWindow.restype = wintypes.BOOL
 except (AttributeError, OSError):  # pragma: no cover - 仅在非 Windows 触发
     _user32 = None
+
+# 内嵌播放时 PotPlayer 会变成主窗口的子窗口，FindWindowW 只搜顶层窗口。
+# 这个 HWND 同时写进 settings（守护进程是独立进程，从那里读），本进程内则用它做快速回退。
+_EMBEDDED_HWND = 0
+EMBED_HWND_KEY = "embed_hwnd"
+
+
+def set_embedded_hwnd(hwnd: int) -> None:
+    """由 app.embedded_player 在 attach / detach 时调用（避免循环导入）。"""
+    global _EMBEDDED_HWND
+    _EMBEDDED_HWND = int(hwnd or 0)
+
+
+def embedded_hwnd() -> int:
+    return _EMBEDDED_HWND
+
+
+def _class_name(hwnd: int) -> str:
+    if _user32 is None or not hwnd:
+        return ""
+    buf = ctypes.create_unicode_buffer(256)
+    try:
+        _user32.GetClassNameW(hwnd, buf, 256)
+        return buf.value or ""
+    except Exception:
+        return ""
+
+
+def _cached_embedded_hwnd() -> int:
+    """跨进程取值：优先本进程缓存，其次 settings 里持久化的 HWND。"""
+    candidates = [_EMBEDDED_HWND]
+    try:
+        candidates.append(int(db.get_setting(EMBED_HWND_KEY, 0) or 0))
+    except Exception:
+        pass
+    return next((v for v in candidates if v), 0)
 
 
 def find_window() -> int:
@@ -48,6 +97,10 @@ def find_window() -> int:
         hwnd = _user32.FindWindowW(cls, None)
         if hwnd:
             return int(hwnd)
+    # 子窗口回退：确认窗口还在、类仍是 PotPlayer，避免拿陈旧 HWND 去发消息
+    cached = _cached_embedded_hwnd()
+    if cached and _user32.IsWindow(cached) and _class_name(cached) in WINDOW_CLASSES:
+        return int(cached)
     return 0
 
 
@@ -60,9 +113,18 @@ def window_title(hwnd: int) -> str:
 
 
 def send(hwnd: int, code: int, lparam: int = 0) -> int:
+    """读一次播放器状态；带超时，绝不让无响应的播放器阻塞调用线程。"""
     if _user32 is None or not hwnd:
         return 0
-    return int(_user32.SendMessageW(hwnd, WM_USER, code, lparam))
+    result = ctypes.c_ssize_t(0)
+    try:
+        ok = _user32.SendMessageTimeoutW(
+            hwnd, WM_USER, code, lparam, SMTO_ABORTIFHUNG, SEND_TIMEOUT_MS,
+            ctypes.byref(result),
+        )
+    except Exception:
+        return 0
+    return int(result.value) if ok else 0
 
 
 def self_check(hwnd: int) -> bool:

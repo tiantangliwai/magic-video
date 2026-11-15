@@ -145,6 +145,58 @@ class PlayTests(IsolatedDbTestCase):
             self.assertFalse(potplayer.seek_current(1000))
 
 
+class EmbeddedWindowLookupTests(IsolatedDbTestCase):
+    """内嵌后 PotPlayer 变成子窗口，FindWindowW 找不到；必须能从 settings 回查 HWND。"""
+
+    def setUp(self):
+        super().setUp()
+        potplayer.set_embedded_hwnd(0)
+
+    def tearDown(self):
+        potplayer.set_embedded_hwnd(0)
+        super().tearDown()
+
+    @staticmethod
+    def _user32(*, window_alive=1, class_name="PotPlayer64"):
+        u = mock.MagicMock()
+        u.FindWindowW.return_value = 0        # 顶层窗口里没有播放器
+        u.IsWindow.return_value = window_alive
+
+        def class_of(hwnd, buf, size):
+            buf.value = class_name
+            return 1
+        u.GetClassNameW.side_effect = class_of
+        return u
+
+    def test_top_level_window_wins(self):
+        u = self._user32()
+        u.FindWindowW.return_value = 555
+        with mock.patch.object(potplayer, "_user32", u):
+            self.assertEqual(potplayer.find_window(), 555)
+
+    def test_reads_hwnd_from_settings_for_cross_process_daemon(self):
+        db.set_setting(potplayer.EMBED_HWND_KEY, 4321)
+        with mock.patch.object(potplayer, "_user32", self._user32()):
+            self.assertEqual(potplayer.find_window(), 4321)
+
+    def test_in_process_cache_also_works(self):
+        potplayer.set_embedded_hwnd(8765)
+        with mock.patch.object(potplayer, "_user32", self._user32()):
+            self.assertEqual(potplayer.find_window(), 8765)
+        potplayer.set_embedded_hwnd(0)
+
+    def test_stale_or_foreign_hwnd_is_rejected(self):
+        db.set_setting(potplayer.EMBED_HWND_KEY, 4321)
+        with mock.patch.object(potplayer, "_user32", self._user32(window_alive=0)):
+            self.assertEqual(potplayer.find_window(), 0)
+        with mock.patch.object(potplayer, "_user32", self._user32(class_name="Notepad")):
+            self.assertEqual(potplayer.find_window(), 0)
+
+    def test_no_window_at_all_returns_zero(self):
+        with mock.patch.object(potplayer, "_user32", self._user32()):
+            self.assertEqual(potplayer.find_window(), 0)
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

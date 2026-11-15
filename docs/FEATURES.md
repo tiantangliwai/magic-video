@@ -159,10 +159,12 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 
 | 分类 | 方法 |
 |---|---|
-| 信息 | `get_app_info` `get_stats` `get_player_status` `get_settings` `save_settings` |
-| 列表 | `get_continue_watching` `get_completed` `get_history` `get_watched_list` `update_watched` `delete_watched` `get_media_files` `get_media_files_page` |
+| 信息 | `get_app_info` `get_stats` `get_player_status` `get_settings` `save_settings` `set_theme` |
+| 列表 | `get_continue_watching` `get_completed` `get_history` `get_watched_list` `update_watched` `delete_watched` `get_media_files` `get_media_files_page` `get_media_tree` |
 | 导入 | `preview_import` `commit_import` |
-| 播放 | `play_file` `open_data_folder` |
+| 播放 | `play_file` `play_external` `play_embedded` `play_embedded_path` `embed_status` `set_embed_player` `embed_sync` `embed_stop` `open_data_folder` |
+| 封面 | `get_poster_wall` `cover_status` `start_cover_fetch` `cancel_cover_fetch` `cover_data_uris` |
+| 快搜 | `everything_capabilities` `everything_search` |
 | 目录 | `get_directories` `add_directory` `remove_directory` `set_directory_enabled` `choose_directory` `scan_now` `get_last_scan` |
 | 词典 | `dictionary_status` `rematch_all` `import_alias_file` |
 | 纠错 | `mark_watched` `mark_unwatched` `reset_progress` |
@@ -203,6 +205,10 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | `bangumi_base` | `https://api.bgm.tv` | 在线源地址 |
 | `window_width` / `window_height` | 1180 / 780 | 主窗口尺寸 |
 | `minimize_to_tray` | 1 | 关闭时最小化到托盘 |
+| `theme` | `light` | 展示风格 `light` / `dark`，只走 `set_theme()`，不在 `save_settings` 白名单里 |
+| `embed_player` | 1 | 是否在软件内嵌播放 PotPlayer；关闭或嵌入失败一律用独立窗口 |
+| `embed_hwnd` | 0 | 运行时写入：内嵌后的 PotPlayer 窗口句柄，供守护进程跨进程回查 |
+| `everything_es_path` / `everything_http_url` | 空 | 全盘快搜的两个可选通道，都不可用时降级为媒体库检索 |
 | `obsidian_vault` | 空 | Obsidian vault 绝对路径；空且仅检测到 1 个 vault 时自动采用 |
 | `obsidian_folder` | `Magic Video` | vault 内笔记文件夹（相对路径，禁止 `..` / 绝对路径） |
 | `obsidian_auto_sync` | 0 | `cli.py test` 全绿后是否自动同步一次（默认关闭） |
@@ -306,7 +312,97 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ---
 
-## 10. 尚未实现（明确边界，避免误判为缺陷）
+## 11. 启动体验与单实例（0.1.4 日常迭代）
 
-- 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、按季海报墙、看片时长统计、外部追番站点同步。
+| 需求 | 验收标准 |
+|---|---|
+| 不卡启动 | `Api()` 只做一次 `init_db()` + 内置词典装载；`js_api` 不公开持有 pywebview Window；`create_window` 不传 `background_color`；`webview.start(..., private_mode=True)` |
+| 不弹 COM 报错 | 不在非 UI 线程访问 `window.native` 的 WebView2 控件树；播放器消息用 `SendMessageTimeoutW(SMTO_ABORTIFHUNG, 300ms)` |
+| 只有一个窗口 | `app/single_instance.py::guard()` 用命名互斥锁；第二实例只 `ShowWindow(SW_RESTORE)` + `SetForegroundWindow` 后退出 |
+| 一键启动 | `./start` 从源码启动并连 `%APPDATA%\Magic Video\library.db`（真实库）；`--local` 用调试库；打印数据目录与 `.db` 路径 |
+
+数据流：`./start` → `run.py` → `main.create_window()` → `single_instance.guard()` → `Api()` → `webview.create_window()` → `webview.start()` →（窗口关闭）`embedded_player.cleanup()`。
+
+测试：`tests/test_startup.py`。
+
+---
+
+## 12. 黑白主题（0.1.4 日常迭代）
+
+| 需求 | 验收标准 |
+|---|---|
+| 只要黑 / 白两套 | `set_theme()` 只接受 `light` / `dark`，非法值直接拒绝；`style.css` 用 `html[data-theme=dark]` 覆盖 CSS 变量，组件样式不复制 |
+| 设置要持久 | 存在 SQLite `settings.theme`，不是 `localStorage`（WebView2 用 `private_mode`，重启会清空浏览器存储） |
+| 切换即时生效 | 前端先本地 `applyTheme()` 再异步落库，不等后端往返；右上按钮与标签同步 |
+
+测试：`tests/test_theme.py`（含 `save_settings` 白名单不得夹带 `theme` 注入）。
+
+---
+
+## 13. 剧集墙、封面与全盘快搜（0.1.4 日常迭代）
+
+### 需求与验收标准
+
+| 需求 | 验收标准 |
+|---|---|
+| 参考 SeedHub / AGE动漫 的作品墙 | 「剧集墙」按作品出卡片：封面、季数、集数、已看/在看、播放下一集；无封面显示占位图，不影响播放 |
+| 有对应动漫展示图 | `app/covers.py` 主源 AGE动漫搜索页（精确标题 → `data-original` 高清图）、备源 SeedHub 首页/分类页（title 属性配对）；下载到自己的 `<数据目录>/covers/`，`subjects.cover_local` 落库 |
+| 后台起一次性任务 | `start_cover_fetch()` 只在用户点击时起 daemon 线程，可 `cancel_cover_fetch()`；**没有 `Timer` / 定时任务 / 开机自跑**；重复点击不会起第二个线程 |
+| 不阻塞界面、不炸磁盘 | 短超时 + 单张 3 MB 上限 + Content-Type 校验 + 单部作品异常只记失败；`cover_data_uris()` 转 data URI 给 WebView2（不依赖 `file://`） |
+| 优先抓能抓到的 | `cover_titles()` 先排导入清单里的中文作品名，再排媒体库中文名，最后才是英文标题；技术标签 / 番号编号先过滤 |
+| Everything 快搜 | `app/everything.py`：`es.exe` → Everything HTTP 服务 → **自动降级为媒体库检索**；能力探测与提示写进「设置」页 |
+
+### 数据流
+
+```
+点击「后台抓取封面」 -> Api.start_cover_fetch(limit, force)
+  -> covers.start_job()  (daemon 线程, 一次性)
+  -> covers.cover_titles() -> clean_candidate() -> fetch_one()
+       -> 缓存命中? -> search_cover() -> download_cover() -> save_cover_record()
+  -> covers.status() 供前端轮询，结束即停轮询
+
+剧集墙渲染 -> Api.get_poster_wall() -> {cards, covers: cover_map()}
+           -> Api.cover_data_uris(titles) -> data:image/...;base64
+全盘快搜   -> Api.everything_search(kw) -> es.exe / HTTP / 媒体库 SQL
+           -> 播放按钮 -> Api.play_embedded_path() 或 Api.play_external()
+```
+
+对应测试：`tests/test_covers.py`、`tests/test_everything.py`。本机 `D:\tool\Everything` 只有 `Everything.exe`，要启用全盘需用户补官方 `es.exe` 或在 Everything 里开 HTTP 服务。
+
+---
+
+## 14. PotPlayer 软件内播放（0.1.4 日常迭代）
+
+### 需求与验收标准
+
+| 需求 | 验收标准 |
+|---|---|
+| 在当前软件窗口里播放 | `app/embedded_player.py::play()` 按 PID + 标题找主窗口 HWND，用 Win32 `SetParent` 把 PotPlayer 变成子窗口，`SetWindowPos` 摆到前端 `#playerHost` 的矩形（CSS 像素 × `devicePixelRatio`） |
+| 不碰 .NET 控件树 | 不访问 `window.native`；`Api._window` 保持私有；纯 `ctypes` 调 `user32`，避开非 UI 线程 `E_NOINTERFACE` |
+| 失败必须降级 | 找不到主窗口 / 等不到 PotPlayer 窗口 / `SetParent` 或 `SetWindowPos` 失败 / 非 Windows，一律让 `potplayer.play()` 的结果照常在独立窗口播放，并返回 `fallback=True` + 人话原因 |
+| 记录不能断 | 子窗口不再是顶层窗口，HWND 写进 `settings.embed_hwnd`；`potplayer.find_window()` 从 settings 回查并校验 `IsWindow` + 窗口类，**另一个进程**的守护照常读进度写会话 |
+| 不留孤儿窗口 | 「退出内嵌播放」、切走导航页、主窗口关闭（`main.create_window` 的 `finally`）都调用 `detach()` 还原原样式 / 原位置 / 顶层父窗口，并清掉 `embed_hwnd` |
+| 可随时关掉 | 右上角开关与设置页 `embed_player`（默认 1）；关闭后所有播放走原 `play_file` / `play_external` |
+
+### 数据流
+
+```
+点击播放 -> web/app.js::playSmart() -> openPlayerStage()（先显示舞台，界面不阻塞）
+        -> Api.play_embedded(id / path, rect)
+        -> embedded_player.play()
+             -> potplayer.play()（先保证播放开始）
+             -> find_main_window() -> _wait_pot_window() -> attach()
+             -> 成功: potplayer.set_embedded_hwnd() + settings.embed_hwnd
+             -> 失败: detach() + 返回 fallback（PotPlayer 仍在独立窗口播放）
+        -> startEmbedSync()（仅内嵌期间 700ms 重排，resize 也触发）
+        -> 退出/关窗 -> Api.embed_stop() / main.py finally -> detach()
+```
+
+对应测试：`tests/test_embedded_player.py`（DPR 换算、附着/还原、失败路径、降级、状态清理）、`tests/test_potplayer.py::EmbeddedWindowLookupTests`（跨进程 HWND 回查与陈旧句柄拒绝）。
+
+---
+
+## 15. 尚未实现（明确边界，避免误判为缺陷）
+
+- 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、封面人工确认与多站点兜底。
 - 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。

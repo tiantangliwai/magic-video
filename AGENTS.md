@@ -31,8 +31,16 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 11 | 扫描出的文件必须**完整可见**（不得截断）、可搜索、可在软件里点击直接打开播放器 | 用户要求（v0.1.4） |
 | 12 | 「看过的列表」要能**改动名称并快速搜索**：一次载入全量、本地即时过滤（作品名/中文名/导入原文/备注），行内改名并把用户手改的中文名记住 | 用户要求（0.1.4 日常迭代） |
 | 13 | 媒体库不能只平铺全部视频：要能按**第一季/第二季/第三季、一部番十几集**做树状展示；原平铺列表仍需保留可切换 | 用户要求（0.1.4 日常迭代） |
+| 14 | **单实例**：任务栏重复点击只能有一个窗口；启动要快，不能刷 WebView2 COM 报错 | 用户要求（0.1.4 日常迭代） |
+| 15 | 剧集展示参考 `seeduck.cc` / `www.agedm.io`，**要有对应动漫的展示图**；后台起一次性任务抓取，不是定时任务 | 用户要求（0.1.4 日常迭代） |
+| 16 | 集成 `D:\tool\Everything` 做快速检索；工具缺失时必须自动降级，功能不能消失 | 用户要求（0.1.4 日常迭代） |
+| 17 | PotPlayer **就在当前软件内播放**；嵌入失败必须自动降级为原外部播放 | 用户要求（0.1.4 日常迭代） |
+| 18 | 展示风格先做**黑 / 白两套**即可；设置要持久化 | 用户要求（0.1.4 日常迭代） |
+| 19 | 一键 `./start` 直接连**真实数据库**；要能明确告知 `.db` 位置与 C 盘工作数据 | 用户要求（0.1.4 日常迭代） |
+| 20 | 用户给的真实「看过的列表」（含 `S1/S2`、`（完）`、剧场版、番号等噪声）必须能正确解析入库 | 用户要求（0.1.4 日常迭代） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
+**封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
 **Obsidian 同步是纯本地文件写入，不是定时任务、不是云同步、不引入账号或插件。**
 
 ---
@@ -50,6 +58,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
                    v                    │
             app/potplayer.py     app/metadata.py / scanner.py / importer.py
             (WM_USER 消息)       app/data/aliases_builtin.json
+                 │
+                 └── app/embedded_player.py (SetParent 内嵌；HWND 写 settings 供守护跨进程回查)
+   app/covers.py (一次性后台封面任务) / app/everything.py (es.exe → HTTP → 媒体库降级)
 ```
 
 - **单写者原则**：SQLite 用 WAL + `busy_timeout`；写操作走 `db.session()` 短事务，禁止长事务包裹网络请求。`init_db()` 必须保持进程内幂等。
@@ -58,6 +69,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - **数据本地优先**：`data/` 不入库；元数据结果落库，不写回视频目录。
 - **打包版资源/数据分离**：源码版资源与数据都在项目根；打包版资源取 `sys._MEIPASS`（只读），数据默认 `%APPDATA%\Magic Video`，绿色版由 exe 同级 `portable.txt` 改为同级 `data/`，可用 `MAGIC_VIDEO_DATA_DIR` 覆盖。**禁止把数据库写进临时解压目录**。`config.resolve_layout()` 是路径唯一真源，`app/runtime.py` 负责两种形态的启动命令。
 - **前端无框架**：原生 HTML/CSS/JS，通过 `window.pywebview.api.*` 调后端；新增后端方法需同步加前端 `call(...)`。
+- **pywebview Window 必须私有**：`Api._window` 下划线开头，绝不改成公开属性，也不要在非 UI 线程访问 `window.native`（会遍历 .NET 控件树并抛 `E_NOINTERFACE`，同时拖慢启动）。要拿主窗口 HWND 用 `app/embedded_player.py::find_main_window()` 的 PID + 标题枚举。
+- **内嵌播放的跨进程契约**：PotPlayer 变成子窗口后 `FindWindowW` 找不到它，必须把 HWND 写进 `settings.embed_hwnd`，`potplayer.find_window()` 从那里回查；主窗口关闭前必须 `detach()` 还原，否则会留下孤儿子窗口。
+- **降级优先于报错**：封面、Everything、在线刮削、内嵌播放任何一步失败都要继续可用，不能让按钮点了没反应。
 - **可测试性**：模块导入不得因平台差异崩溃（`winreg`、`ctypes.windll` 已做安全降级）；纯逻辑与副作用分离，便于 mock。
 
 ---
@@ -163,6 +177,9 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - **仅显式发版时**：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过；日常提交只需 `run_tests.py` 全绿（见 3.0）。
 - 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
 - 树状视图改动：`tests/test_media_tree.py` 必须覆盖作品/季/集分组、脏文件名归并、目录树、筛选不截断、已看/在看计数与续播集、叶子点击播放链路；`get_media_tree` 与平铺列表共用 `_media_filters()`，不得另写一套搜索 SQL。
+- 启动 / 单实例改动：`tests/test_startup.py` 必须覆盖互斥锁、已有窗口置前、js_api 反射安全与 `./start` 脚本；主题改动跑 `tests/test_theme.py`。
+- 封面改动：`tests/test_covers.py` 必须覆盖两个源的解析、缓存命中不联网、脏标题过滤、中文名优先排序、一次性非定时任务。
+- 内嵌播放改动：`tests/test_embedded_player.py` 必须覆盖坐标 DPR 换算、`SetParent`/`SetWindowPos` 失败、找不到主窗口 / 播放器窗口、降级为外部播放、`detach` 还原；`tests/test_potplayer.py` 必须覆盖从 `embed_hwnd` 回查子窗口 HWND 与陈旧句柄拒绝。所有 Win32 调用一律 mock，绝不启动真实播放器。
 - **仅用户要求发版或改打包链时**：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
 - 窗口冒烟：`webview.create_window(..., hidden=True)` + 线程内 `evaluate_js` 检查 8 页渲染，完成后 `destroy()`。
 
@@ -181,7 +198,8 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 ### 6.1 本地调试入口（不发版，随时看改动）
 
-双击 `dev.bat`（等价于 `.venv\Scripts\python.exe run.py --debug`）即用**源码**启动窗口，改完代码马上能看，**不需要打包、不需要 tag、不需要重装 MSI**。
+- **日常直接 `./start`（Git Bash）**：源码启动 + 真实数据库，启动脚本会打印数据目录与 `.db` 路径；`./start --local` 用调试库，`./start --debug` 开 DevTools。
+- 双击 `dev.bat`（等价于 `.venv\Scripts\python.exe run.py --debug`）即用**源码**启动窗口，改完代码马上能看，**不需要打包、不需要 tag、不需要重装 MSI**。
 
 | 改了什么 | 怎么看 |
 |---|---|
@@ -217,7 +235,10 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | PotPlayer | `D:\tool\DAUM\PotPlayer\PotPlayerMini64.exe`，窗口类 `PotPlayer64` |
 | 进度回读 | `WM_USER(0x0400)` + `0x5002` 总时长 / `0x5004` 当前位置 / `0x5006` 状态（实测成功） |
 | 续播参数 | `/seek=hh:mm:ss` `/current` `/autoplay`（官方 `CmdLine64.txt`） |
-| WebView2 | Edge WebView2 157 已安装，pywebview `gui="edgechromium"` |
+| WebView2 | Edge WebView2 157 已安装，pywebview `gui="edgechromium"`；必须 `private_mode=True`、不传 `background_color` |
+| Everything | `D:\tool\Everything\Everything.exe` 存在，**没有 `es.exe`**；全盘检索需用户自行补 `es.exe` 或启用 HTTP 服务 |
+| 封面源 | AGE动漫 `www.agedm.io/search?query=` 中文名命中稳定；SeedHub `seeduck.cc` 搜索被 Cloudflare 拦，首页/分类页可按 title 配对；本机 Python 需 `verify=False` |
+| 数据目录 | `./start` / 安装版 = `%APPDATA%\Magic Video`（C 盘，真实库）；`data/dev` 是 `dev.bat` 的安全副本，别把封面/记录只写进副本 |
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
 | git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.4` |
 | 打包工具链 | `.venv`（PyInstaller 6.22 / pywebview 6.2 / pythonnet 3.2）、WiX 3.14.1 在 `build/tools/wix/tools`（NuGet 镜像下载）；GitHub Release 直连 SSL 握手失败，改用 NuGet 镜像 |
