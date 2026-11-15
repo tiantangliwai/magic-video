@@ -54,6 +54,13 @@ class VersionConsistencyTests(unittest.TestCase):
         self.assertIn("'use strict'", js)
         self.assertIn("pywebviewready", js)
 
+    def test_frontend_is_not_served_from_stale_cache(self):
+        """升级安装后必须加载新版前端：缓存串跟随版本，且窗口不保留持久缓存。"""
+        html = (ROOT / "web/index.html").read_text(encoding="utf-8")
+        self.assertIn(f"app.js?v={__version__}", html)
+        main = (ROOT / "app/main.py").read_text(encoding="utf-8")
+        self.assertIn("private_mode=True", main)
+
     def test_no_legacy_scheduled_queue_references(self):
         """中文名补全已改为导入时同步匹配，不应残留定时任务相关代码。"""
         for relative in ("app/api.py", "app/main.py", "app/importer.py", "web/app.js", "cli.py"):

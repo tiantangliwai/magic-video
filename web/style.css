@@ -129,3 +129,21 @@ td { color: var(--text); }
   transform: translateY(8px); z-index: 99; max-width: 380px; }
 .toast.show { opacity: 1; transform: translateY(0); }
 .mono { font-family: Consolas, "Courier New", monospace; font-size: 11px; color: var(--muted); }
+
+/* 全量文件列表：工具栏 / 分页 / 点击播放 */
+.file-toolbar { display: grid; grid-template-columns: minmax(210px, 2fr) repeat(4, minmax(108px, 1fr));
+  gap: 9px; margin-bottom: 10px; }
+.file-toolbar .input { padding: 7px 9px; font-size: 12px; }
+.pager-row { display: flex; align-items: center; gap: 9px; flex-wrap: wrap;
+  margin: 8px 0 4px; color: var(--muted); font-size: 12px; }
+.pager-row b { color: var(--text); }
+.pager-input { width: 76px !important; padding: 5px 8px !important; font-size: 12px; }
+.link-btn { border: 0; background: transparent; color: var(--primary); font: inherit;
+  font-weight: 600; padding: 0; cursor: pointer; text-align: left; }
+.link-btn:hover { text-decoration: underline; }
+.thumb-btn { border: 0; cursor: pointer; }
+.thumb-btn:hover { background: #d7e3ff; }
+.file-row:hover { background: var(--surface-2); }
+.file-row .name { white-space: normal; line-height: 1.8; }
+.file-row .mono { word-break: break-all; margin-top: 3px; }
+button[disabled] { opacity: .45; cursor: not-allowed; }

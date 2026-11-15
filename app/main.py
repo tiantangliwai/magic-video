@@ -24,4 +24,6 @@ def create_window(debug: bool = False) -> None:
         text_select=True,
     )
     api.attach_window(window)
-    webview.start(gui="edgechromium", debug=debug, private_mode=False)
+    # private_mode=True：每次启动用临时 WebView2 profile，避免升级安装后仍加载缓存里的旧 app.js。
+    # 所有状态都在 SQLite，不需要浏览器端持久化；配合 index.html 的 app.js?v=<版本> 双保险。
+    webview.start(gui="edgechromium", debug=debug, private_mode=True)

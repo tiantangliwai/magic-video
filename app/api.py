@@ -14,6 +14,16 @@ from . import (
 )
 
 
+# 文件浏览的排序白名单：用户输入只能选键，绝不直接拼进 SQL
+_MEDIA_SORTS = {
+    "newest": "f.id DESC",
+    "name": "f.filename COLLATE NOCASE ASC",
+    "cn": "COALESCE(f.title_cn, f.title_guess, f.filename) COLLATE NOCASE ASC",
+    "size": "COALESCE(f.size, 0) DESC, f.id DESC",
+    "progress": "COALESCE(p.percent, 0) DESC, f.id DESC",
+}
+
+
 class Api:
     def __init__(self):
         self.window = None
@@ -141,6 +151,88 @@ class Api:
             "ORDER BY f.id DESC LIMIT ?",
             (like, like, like, int(limit)),
         )
+
+    def get_media_files_page(self, options: dict | None = None) -> dict:
+        """全量文件浏览：返回筛选后的总数与当前页数据；page_size <= 0 表示一次取全部。
+
+        前端「扫描结果 / 媒体库」共用此接口，避免 400 条硬上限截掉扫描到的文件。
+        """
+        opt = options or {}
+        try:
+            page = max(1, int(opt.get("page") or 1))
+        except (TypeError, ValueError):
+            page = 1
+        try:
+            size = int(opt.get("page_size", 200))
+        except (TypeError, ValueError):
+            size = 200
+        total_all = int(db.scalar("SELECT COUNT(*) FROM media_files") or 0)
+        keyword = str(opt.get("keyword") or "").strip()
+        # LIKE 的 % / _ / \ 是通配符或转义符，用户输入的关键词一律按字面量处理
+        escaped = keyword.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        try:
+            directory_id = int(opt.get("directory_id") or 0)
+        except (TypeError, ValueError):
+            directory_id = 0
+        match_state = str(opt.get("match_state") or "").strip().lower()
+
+        conditions = ["1=1"]
+        params: list = []
+        if keyword:
+            conditions.append(
+                "(f.filename LIKE ? ESCAPE '\\' OR COALESCE(f.title_guess,'') LIKE ? ESCAPE '\\' "
+                "OR COALESCE(f.title_cn,'') LIKE ? ESCAPE '\\' "
+                "OR COALESCE(f.title_raw,'') LIKE ? ESCAPE '\\' "
+                "OR COALESCE(f.path,'') LIKE ? ESCAPE '\\')"
+            )
+            params.extend([like] * 5)
+        if directory_id > 0:
+            conditions.append("f.dir_id = ?")
+            params.append(directory_id)
+        if match_state == "matched":
+            conditions.append("f.title_cn IS NOT NULL AND f.title_cn <> ''")
+        elif match_state == "unmatched":
+            conditions.append("COALESCE(f.title_cn,'') = ''")
+        elif match_state == "progress":
+            conditions.append("COALESCE(p.position_ms, 0) > 0")
+        where = " AND ".join(conditions)
+
+        total = int(db.scalar(
+            "SELECT COUNT(*) FROM media_files f "
+            "LEFT JOIN watch_progress p ON p.file_id = f.id WHERE " + where,
+            tuple(params),
+        ) or 0)
+        order = _MEDIA_SORTS.get(
+            str(opt.get("sort") or "newest").strip().lower(), _MEDIA_SORTS["newest"]
+        )
+        sql = (
+            "SELECT f.*, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            "p.position_ms, p.percent, p.completed, p.last_played_at "
+            "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+            "WHERE " + where + " ORDER BY " + order
+        )
+        query_params = list(params)
+        if size > 0:
+            sql += " LIMIT ? OFFSET ?"
+            query_params.extend([size, (page - 1) * size])
+        rows = db.rows(sql, tuple(query_params))
+        if size > 0:
+            pages = max(1, (total + size - 1) // size)
+            offset = (page - 1) * size
+            first = offset + 1 if offset < total else 0
+            last = min(offset + size, total) if first else 0
+        else:
+            pages, first, last = 1, (1 if total else 0), total
+        matched = int(db.scalar(
+            "SELECT COUNT(*) FROM media_files WHERE title_cn IS NOT NULL AND title_cn <> ''"
+        ) or 0)
+        return {
+            "ok": True, "rows": rows, "total": total, "total_all": total_all,
+            "matched": matched, "page": page, "page_size": size, "pages": pages,
+            "from": first, "to": last,
+            "directories": db.rows("SELECT id, path, file_count AS files FROM directories ORDER BY id"),
+        }
 
     def preview_import(self, text: str) -> dict:
         """解析预览时就完成中文名自动匹配，结果直接展示，不留待办队列。"""

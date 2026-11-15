@@ -1,4 +1,4 @@
-# 自测与单元测试报告 · v0.1.3
+# 自测与单元测试报告 · v0.1.4
 
 > 执行时间：2026-11-15；环境：Windows 10 专业版 / Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157。
 > 本报告只记录**实际跑过的命令与真实输出**，未实测的能力不会写成「通过」。
@@ -9,15 +9,15 @@
 
 | 项目 | 结果 |
 |---|---|
-| 单元测试 | **161 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，耗时 20.69 秒） |
+| 单元测试 | **173 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，耗时 25.44 秒） |
 | Python 语法 | `compileall` 全通过 |
 | JavaScript 语法 | `node --check web/app.js` 通过 |
-| 原生窗口 | 8 个页面全部渲染成功，`js_api` 暴露 35 个方法；设置页 Obsidian 卡片/按钮/开关齐全 |
-| 打包产物 | 绿色版 ZIP 21.8 MB / MSI 21.9 MB；`exe --selftest` 全部检查通过；主窗口 8 秒冒烟存活；MSI 反编译校验版本与快捷方式 |
+| 原生窗口 | 8 个页面全部渲染成功，`js_api` 暴露 36 个方法；扫描结果 / 媒体库共用全量列表组件 |
+| 打包产物 | 0.1.3：ZIP 21.8 MB / MSI 21.9 MB，`exe --selftest` 全通过；0.1.4 重新构建的产物验收见第 10 节 |
 | CLI | `init / status / dict / progress / player / mark / test / obsidian` 全部可用 |
 | 真实数据 | 旧播放记录、会话、断点进度、词典完整保留，未被本轮改动破坏 |
 | Obsidian 真实 vault | 首次同步生成 6 篇笔记 + 当天日志；用户原有 2 篇笔记 md5 前后完全一致；二次同步批注保留、日志去重通过 |
-| 远程推送 | 已完成：`master` + `v0.1.0`~`v0.1.3` 推送到私有仓库 `tiantangliwai/magic-video`（SSH 通道） |
+| 远程推送 | 已完成：`master` + `v0.1.0`~`v0.1.4` 推送到私有仓库 `tiantangliwai/magic-video`（SSH 通道） |
 
 ---
 
@@ -33,10 +33,11 @@
 | `tests/test_watcher.py` | 10 | 首次轮询即写进度、进度推进、完成阈值、已看完不回退、切集结算、播放器关闭、外部文件登记、时长回填、回调异常隔离 |
 | `tests/test_api.py` | 15 | 版本信息、统计、导入往返、设置白名单、代理重置、续播参数、已看完列表、标记已看/未看/重置进度、目录扫描桥接、守护探测 |
 | `tests/test_smoke.py` | 2 | 端到端串联（导入 → 扫描 → 播放记录 → 续播 → 纠错 → 历史）、测试库隔离验证 |
-| `tests/test_docs.py` | 10 | 版本语义化、交付文档齐备（含 `docs/OBSIDIAN.md`）、版本一致、gitignore、依赖格式、前端、无定时任务残留、Obsidian 接线与文档版本 |
+| `tests/test_docs.py` | 11 | 版本语义化、交付文档齐备、版本一致、gitignore、依赖格式、前端、前端缓存串、无定时任务残留、Obsidian 接线与文档版本 |
 | `tests/test_obsidian.py` | 26 | vault 探测与多选不猜、路径穿越防护、首次生成 6 篇笔记、同名用户笔记不覆盖、AUTO 区块外批注保留、frontmatter 用户字段保留、日志事件去重、历史快照去重、命名空间外零改动、路线图解析、结果渲染、状态查询、API 桥接与设置白名单 |
 | `tests/test_packaging.py` | 17 | 四种路径布局、两种形态启动命令、开机自启、笔记降级、守护/窗口/自检分发 |
-| **合计** | **161** | v0.1.3 相对 116 新增 45 项（26 项 Obsidian + 2 项文档守护 + 17 项打包形态） |
+| `tests/test_media_browser.py` | 11 | 分页总数与旧上限、搜索字段、组合筛选、全量模式与排序、注入/越界安全、点击播放、前端契约 |
+| **合计** | **173** | v0.1.4 相对 161 新增 12 项（11 项全量文件浏览 + 1 项前端缓存守护） |
 
 ### 隔离机制
 
@@ -175,7 +176,7 @@ python run_tests.py            :: 或 python cli.py test
 
 - [ ] `compileall` 通过
 - [ ] `node --check web/app.js` 通过
-- [x] `python run_tests.py` 161 个用例全绿
+- [x] `python run_tests.py` 173 个用例全绿
 - [ ] 旧数据保留已确认
 - [ ] README / AGENTS / CHANGELOG / docs/TESTING.md / docs/OBSIDIAN.md 版本一致（`tests/test_docs.py` 守护）
 - [ ] 真实 vault 同步通过，且用户原有笔记未被改动
@@ -263,7 +264,7 @@ AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0�
 
 ## 9. 打包产物与版本回溯增量自测（0.1.3）
 
-> 本节是第 8 节之后的增量记录：第 8 节里的 `144` 是当时首轮实测值，**当前全量为 161**。
+> 本节是第 8 节之后的增量记录，记录 0.1.3 当时的实测值；**当前全量为 173**，见第 10 节。
 
 ### 9.1 构建链实测
 
@@ -295,3 +296,38 @@ AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0�
 | MSI 实际安装与卸载 | 未在用户机器上执行安装（避免改动系统状态） | 双击 `.msi` 安装 → 开始菜单启动 → 控制面板卸载 |
 | 绿色版跨版本升级不丢数据 | 已在代码层与自检中验证路径分离 | 解压两个版本，把旧 `data/` 放进新目录后确认记录仍在 |
 | 打包版托盘守护长时间记录 | 冒烟只验证主窗口 8 秒 | 运行 `Magic Video.exe --daemon` 后用 PotPlayer 播放一集，检查历史写入 |
+
+---
+
+## 10. v0.1.4 增量自测（全量文件列表与点击播放）
+
+### 10.1 代码与真实数据（已实测）
+
+| 检查 | 命令 / 方法 | 结果 |
+|---|---|---|
+| 全量单元测试 | `.venv\Scripts\python.exe run_tests.py` | **173 / 173 全绿**（0 失败 / 0 错误 / 0 跳过，25.44 秒），新增 12 个用例（11 个文件浏览 + 1 个前端缓存守护） |
+| Python 语法 | `compileall -q app tests *.py` | 通过 |
+| JavaScript 语法 | `node --check web/app.js` | 通过 |
+| 真实库副本（不碰原库） | `sqlite3.Connection.backup()` 到临时目录 → `Api.get_media_files_page` | 默认第 1 页 200 条；`total=total_all=2104`、`pages=11`、`matched=324`；4 个目录选项 |
+| 一次显示全部 | `{"page_size": 0}` | 返回 2104 行，`pages=1`，区间 1–2104 |
+| 搜索 | 关键词 `家里蹲` / `吸血姬` / `DBD-Raws` / `100%` | 分别 17 / 17 / 296 / 0 条；`%` 按字面量，不会放大结果 |
+| 筛选 | `directory_id=1`、`match_state=matched` | 207 条 / 324 条 |
+| 排序 | `sort=name` | 按文件名升序返回；非法排序串安全降级且表未被注入 |
+| 旧 400 条上限移除 | 造 450 条数据验证 `total=450` / 9 页 | 通过（`tests/test_media_browser.py`） |
+
+### 10.2 产物验收（0.1.4，真实执行）
+
+| 检查 | 方法 | 结果 |
+|---|---|---|
+| 构建链 | `.venv\Scripts\python.exe build_dist.py` | ZIP 21.8 MB / MSI 22.0 MB；WiX `candle -dProductVersion=0.1.4` |
+| exe 自检 | 构建脚本内 `Magic Video.exe --selftest` | `ok=True` / `version=0.1.4` / `frozen=True`；资源在 `_internal`、数据在临时目录 |
+| ZIP 内容 | `zipfile` 逐项核对 | 218 条目；exe / `portable.txt` / 网页 / 内置词典 / docs 齐全；`webview/lib/Microsoft.Web.WebView2.*.dll` 在包内 |
+| 打包版前端 | 读 ZIP 内 `web/index.html` 与 `web/app.js` | 缓存串 `app.js?v=0.1.4` 存在；含 `get_media_files_page` / `fileListBox` / `file-all`，旧 400 条上限已移除 |
+| MSI 属性 | `dark.exe` 反编译 wxs | `Version="0.1.4"`、固定 `UpgradeCode`、开始菜单 `Shortcut` |
+| 主窗口 | 启动 `Magic Video.exe` 8 秒 + 临时 `MAGIC_VIDEO_DATA_DIR` | 进程存活，临时目录生成 `library.db`；随后终止，未污染真实库 |
+
+### 10.3 升级防缓存（本轮实测发现）
+
+- 首次隐藏窗口冒烟读到的仍是**旧界面**：`app/main.py` 的 `private_mode=False` 让 WebView2 复用了持久 profile 里缓存的旧 `app.js`。
+- 修复：`private_mode=True`（临时 profile）+ `web/index.html` 的 `app.js?v=<版本>` 双保险，并新增 `tests/test_docs.py::test_frontend_is_not_served_from_stale_cache` 守护，防止以后发版漏改缓存串。
+- 纯 JS 层用 Node `vm` 模拟 DOM 验证：`renderScan` / `renderLibrary` 均渲染出 `fileListBox` 与搜索框，`fileListRows` 生成可点击播放链接，`loadFileList` 正确传入 6 个查询参数并只局部刷新列表容器。

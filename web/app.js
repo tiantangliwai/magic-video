@@ -157,32 +157,116 @@ async function renderHistory() {
     </div>`).join('') : empty('还没有历史记录', '播放任意视频后会自动出现在这里')}</div></div>`);
 }
 
-async function renderLibrary() {
-  const keyword = (document.getElementById('libSearch') || {}).value || '';
-  const list = await call('get_media_files', keyword, 400);
-  setContent(`<div class="card"><h3>媒体库</h3>
-    <p class="hint">已扫描到的本地视频。外文文件名在添加目录时会自动匹配成中文名，原文仍保留在下方。</p>
-    <div class="field"><input class="input" id="libSearch" placeholder="按文件名、中文名或原名搜索…" value="${esc(keyword)}"></div>
-    <div class="list">${list.length ? list.map(r => `<div class="item">
-      <div class="thumb">▶</div>
-      <div class="body"><div class="name">${esc(r.display_title || r.filename)}
-        ${r.title_cn ? '<span class="badge green">已匹配中文</span>' : ''}</div>
-        <div class="meta">${esc(r.filename)}${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}</div>
-        <div class="mono">${esc(r.path)}</div></div>
-      <div class="right">${num(r.percent) ? `${num(r.percent).toFixed(0)}%<br>` : ''}
+// ---- 全量文件列表：「扫描结果」与「媒体库」共用 ---------------------------
+const fileListState = {
+  keyword: '', page: 1, page_size: 200,
+  directory_id: 0, match_state: '', sort: 'newest',
+};
+
+function option(value, label, current) {
+  return `<option value="${esc(value)}" ${String(value) === String(current) ? 'selected' : ''}>${esc(label)}</option>`;
+}
+
+function fileListCard(title, hint, directories) {
+  const s = fileListState;
+  const dirs = ['<option value="0">全部目录</option>']
+    .concat((directories || []).map(d => option(d.id, `${d.path}（${num(d.files)}）`, s.directory_id)));
+  return `<div class="card"><div class="section-head">
+      <h3>${esc(title)}</h3><span class="badge blue" id="fileListCount">正在统计…</span></div>
+    <p class="hint">${hint}</p>
+    <div class="file-toolbar">
+      <input class="input" id="fileSearch" placeholder="搜索文件名 / 中文名 / 原名 / 路径…" value="${esc(s.keyword)}">
+      <select class="input" id="fileDir">${dirs.join('')}</select>
+      <select class="input" id="fileMatch">
+        ${option('', '全部状态', s.match_state)}${option('matched', '已匹配中文', s.match_state)}
+        ${option('unmatched', '未匹配中文', s.match_state)}${option('progress', '有播放进度', s.match_state)}
+      </select>
+      <select class="input" id="fileSort">
+        ${option('newest', '最近扫描', s.sort)}${option('name', '文件名', s.sort)}
+        ${option('cn', '中文名', s.sort)}${option('size', '文件体积', s.sort)}
+        ${option('progress', '观看进度', s.sort)}
+      </select>
+      <select class="input" id="filePageSize">
+        ${option(100, '每页 100 条', s.page_size)}${option(200, '每页 200 条', s.page_size)}
+        ${option(500, '每页 500 条', s.page_size)}${option(0, '一次显示全部', s.page_size)}
+      </select>
+    </div>
+    <div class="btn-row" style="margin-bottom:10px">
+      <button class="btn btn-sm" data-action="file-refresh">刷新列表</button>
+      <button class="btn btn-sm" data-action="goto" data-view="scan">管理扫描目录</button>
+    </div>
+    <div id="fileListPager" class="pager-row"></div>
+    <div id="fileListBox" class="list">${empty('正在加载文件列表', '默认每页 200 条；切换「一次显示全部」可查看全部文件')}</div>
+  </div>`;
+}
+
+function fileListRows(rows) {
+  if (!rows.length) return empty('没有符合条件的文件', '换个关键词，或把筛选条件改成「全部」');
+  return rows.map(r => {
+    const [label, tone] = r.match_by ? (MATCH_LABEL[r.match_by] || ['—', '']) : ['未匹配', 'amber'];
+    const pct = num(r.percent);
+    const ep = r.episode_no ? esc(` · 第 ${r.episode_no} 集`) : '';
+    return `<div class="item file-row">
+      <button class="thumb thumb-btn" data-action="play" data-id="${r.id}" title="用 PotPlayer 打开">▶</button>
+      <div class="body"><div class="name">
+        <button class="link-btn" data-action="play" data-id="${r.id}" title="点击直接播放">${esc(r.display_title || r.filename)}</button>
+        ${ep}${r.title_cn ? '<span class="badge green">已匹配中文</span>' : ''}
+        <span class="badge ${tone}">${esc(label)}</span>
+        ${num(r.completed) === 1 ? '<span class="badge green">已看完</span>' : ''}
+      </div>
+      <div class="meta">${esc(r.filename)}</div>
+      <div class="mono">${esc(r.path)}</div></div>
+      <div class="right">${pct ? `${pct.toFixed(0)}%<br>` : ''}
         <div class="btn-row" style="justify-content:flex-end;margin-top:6px">
           <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.id}">播放</button>
+          <button class="btn btn-sm" data-action="play-start" data-id="${r.id}">从头播放</button>
         </div></div>
-    </div>`).join('') : empty('媒体库还是空的', '到「扫描目录」添加存放视频的文件夹')}</div></div>`);
-  const input = document.getElementById('libSearch');
-  if (input) {
-    input.addEventListener('input', () => {
-      clearTimeout(searchTimer);
-      searchTimer = setTimeout(renderLibrary, 300);
-    });
-    input.focus();
-    input.setSelectionRange(input.value.length, input.value.length);
+    </div>`;
+  }).join('');
+}
+
+function fileListPagerHtml(data) {
+  if (data.page_size <= 0) {
+    return `<span>已一次显示全部 <b>${num(data.total)}</b> 个文件</span>
+      <button class="btn btn-sm" data-action="file-paged">回到分页</button>`;
   }
+  const prev = num(data.page) > 1, next = num(data.page) < num(data.pages);
+  return `<button class="btn btn-sm" data-action="file-prev" ${prev ? '' : 'disabled'}>上一页</button>
+    <span>第 <b>${num(data.page)}</b> / ${num(data.pages)} 页 · 显示 ${num(data.from)}–${num(data.to)} / ${num(data.total)} 条</span>
+    <button class="btn btn-sm" data-action="file-next" ${next ? '' : 'disabled'}>下一页</button>
+    <input class="input pager-input" id="filePageJump" type="number" min="1" max="${num(data.pages)}" value="${num(data.page)}">
+    <button class="btn btn-sm" data-action="file-jump">跳转</button>
+    <button class="btn btn-sm" data-action="file-all">显示全部 ${num(data.total_all)} 个</button>`;
+}
+
+async function loadFileList() {
+  const box = document.getElementById('fileListBox');
+  if (!box) return;
+  let data;
+  try {
+    data = await call('get_media_files_page', { ...fileListState });
+  } catch (err) {
+    box.innerHTML = empty('列表加载失败', String(err && err.message || err));
+    return;
+  }
+  const count = document.getElementById('fileListCount');
+  if (count) count.textContent =
+    `库内 ${num(data.total_all)} 个文件 · 已匹配中文 ${num(data.matched)} · 当前筛选 ${num(data.total)} 个`;
+  const pager = document.getElementById('fileListPager');
+  if (pager) pager.innerHTML = fileListPagerHtml(data);
+  box.innerHTML = fileListRows(data.rows || []);
+}
+
+async function renderLibrary() {
+  const dirs = await call('get_directories');
+  setContent(fileListCard(
+    '媒体库 · 全部本地视频',
+    '扫描到的所有视频文件都在这里，没有条数上限。点文件名或「播放」即可用 PotPlayer 打开；搜索支持文件名、中文名、原名和完整路径。',
+    dirs,
+  ));
+  await loadFileList();
+  const input = document.getElementById('fileSearch');
+  if (input) input.focus();
 }
 
 async function renderWatched() {
@@ -279,7 +363,11 @@ async function renderScan() {
       <button class="btn btn-primary" data-action="rematch">重新匹配未识别标题</button>
       <button class="btn" data-action="import-alias-file">导入手动补充词典</button>
       <button class="btn" data-action="open-data">打开数据目录</button>
-    </div></div>`);
+    </div></div>
+  ${fileListCard('扫描结果 · 全部文件',
+    '本次及历次扫描到的视频都会列在这里。默认按最近扫描排序，可搜索、按目录或匹配状态筛选、翻页或一次显示全部；点文件名即可调用 PotPlayer 播放。',
+    dirs)}`);
+  await loadFileList();
 }
 
 function switchHtml(key, on, label, desc) {
@@ -444,14 +532,37 @@ async function handleAction(action, btn) {
       if (!path) { toast('请先填写目录路径', false); return; }
       const r = await call('add_directory', path);
       toast(r.ok ? '目录已添加，正在后台扫描并匹配中文名' : r.error, r.ok);
-      setTimeout(() => { if (currentView === 'scan') refresh(); }, 1500);
+      setTimeout(() => { if (currentView === 'scan') refresh(); }, 3000);
       return;
     }
     case 'scan': {
-      await call('scan_now'); toast('扫描已在后台开始，完成后自动匹配中文名');
-      setTimeout(() => { if (currentView === 'scan') refresh(); }, 1800);
+      await call('scan_now'); toast('扫描已在后台开始，完成后自动刷新下面的文件列表');
+      setTimeout(() => { if (currentView === 'scan') refresh(); }, 3000);
       return;
     }
+    case 'file-refresh': await loadFileList(); toast('列表已刷新'); return;
+    case 'file-prev':
+      fileListState.page = Math.max(1, fileListState.page - 1);
+      await loadFileList(); return;
+    case 'file-next':
+      fileListState.page += 1;
+      await loadFileList(); return;
+    case 'file-jump': {
+      const jump = Number((document.getElementById('filePageJump') || {}).value || 1);
+      fileListState.page = Math.max(1, Math.floor(jump || 1));
+      await loadFileList(); return;
+    }
+    case 'file-all':
+      fileListState.page_size = 0;
+      fileListState.page = 1;
+      { const sel = document.getElementById('filePageSize'); if (sel) sel.value = '0'; }
+      toast('正在载入全部文件，数量较多时请稍候', true);
+      await loadFileList(); return;
+    case 'file-paged':
+      fileListState.page_size = 200;
+      fileListState.page = 1;
+      { const sel = document.getElementById('filePageSize'); if (sel) sel.value = '200'; }
+      await loadFileList(); return;
     case 'preview': {
       const text = document.getElementById('importText').value;
       btn.disabled = true; btn.textContent = '正在匹配中文名…';
@@ -551,6 +662,32 @@ document.addEventListener('click', async (ev) => {
   } catch (err) {
     toast(String(err && err.message || err), false);
   }
+});
+
+// 搜索与筛选只局部刷新列表容器，不重建输入框，因此不会丢焦点或光标
+document.addEventListener('input', (ev) => {
+  if (ev.target.id !== 'fileSearch') return;
+  const value = ev.target.value;
+  clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => {
+    fileListState.keyword = value;
+    fileListState.page = 1;
+    loadFileList();
+  }, 250);
+});
+
+document.addEventListener('change', (ev) => {
+  const el = ev.target;
+  const handlers = {
+    fileDir: () => { fileListState.directory_id = Number(el.value) || 0; },
+    fileMatch: () => { fileListState.match_state = el.value; },
+    fileSort: () => { fileListState.sort = el.value; },
+    filePageSize: () => { fileListState.page_size = Number(el.value); },
+  };
+  if (!handlers[el.id]) return;
+  handlers[el.id]();
+  fileListState.page = 1;
+  loadFileList();
 });
 
 async function init() {

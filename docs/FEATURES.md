@@ -1,4 +1,4 @@
-# 功能规格说明书 · Magic Video v0.1.3
+# 功能规格说明书 · Magic Video v0.1.4
 
 > 本文件定义「做完了」的判定标准。每条需求都给出可验证的验收条件，供开发、测试与后续 Agent 对照。
 > 需求基线见 `AGENTS.md` 第 1 节；变更历史见 `CHANGELOG.md`。
@@ -160,7 +160,7 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | 分类 | 方法 |
 |---|---|
 | 信息 | `get_app_info` `get_stats` `get_player_status` `get_settings` `save_settings` |
-| 列表 | `get_continue_watching` `get_completed` `get_history` `get_watched_list` `delete_watched` `get_media_files` |
+| 列表 | `get_continue_watching` `get_completed` `get_history` `get_watched_list` `delete_watched` `get_media_files` `get_media_files_page` |
 | 导入 | `preview_import` `commit_import` |
 | 播放 | `play_file` `open_data_folder` |
 | 目录 | `get_directories` `add_directory` `remove_directory` `set_directory_enabled` `choose_directory` `scan_now` `get_last_scan` |
@@ -247,7 +247,33 @@ git / CHANGELOG / OPTIMIZATION / db ──┼──> app/obsidian.py::collect_sn
 
 ---
 
-## 9. 尚未实现（明确边界，避免误判为缺陷）
+## 9. 全量文件列表与点击播放（v0.1.4）
+
+### 需求与验收标准
+
+| 需求 | 验收标准 |
+|---|---|
+| 扫描结果完整可见 | 「扫描目录」页列出全部扫描文件；`get_media_files_page({})` 的 `total` 等于 `media_files` 总数；界面无 400 条上限 |
+| 一次显示全部 | `page_size=0` 一次返回全部行（真实库副本实测 2104 条 / `pages=1`）；界面可翻页、跳页、回到分页 |
+| 搜索 | 命中文件名、中文名、解析原名、原始标题、完整路径；大小写不敏感；`%` / `_` / `\` 按字面量 |
+| 筛选与排序 | 目录、匹配状态（已匹配中文 / 未匹配 / 有播放进度）可组合；排序走白名单，非法值降级为最近扫描且不执行注入 |
+| 点击播放 | 文件名链接 / 缩略图 /「播放」按钮调用 `play_file`，有断点自动续播；「从头播放」忽略断点 |
+| 交互稳定 | 搜索与筛选只局部刷新列表容器，输入框不丢焦点；扫描完成后可手动刷新 |
+
+### 数据流
+
+```
+web/app.js::loadFileList()
+  -> Api.get_media_files_page({keyword, page, page_size, directory_id, match_state, sort})
+  -> db.rows(带 WHERE / 白名单 ORDER BY / LIMIT OFFSET) + COUNT(*)
+  -> {rows, total, total_all, matched, pages, directories}
+  -> fileListRows() / fileListPagerHtml()
+  -> 点击 data-action="play" -> Api.play_file(id) -> potplayer.play(path, position)
+```
+
+---
+
+## 10. 尚未实现（明确边界，避免误判为缺陷）
 
 - 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、按季海报墙、看片时长统计、外部追番站点同步。
 - 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。

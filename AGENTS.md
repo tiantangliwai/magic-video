@@ -1,7 +1,7 @@
 # AGENTS.md · 给 AI Agent 的项目协作约定
 
 > 本文件是 **AI Agent 在本仓库工作时的第一优先级约定**。与直觉冲突时，以本文件为准。
-> 当前版本：**v0.1.3**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
+> 当前版本：**v0.1.4**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
 > 适用环境：Windows 10/11、Python 3.13、项目根目录 `D:\project\magic video`
 
 ---
@@ -28,6 +28,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 8 | 优先离线可用；在线检索作为补充，失败必须快速降级 | 本机直连 Bangumi 超时 |
 | 9 | 版本进度用 git 跟踪，交付文档与单元测试齐备 | 用户要求 |
 | 10 | 结合本机 Obsidian 自动记录**流程与结果**，供后续优化和补齐功能；只写 vault 内独立命名空间，绝不覆盖用户已有笔记，保留手写批注；不做定时同步 | 用户要求（v0.1.3） |
+| 11 | 扫描出的文件必须**完整可见**（不得截断）、可搜索、可在软件里点击直接打开播放器 | 用户要求（v0.1.4） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **Obsidian 同步是纯本地文件写入，不是定时任务、不是云同步、不引入账号或插件。**
@@ -77,6 +78,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | `app/__init__.py` | 提升 `__version__` |
 | `CHANGELOG.md` | 新增 `## [X.Y.Z] - YYYY-MM-DD` 段落，列 Added / Changed / Fixed / Tests / Docs |
 | `README.md` | 顶部当前版本 + 「版本输出一览」新增一行 |
+| `web/index.html` | 把 `app.js?v=X.Y.Z` 同步到新版本，避免升级后 WebView2 仍加载缓存里的旧前端（由 `tests/test_docs.py` 守护） |
 | `AGENTS.md` | 顶部当前版本声明 |
 | `docs/TESTING.md` | 追加该版本的自测结论与测试数量 |
 | `docs/OBSIDIAN.md` | Obsidian 契约有变化时同步更新；`docs/OPTIMIZATION.md` 是路线图笔记的单一真源 |
@@ -135,6 +137,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 涉及网络 → 基类的 `search_online` mock 已禁用真实请求；要测在线分支就本地 patch 假数据。
 - 涉及 PotPlayer → mock `read_status` / `resolve_media` / `subprocess.Popen`，不真的启动播放器。
 - 发版前：`python -m compileall -q app tests *.py` + `node --check web/app.js` + `python run_tests.py` 三项全过。
+- 文件列表 / 搜索相关改动：`tests/test_media_browser.py` 必须覆盖分页总数、搜索字段、组合筛选、排序白名单、注入/越界安全与点击播放链路；列表不得有硬条数上限。
 - 改打包链 / 发带产物的版本：`python build_dist.py` 跑通，并确认 `exe --selftest` 全通过、ZIP 与 MSI 关键文件齐全（验收清单见 `docs/TESTING.md` 第 9 节）。
 - 窗口冒烟：`webview.create_window(..., hidden=True)` + 线程内 `evaluate_js` 检查 8 页渲染，完成后 `destroy()`。
 
@@ -174,7 +177,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 续播参数 | `/seek=hh:mm:ss` `/current` `/autoplay`（官方 `CmdLine64.txt`） |
 | WebView2 | Edge WebView2 157 已安装，pywebview `gui="edgechromium"` |
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
-| git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.3` |
+| git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.4` |
 | 打包工具链 | `.venv`（PyInstaller 6.22 / pywebview 6.2 / pythonnet 3.2）、WiX 3.14.1 在 `build/tools/wix/tools`（NuGet 镜像下载）；GitHub Release 直连 SSL 握手失败，改用 NuGet 镜像 |
 | Obsidian | `%APPDATA%\obsidian\obsidian.json` 注册 2 个 vault；主库 `C:\Users\Administrator\Documents\Obsidian Vault`，另一个是装修项目专用库（不写） |
 | 同步产物 | `data/test_last.json`（测试结果）、`data/obsidian_history.json`（结果时间线）；均在 `.gitignore` 内 |
