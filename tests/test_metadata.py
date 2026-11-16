@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import time
 import unittest
 from unittest import mock
 
@@ -141,6 +142,133 @@ class DictionaryTests(IsolatedDbTestCase):
         self.assertTrue(result["ok"])
         self.assertEqual(result["imported"], 1)
         self.assertEqual(metadata.lookup_local("My Custom Title")["title_cn"], "我的自定义作品")
+
+
+class _HttpStatusError(Exception):
+    """模拟 requests.HTTPError：带 response.status_code，不改测试依赖。"""
+
+    def __init__(self, status: int):
+        super().__init__(f"HTTP {status}")
+        self.response = mock.Mock(status_code=status)
+
+
+class OnlineScrapeTests(IsolatedDbTestCase):
+    """P1-5：刮削限速、缓存（含负缓存）、429 退避、强制重刮。
+
+    这些用例只 mock 网络层 ``requests.get``，``search_online`` 跑真实实现——
+    否则限速与缓存分支根本不会被执行，测了等于没测。
+    """
+
+    def _run(self, fake_get, titles):
+        with mock.patch.object(metadata, "search_online", self.real_search_online), \
+                mock.patch("requests.get", side_effect=fake_get):
+            return [metadata.search_online(t) for t in titles]
+
+    @staticmethod
+    def _resp(items=None):
+        resp = mock.Mock(status_code=200)
+        resp.json.return_value = {"list": items or []}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    def test_hit_is_cached_and_not_requested_twice(self):
+        calls = []
+
+        def fake_get(*args, **kwargs):
+            calls.append(1)
+            return self._resp([{"id": 999, "name": "Cached Show", "name_cn": "缓存作品"}])
+
+        first, second = self._run(fake_get, ["Cached Show", "Cached Show"])
+        self.assertEqual(first["title_cn"], "缓存作品")
+        self.assertEqual(second["title_cn"], "缓存作品")
+        self.assertEqual(len(calls), 1, "第二次应直接命中缓存，不再发包")
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM scrape_cache"), 1)
+
+    def test_miss_is_negatively_cached_until_ttl(self):
+        calls = []
+
+        def fake_get(*args, **kwargs):
+            calls.append(1)
+            return self._resp([])
+
+        self._run(fake_get, ["Unknown Show A", "Unknown Show A"])
+        self.assertEqual(len(calls), 1, "查无结果也要缓存，避免反复打接口")
+        self.assertEqual(db.scalar("SELECT status FROM scrape_cache"), "miss")
+
+        # 负缓存过期后应重新联网（这里直接把过期时间改到过去）
+        db.execute("UPDATE scrape_cache SET expires_at = '2000-01-01 00:00:00'")
+        self._run(fake_get, ["Unknown Show A"])
+        self.assertEqual(len(calls), 2)
+
+    def test_rate_limit_pauses_temporarily_instead_of_blocking_forever(self):
+        def fake_get(*args, **kwargs):
+            raise _HttpStatusError(429)
+
+        self._run(fake_get, ["Limited Show"])
+        self.assertFalse(metadata._online_usable(), "限流期间应暂停在线刮削")
+        self.assertFalse(metadata._ONLINE_BLOCKED, "429 不应被当成永久熔断")
+        self.assertGreater(metadata.stats()["paused_sec"], 0)
+
+        metadata._PAUSED_UNTIL = 0.0  # 模拟退避到期
+        self.assertTrue(metadata._online_usable(), "退避到期后应自动恢复，不需要用户改设置")
+
+    def test_other_network_errors_still_degrade_whole_batch(self):
+        """断网/超时维持旧行为：整批快速降级，避免每条都等 3 秒超时。"""
+
+        def fake_get(*args, **kwargs):
+            raise TimeoutError("timed out")
+
+        self._run(fake_get, ["Offline Show"])
+        self.assertTrue(metadata._ONLINE_BLOCKED)
+        self.assertFalse(metadata._online_usable())
+
+    def test_throttle_enforces_minimum_gap(self):
+        db.set_setting("bangumi_rate_ms", 120)
+        metadata.reset_online()
+        stamps = []
+
+        def fake_get(*args, **kwargs):
+            stamps.append(time.monotonic())
+            return self._resp([])
+
+        self._run(fake_get, ["Rate Show A", "Rate Show B"])
+        self.assertEqual(len(stamps), 2)
+        self.assertGreaterEqual(stamps[1] - stamps[0], 0.10,
+                                "两次发包应至少间隔一个限速窗口")
+
+    def test_force_rescrape_clears_cache_but_keeps_user_edits(self):
+        record = self.media("Forced - 01.mkv", title_guess="Forced Show")
+        db.execute(
+            "UPDATE media_files SET title_cn = ?, match_by = 'user' WHERE id = ?",
+            ("我手改的名字", record["id"]),
+        )
+        db.execute(
+            "INSERT INTO scrape_cache(raw_title, status, title_cn) VALUES ('Forced Show', 'hit', '旧缓存')"
+        )
+
+        out = metadata.rematch_all(force=True)
+        self.assertTrue(out["forced"])
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM scrape_cache WHERE raw_title = 'Forced Show'"), 0,
+                         "强制重刮应清空旧缓存")
+        self.assertEqual(
+            db.scalar("SELECT title_cn FROM media_files WHERE id = ?", (record["id"],)),
+            "我手改的名字",
+            "用户手改（match_by='user'）永不被强制重刮覆盖",
+        )
+
+    def test_clear_scrape_cache_reports_count(self):
+        db.execute("INSERT INTO scrape_cache(raw_title, status) VALUES ('A', 'miss')")
+        db.execute("INSERT INTO scrape_cache(raw_title, status) VALUES ('B', 'hit')")
+        out = metadata.clear_scrape_cache()
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["cleared"], 2)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM scrape_cache"), 0)
+
+    def test_stats_expose_cache_and_pause_state(self):
+        stats = metadata.stats()
+        self.assertIn("scrape_cache", stats)
+        self.assertIn("paused_sec", stats)
+        self.assertIn("total", stats["scrape_cache"])
 
 
 if __name__ == "__main__":

@@ -1290,6 +1290,9 @@ class Api:
             # 完成判定四阈值（v0.1.6）：片头忽略秒数 / 最低续播百分比 / 片尾忽略百分比
             "min_resume_percent", "ignore_seconds_at_start", "ignore_percent_at_end",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
+            # 刮削限速与缓存（v0.1.6）：请求间隔 / 429 退避秒数 / 负缓存 TTL / 成功缓存天数
+            "bangumi_rate_ms", "bangumi_backoff_sec", "online_negative_ttl_sec",
+            "online_cache_ttl_days",
             "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
             "everything_es_path", "everything_http_url", "everything_app_path",
             "everything_http_user", "everything_http_pass",
@@ -1309,8 +1312,10 @@ class Api:
                 except ValueError:
                     continue  # 非法路径直接忽略，sync 时也会二次拦截
             db.set_setting(key, value)
-        if any(k in (data or {}) for k in ("http_proxy", "bangumi_base", "metadata_source")):
-            metadata.reset_online()  # 代理或策略变了，下次导入重新探测在线源
+        if any(k in (data or {}) for k in (
+                "http_proxy", "bangumi_base", "metadata_source",
+                "bangumi_rate_ms", "bangumi_backoff_sec")):
+            metadata.reset_online()  # 代理 / 策略 / 限速变了，刷新在线配置缓存与退避窗口
         if "autostart" in (data or {}):
             if data["autostart"] in (True, 1, "1", "true", "on"):
                 autostart.enable()
@@ -1852,10 +1857,23 @@ class Api:
     def dictionary_status(self) -> dict:
         return metadata.stats()
 
-    def rematch_all(self) -> dict:
-        """手动重新匹配所有未识别标题（改了代理或补了词典后可点）。"""
-        result = metadata.rematch_all()
+    def rematch_all(self, force: bool = False) -> dict:
+        """手动重新匹配所有未识别标题（改了代理或补了词典后可点）。
+
+        ``force=True`` 即「强制重刮」：清空刮削缓存后重查，但仍保护用户手改
+        （``match_by='user'`` 的标题不会被覆盖）。
+        """
+        result = metadata.rematch_all(force=bool(force))
         return {k: v for k, v in result.items() if k != "results"}
+
+    def clear_scrape_cache(self) -> dict:
+        """只清缓存、不立即重刮（用户想省流量时用）。"""
+        result = metadata.clear_scrape_cache()
+        result["stats"] = metadata.scrape_cache_stats()
+        return result
+
+    def scrape_cache_stats(self) -> dict:
+        return metadata.scrape_cache_stats()
 
     def import_alias_file(self) -> dict:
         """可选：手动批量补充 data/alias_import.json 后导入。"""

@@ -164,6 +164,26 @@ CREATE TABLE IF NOT EXISTS name_alias (
     verified    INTEGER NOT NULL DEFAULT 0,
     created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime'))
 );
+
+-- 在线刮削结果缓存（含负缓存）。存的是「这个原始标题查过没有、结论是什么」，
+-- 与 name_alias（已确认的中文名映射）是两回事：查询未命中也要记一笔，
+-- 否则每次重新匹配都会把同一批查不到的标题再打一遍 Bangumi（易被限流/封禁）。
+-- 这张表是**可重建的缓存**，不进 backup.TABLES：备份恢复时允许丢掉它。
+CREATE TABLE IF NOT EXISTS scrape_cache (
+    raw_title   TEXT PRIMARY KEY,
+    -- hit 命中 / miss 查无结果 / error 请求失败（超时、429、断网等）
+    status      TEXT NOT NULL DEFAULT 'miss',
+    bgm_id      INTEGER,
+    title_cn    TEXT,
+    title_orig  TEXT,
+    season_no   INTEGER,
+    error       TEXT,
+    hits        INTEGER NOT NULL DEFAULT 0,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now','localtime')),
+    -- NULL = 长期有效（成功结果）；负缓存按 online_negative_ttl_sec 过期
+    expires_at  TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_scrape_expires ON scrape_cache(expires_at);
 """
 
 

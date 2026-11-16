@@ -17,11 +17,14 @@ import threading
 import time
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta
 from urllib.parse import quote
 
 from . import __version__, config, db
 
 _LOCK = threading.RLock()
+# 在线请求节流用独立锁：节流期间要 sleep，不能占着 _LOCK 把本地查询也卡住。
+_RATE_LOCK = threading.Lock()
 _INDEX: dict[str, dict] = {}
 _INDEX_DIRTY = True
 _BUILTIN_READY = False
@@ -29,6 +32,9 @@ _ONLINE_BLOCKED = False
 _ONLINE_ERROR = ""
 _CFG_CACHE: dict | None = None
 _CFG_AT = 0.0
+# 上一次真正发包的时间（monotonic）与 429 退避截止时间
+_LAST_CALL = 0.0
+_PAUSED_UNTIL = 0.0
 
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 NOISE_RE = re.compile(
@@ -238,42 +244,166 @@ def _online_config() -> dict:
         if _CFG_CACHE is not None and time.monotonic() - _CFG_AT < 3.0:
             return _CFG_CACHE
     s = db.all_settings()
+
+    def _int(key: str, default: int) -> int:
+        try:
+            return int(float(s.get(key) or default))
+        except (TypeError, ValueError):
+            return default
+
     cfg = {
         "mode": s.get("metadata_source") or "cache_first",
         "base": (s.get("bangumi_base") or "https://api.bgm.tv").rstrip("/"),
         "proxy": (s.get("http_proxy") or "").strip(),
+        "rate_ms": max(0, _int("bangumi_rate_ms", 250)),
     }
     with _LOCK:
         _CFG_CACHE, _CFG_AT = cfg, time.monotonic()
     return cfg
 
 
-def reset_online() -> None:
-    """设置变更后重新允许在线探测，并立即刷新配置缓存。"""
-    global _ONLINE_BLOCKED, _ONLINE_ERROR, _CFG_CACHE
+def reset_online(force: bool = False) -> None:
+    """设置变更后重新允许在线探测，并立即刷新配置缓存。
+
+    ``force=True`` 额外清空刮削缓存（含负缓存），使下次匹配真正重新联网，
+    供界面「强制重新刮削」使用；默认只解除熔断、不动已验证的缓存。
+    """
+    global _ONLINE_BLOCKED, _ONLINE_ERROR, _CFG_CACHE, _PAUSED_UNTIL
     with _LOCK:
         _ONLINE_BLOCKED = False
         _ONLINE_ERROR = ""
         _CFG_CACHE = None
+        _PAUSED_UNTIL = 0.0
+    if force:
+        clear_scrape_cache()
+
+
+def _paused() -> bool:
+    """是否处于 429 / 503 的退避窗口内。"""
+    return time.monotonic() < _PAUSED_UNTIL
 
 
 def _online_usable() -> bool:
-    """在线通道是否已启用且未被熔断。
+    """在线通道是否已启用且未被熔断、不在退避窗口内。
 
     注意：这是「通道状态」而非「网络连通性」结论；真正可达与否在请求时实测，
     失败会置 _ONLINE_BLOCKED。界面文案据此写「已启用 / 已降级」，不宣称「可用」。
     """
-    return not _ONLINE_BLOCKED and _online_config()["mode"] != "local_only"
+    return (
+        not _ONLINE_BLOCKED
+        and not _paused()
+        and _online_config()["mode"] != "local_only"
+    )
 
 
-def search_online(title: str) -> dict | None:
-    """导入时同步尝试 Bangumi 搜索；失败即整批降级，不阻塞后续条目。"""
-    global _ONLINE_BLOCKED, _ONLINE_ERROR
-    if _ONLINE_BLOCKED:
-        return None
+def _throttle(rate_ms: int) -> None:
+    """按最小间隔串行化在线请求。
+
+    ``match_titles`` 用 4 个线程并发刮削，没有间隔时 500 条标题会在几秒内
+    打满 Bangumi 的限流阈值。这里持独立锁排队，保证任意两次**发包**间隔
+    ≥ ``rate_ms``。上限 5 秒，避免配置成很大值时把界面卡死。
+    """
+    global _LAST_CALL
+    interval = max(0, rate_ms) / 1000.0
+    with _RATE_LOCK:
+        wait = _LAST_CALL + interval - time.monotonic()
+        if wait > 0:
+            time.sleep(min(wait, 5.0))
+        _LAST_CALL = time.monotonic()
+
+
+def _stamp(offset_sec: int) -> str:
+    """``offset_sec`` 秒之后的时间戳（与 db.now() 同格式，便于字符串比较）。"""
+    return (datetime.now() + timedelta(seconds=offset_sec)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _cache_lookup(title: str) -> tuple[bool, dict | None]:
+    """读刮削缓存，返回 ``(是否有未过期记录, 命中结果)``。
+
+    三态语义：
+    - ``(False, None)``：没查过，或记录已过期 → 应该联网；
+    - ``(True, None)``：负缓存命中（上次查无结果 / 请求失败）→ **不要重复发包**；
+    - ``(True, dict)``：成功结果，直接复用。
+    成功结果 ``expires_at`` 为 NULL，长期有效（除非用户强制重刮）。
+    """
+    r = db.row("SELECT * FROM scrape_cache WHERE raw_title = ?", (title,))
+    if not r:
+        return False, None
+    if r.get("expires_at") and str(r["expires_at"]) <= db.now():
+        return False, None
+    if r.get("status") != "hit" or not r.get("title_cn"):
+        return True, None
+    db.execute("UPDATE scrape_cache SET hits = hits + 1 WHERE raw_title = ?", (title,))
+    return True, _entry(r["title_cn"], r.get("title_orig") or "", (title,),
+                        r.get("bgm_id"), r.get("season_no"), "online")
+
+
+def _cache_put(title: str, status: str, *, entry: dict | None = None, error: str = "") -> None:
+    """写入刮削缓存。命中结果长期有效（除非配置了天数），未命中/失败按 TTL 过期。"""
+    if status == "hit":
+        days = db.get_int("online_cache_ttl_days", 0)
+        ttl = days * 86400 if days > 0 else 0
+    else:
+        ttl = max(60, db.get_int("online_negative_ttl_sec", 21600))
+    expires = _stamp(ttl) if ttl > 0 else None
+    e = entry or {}
+    db.execute(
+        "INSERT INTO scrape_cache(raw_title, status, bgm_id, title_cn, title_orig, season_no, "
+        "error, hits, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?) "
+        "ON CONFLICT(raw_title) DO UPDATE SET status = excluded.status, "
+        "bgm_id = excluded.bgm_id, title_cn = excluded.title_cn, "
+        "title_orig = excluded.title_orig, season_no = excluded.season_no, "
+        "error = excluded.error, created_at = excluded.created_at, "
+        "expires_at = excluded.expires_at",
+        (title, status, e.get("bgm_id"), e.get("title_cn"), e.get("title_orig"),
+         e.get("season_no"), error[:180] or None, db.now(), expires),
+    )
+
+
+def clear_scrape_cache() -> dict:
+    """清空刮削缓存（含负缓存），让下次匹配重新联网。"""
+    removed = db.execute("DELETE FROM scrape_cache")
+    return {"ok": True, "cleared": int(removed or 0)}
+
+
+def scrape_cache_stats() -> dict:
+    total = db.scalar("SELECT COUNT(*) FROM scrape_cache") or 0
+    expired = db.scalar(
+        "SELECT COUNT(*) FROM scrape_cache WHERE expires_at IS NOT NULL AND expires_at <= ?",
+        (db.now(),),
+    ) or 0
+    by_status = {
+        r["status"]: r["n"] for r in db.rows(
+            "SELECT status, COUNT(*) AS n FROM scrape_cache GROUP BY status")
+    }
+    return {"total": total, "expired": expired, "by_status": by_status}
+
+
+def search_online(title: str, *, force: bool = False) -> dict | None:
+    """导入时同步尝试 Bangumi 搜索；失败即整批降级，不阻塞后续条目。
+
+    三级保护（v0.1.6）：
+    1. **缓存优先**：命中结果与「查无结果 / 请求失败」都落 ``scrape_cache``；
+       负缓存按 ``online_negative_ttl_sec`` 过期，避免把当时的失败永久固化。
+    2. **限速**：任意两次发包间隔 ≥ ``bangumi_rate_ms``（4 线程并发时也成立）。
+    3. **退避**：429 / 503 只暂停 ``bangumi_backoff_sec`` 秒再恢复，而不是像旧版
+       那样一次限流就把整批在线刮削熔断到用户改设置为止。
+    ``force=True`` 跳过缓存与熔断判断，供「强制重刮」使用（仍受限速约束）。
+    """
+    global _ONLINE_BLOCKED, _ONLINE_ERROR, _PAUSED_UNTIL
     cfg = _online_config()
     if cfg["mode"] == "local_only":
         return None
+    if not force:
+        if _ONLINE_BLOCKED:
+            return None
+        if _paused():
+            return None
+        seen, cached = _cache_lookup(title)
+        if seen:
+            return cached
+
+    _throttle(cfg["rate_ms"])
     try:
         import requests
         url = f"{cfg['base']}/search/subject/{quote(title, safe='')}"
@@ -288,9 +418,21 @@ def search_online(title: str) -> dict | None:
         resp.raise_for_status()
         data = resp.json()
     except Exception as exc:
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        message = f"{type(exc).__name__}: {exc}"[:180]
+        if status in (429, 503):
+            # 被限流：只暂停一个退避窗口，不永久熔断整批
+            backoff = max(30, db.get_int("bangumi_backoff_sec", 120))
+            with _LOCK:
+                _PAUSED_UNTIL = time.monotonic() + backoff
+                _ONLINE_ERROR = f"HTTP {status}：在线刮削已暂停 {backoff} 秒"
+            _cache_put(title, "error", error=_ONLINE_ERROR)
+            return None
+        # 其它错误（断网 / 超时 / DNS）：维持原来的整批快速降级
         with _LOCK:
             _ONLINE_BLOCKED = True
-            _ONLINE_ERROR = f"{type(exc).__name__}: {exc}"[:180]
+            _ONLINE_ERROR = message
+        _cache_put(title, "error", error=message)
         return None
 
     if isinstance(data, dict):
@@ -298,6 +440,7 @@ def search_online(title: str) -> dict | None:
     else:
         items = data
     if not isinstance(items, list):
+        _cache_put(title, "miss")
         return None
 
     wanted = season_hint(title)
@@ -311,7 +454,10 @@ def search_online(title: str) -> dict | None:
         season = season_hint(cn) or season_hint(orig) or (1 if not wanted else wanted)
         if wanted and season != wanted:
             continue
-        return _entry(cn, orig, (title,), it.get("id"), season, "online")
+        hit = _entry(cn, orig, (title,), it.get("id"), season, "online")
+        _cache_put(title, "hit", entry=hit)
+        return hit
+    _cache_put(title, "miss")
     return None
 
 
@@ -349,7 +495,7 @@ def match_one(title: str, *, allow_online: bool = True) -> dict:
     is_foreign = not CJK_RE.search(title)
 
     # online_first：导入时先联网校准，本地词典作为兜底
-    if allow_online and is_foreign and mode == "online_first" and not _ONLINE_BLOCKED:
+    if allow_online and is_foreign and mode == "online_first" and not _ONLINE_BLOCKED and not _paused():
         first = search_online(title)
         if first:
             remember(title, first["title_cn"], title_orig=first["title_orig"],
@@ -376,7 +522,7 @@ def match_one(title: str, *, allow_online: bool = True) -> dict:
     if not is_foreign:
         # 本身已是中文名，无需翻译
         return {"matched": True, "title_cn": title, "by": "native"}
-    if not allow_online or _ONLINE_BLOCKED or mode == "local_only":
+    if not allow_online or not _online_usable():
         return {"matched": False, "title_cn": title, "by": "none", "reason": "no-match"}
     online = search_online(title)
     if online:
@@ -441,34 +587,39 @@ def match_titles(titles, *, allow_online: bool = True) -> dict:
     }
 
 
-def apply_to_media(results: dict) -> int:
+def apply_to_media(results: dict, *, force: bool = False) -> int:
     """把匹配结果写回媒体库：保留 title_guess 原文，中文名单独存 title_cn。
 
     返回值是真正被 UPDATE 的行数，而不是匹配成功的条目数。
+    ``force=True``（强制重刮）允许覆盖已有的自动匹配结果，
+    但**永远不覆盖** ``match_by='user'`` 的人工修正。
     """
     changed = 0
-    with db.session() as conn:
+    where = ("COALESCE(match_by,'') <> 'user'" if force else "title_cn IS NULL")
+    with db.session(immediate=True) as conn:
         for title, r in results.items():
             if not r.get("matched"):
                 continue
             cur = conn.execute(
-                "UPDATE media_files SET title_cn = ?, match_by = ? "
-                "WHERE title_cn IS NULL AND (lower(title_guess) = lower(?) OR lower(title_raw) = lower(?))",
+                f"UPDATE media_files SET title_cn = ?, match_by = ? "
+                f"WHERE {where} AND (lower(title_guess) = lower(?) OR lower(title_raw) = lower(?))",
                 (r["title_cn"], r["by"], title, title),
             )
             changed += max(0, cur.rowcount)
     return changed
 
 
-def apply_to_watched(results: dict) -> int:
+def apply_to_watched(results: dict, *, force: bool = False) -> int:
     changed = 0
-    with db.session() as conn:
+    where = ("COALESCE(match_by,'') <> 'user'" if force
+             else "(title_cn IS NULL OR title_cn = '' OR title_cn = title)")
+    with db.session(immediate=True) as conn:
         for title, r in results.items():
             if not r.get("matched"):
                 continue
             cur = conn.execute(
-                "UPDATE watched_list SET title_cn = ?, match_by = ? "
-                "WHERE lower(title) = lower(?) AND (title_cn IS NULL OR title_cn = '' OR title_cn = title)",
+                f"UPDATE watched_list SET title_cn = ?, match_by = ? "
+                f"WHERE lower(title) = lower(?) AND {where}",
                 (r["title_cn"], r["by"], title),
             )
             changed += max(0, cur.rowcount)
@@ -488,24 +639,37 @@ def auto_match_media() -> dict:
     return out
 
 
-def rematch_all() -> dict:
-    """手动重新匹配所有未识别标题（用户改了代理或词典后可点）。"""
-    reset_online()
+def rematch_all(force: bool = False) -> dict:
+    """手动重新匹配所有未识别标题（用户改了代理或词典后可点）。
+
+    ``force=True`` 即「强制重刮」：清空刮削缓存（含负缓存）后忽略已有
+    ``title_cn`` 重新匹配。无论是否强制，``match_by='user'`` 的人工修正都不被覆盖。
+    """
+    reset_online(force=force)
     rebuild_index()
-    titles = [
-        r["t"] for r in db.rows(
+    if force:
+        media_sql = (
+            "SELECT DISTINCT COALESCE(title_guess, title_raw) AS t FROM media_files "
+            "WHERE COALESCE(title_guess, title_raw) IS NOT NULL"
+        )
+        watched_sql = (
+            "SELECT DISTINCT title AS t FROM watched_list WHERE title IS NOT NULL AND title <> ''"
+        )
+    else:
+        media_sql = (
             "SELECT DISTINCT COALESCE(title_guess, title_raw) AS t FROM media_files "
             "WHERE title_cn IS NULL AND COALESCE(title_guess, title_raw) IS NOT NULL"
         )
-    ]
-    titles += [
-        r["t"] for r in db.rows(
-            "SELECT DISTINCT title AS t FROM watched_list WHERE title_cn IS NULL OR title_cn = '' OR title_cn = title"
+        watched_sql = (
+            "SELECT DISTINCT title AS t FROM watched_list "
+            "WHERE title_cn IS NULL OR title_cn = '' OR title_cn = title"
         )
-    ]
+    titles = [r["t"] for r in db.rows(media_sql)]
+    titles += [r["t"] for r in db.rows(watched_sql)]
     out = match_titles(titles)
-    out["applied_media"] = apply_to_media(out["results"])
-    out["applied_watched"] = apply_to_watched(out["results"])
+    out["applied_media"] = apply_to_media(out["results"], force=force)
+    out["applied_watched"] = apply_to_watched(out["results"], force=force)
+    out["forced"] = force
     return out
 
 
@@ -529,6 +693,9 @@ def stats() -> dict:
         "online_available": _online_usable(),
         "online_error": _ONLINE_ERROR,
         "mode": _online_config()["mode"],
+        # 429 退避剩余秒数（0 = 没在退避），供界面提示「已暂停，稍后自动恢复」
+        "paused_sec": max(0, int(_PAUSED_UNTIL - time.monotonic())),
+        "scrape_cache": scrape_cache_stats(),
     }
 
 

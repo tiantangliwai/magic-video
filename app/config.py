@@ -105,6 +105,15 @@ DEFAULTS = {
     "http_proxy": "",
     "metadata_source": "cache_first",
     "bangumi_base": "https://api.bgm.tv",
+    # 刮削限速与缓存（v0.1.6）：Bangumi 对匿名请求有限流，批量匹配 500 条标题时
+    # 4 线程并发无间隔会直接吃 429。默认 250ms 间隔（官方建议 ≥200ms），
+    # 429/503 后退避 120 秒再试，而不是永久熔断整批。
+    # online_cache_ttl_days=0 表示成功结果长期有效；负缓存（查无/失败）
+    # 默认 6 小时过期，避免把「当时没查到」永久固化成结论。
+    "bangumi_rate_ms": 250,
+    "bangumi_backoff_sec": 120,
+    "online_negative_ttl_sec": 21600,
+    "online_cache_ttl_days": 0,
     "window_width": 1180,
     "window_height": 780,
     "minimize_to_tray": 1,

@@ -21,6 +21,10 @@ def reset_module_state() -> None:
     metadata._ONLINE_ERROR = ""
     metadata._CFG_CACHE = None
     metadata._CFG_AT = 0.0
+    # 刮削限速/退避的进程内状态也要清：否则上一个用例留下的 _LAST_CALL 会让
+    # 下一个用例的在线请求白等一个间隔，_PAUSED_UNTIL 更会让它直接跳过联网。
+    metadata._LAST_CALL = 0.0
+    metadata._PAUSED_UNTIL = 0.0
     # 新增的进程内缓存（媒体库结果 / 网页搜索 / 黑名单词表）也要清，
     # 否则上一个用例的临时库数据会漏到下一个用例里。
     from app import api, blacklist, websearch
@@ -43,7 +47,10 @@ class IsolatedDbTestCase(unittest.TestCase):
         config.LOG_DIR = tmp / "logs"
         config.ALIAS_IMPORT_FILE = tmp / "alias_import.json"
         reset_module_state()
-        # 测试永远不发真实网络请求；需要验证在线分支时用例内自行替换该 mock
+        # 测试永远不发真实网络请求；需要验证在线分支时用例内自行替换该 mock。
+        # 先留住真实实现：P1-5 的限速 / 缓存用例要测 search_online 本体，
+        # 只在网络层 mock requests.get，不能把整个函数换掉。
+        self.real_search_online = metadata.search_online
         self.online_mock = mock.patch.object(metadata, "search_online", return_value=None)
         self.mock_search = self.online_mock.start()
         db.init_db()

@@ -1139,6 +1139,7 @@ async function renderScan() {
       ${dict.online_error ? `<br><span class="mono" style="font-size:11px">${esc(dict.online_error)}</span>` : ''}</div>
     <div class="btn-row">
       <button class="btn btn-primary" data-action="rematch">重新匹配未识别标题</button>
+      <button class="btn" data-action="rematch-force" title="清空刮削缓存后重新联网匹配，手改过的中文名不会被覆盖">强制重新刮削</button>
       <button class="btn" data-action="import-alias-file">导入手动补充词典</button>
       <button class="btn" data-action="open-data">打开数据目录</button>
     </div></div>
@@ -1228,6 +1229,18 @@ async function renderSettings() {
         <div class="tip">本机直连境外元数据接口超时；填代理后保存设置，下次导入即可实时补全长尾作品。</div></div>
       <div class="field"><label>Bangumi API 地址</label>
         <input class="input" id="set-bangumi_base" value="${esc(s.bangumi_base)}"></div>
+      <div class="field"><label>刮削请求间隔（毫秒）</label>
+        <input class="input" type="number" min="0" max="5000" step="50" id="set-bangumi_rate_ms" value="${esc(s.bangumi_rate_ms)}">
+        <div class="tip">任意两次在线请求的最小间隔，默认 250ms。调太小容易吃 429 限流，调太大会让批量匹配变慢。</div></div>
+      <div class="field"><label>429 限流后退避（秒）</label>
+        <input class="input" type="number" min="30" max="3600" step="10" id="set-bangumi_backoff_sec" value="${esc(s.bangumi_backoff_sec)}">
+        <div class="tip">被 Bangumi 限流时暂停刮削的时长，到期自动恢复；不会像旧版那样永久熔断。</div></div>
+      <div class="field"><label>未命中/失败结果缓存（小时）</label>
+        <input class="input" type="number" min="1" max="720" step="1" id="set-online_negative_ttl_sec" value="${Math.round(Number(s.online_negative_ttl_sec || 0) / 3600)}">
+        <div class="tip">「查不到」的结论保留多久再重试，默认 6 小时。填得越长越省流量，但新番补录后见效越慢。</div></div>
+      <div class="field"><label>已命中结果缓存（天，0 = 永久）</label>
+        <input class="input" type="number" min="0" max="3650" step="1" id="set-online_cache_ttl_days" value="${esc(s.online_cache_ttl_days)}">
+        <div class="tip">已确认的匹配默认永久有效；想定期刷新可填天数，或点下方「强制重新刮削」一次性清空。</div></div>
       <div class="field"><label>主窗口尺寸</label>
         <div style="display:flex;gap:9px">
           <input class="input" type="number" id="set-window_width" value="${esc(s.window_width)}">
@@ -2184,6 +2197,8 @@ async function handleAction(action, btn) {
       const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent',
         'min_resume_percent', 'ignore_seconds_at_start', 'ignore_percent_at_end', 'http_proxy',
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
+        // 刮削限速与缓存（v0.1.6）：负缓存按小时输入，保存时换算成秒
+        'bangumi_rate_ms', 'bangumi_backoff_sec', 'online_cache_ttl_days',
         'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url',
         'everything_http_user', 'everything_http_pass', 'everything_app_path',
         'video_blacklist',
@@ -2191,6 +2206,8 @@ async function handleAction(action, btn) {
         'pot_key_reset_speed', 'pot_key_fullscreen', 'pot_speed_step'];
       const data = {};
       keys.forEach(k => { const el = document.getElementById('set-' + k); if (el) data[k] = el.value; });
+      const negEl = document.getElementById('set-online_negative_ttl_sec');
+      if (negEl) data.online_negative_ttl_sec = String(Math.max(1, Number(negEl.value) || 6) * 3600);
       // 所有开关（含 daemon_auto_start / autostart / embed_player）由 data-setting 统一收集
       document.querySelectorAll('[data-setting]').forEach(el => { data[el.dataset.setting] = el.dataset.value; });
       await call('save_settings', data);
@@ -2263,11 +2280,14 @@ async function handleAction(action, btn) {
       } finally { btn.disabled = false; btn.textContent = overwrite ? '覆盖' : '仅新增'; }
       return;
     }
-    case 'rematch': {
-      btn.disabled = true; btn.textContent = '正在匹配…';
+    case 'rematch':
+    case 'rematch-force': {
+      const force = action === 'rematch-force';
+      if (force && !confirm('强制重新刮削会清空已缓存的在线匹配结果并重新联网查询；手改过的中文名不会被覆盖。继续？')) break;
+      btn.disabled = true; btn.textContent = force ? '正在重刮…' : '正在匹配…';
       try {
-        const r = await call('rematch_all');
-        toast(`重新匹配 ${r.matched} / ${r.total} 条（在线 ${r.by_online} 条）`, r.ok);
+        const r = await call('rematch_all', force);
+        toast(`重新匹配 ${r.matched} / ${r.total} 条（在线 ${r.by_online} 条${force ? '，已清空缓存' : ''}）`, r.ok);
       } finally {
         btn.disabled = false;
       }
