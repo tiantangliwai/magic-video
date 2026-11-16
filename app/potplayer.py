@@ -287,7 +287,7 @@ DEFAULT_KEY_BINDINGS = {
 KEY_SETTINGS = {name: f"pot_key_{name}" for name in DEFAULT_KEY_BINDINGS}
 SPEED_PRESETS = (1.0, 1.25, 1.5, 2.0)
 SPEED_STEPS = (0.1, 0.25, 0.5)
-DEFAULT_SPEED_STEP = 0.1
+DEFAULT_SPEED_STEP = 0.25
 
 
 def binding(action: str) -> str:

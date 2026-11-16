@@ -1,6 +1,6 @@
 """JSON 全量备份 / 恢复。
 
-备份文件是纯 JSON，包含 ``TABLES`` 里 9 张表的全部行，结构稳定便于用户
+备份文件是纯 JSON，包含 ``TABLES`` 里 10 张表的全部行，结构稳定便于用户
 自己查看或跨机器搬运。恢复支持两种模式：
 
 * ``merge``：只做新增（``INSERT OR IGNORE``），主键/唯一键冲突的行跳过；
@@ -37,6 +37,8 @@ TABLES: tuple[str, ...] = (
     "watch_progress",
     "watch_sessions",
     "name_alias",
+    # 用户标注（评分 / 标签）：属于用户手工输入，丢了重打不回来，必须进备份
+    "work_meta",
 )
 
 
@@ -59,7 +61,7 @@ def _default_path() -> Path:
 
 
 def export_to_json(path: str | Path | None = None) -> dict:
-    """把 9 张表导出成一个 JSON 文件。
+    """把 10 张表导出成一个 JSON 文件。
 
     ``path`` 为空时写到 ``DATA_DIR/backups/magicvideo-backup-<时间戳>.json``。
     成功返回 ``{"ok": True, "path": 绝对路径, "counts": {表: 行数}, "total": 总行数}``；
@@ -69,7 +71,7 @@ def export_to_json(path: str | Path | None = None) -> dict:
         tables: dict[str, list[dict]] = {}
         conn = db.get_conn()
         try:
-            # 显式开启一个读事务：9 张表读的是**同一个 WAL 快照**。否则每条
+            # 显式开启一个读事务：10 张表读的是**同一个 WAL 快照**。否则每条
             # SELECT 各自 autocommit，导出文件内部可能不自洽（media_files 与
             # watch_progress 差一拍，恢复后出现「有进度没文件」的行）。
             # WAL 下读事务不阻塞写，只会推迟 auto-checkpoint，导出后补收一次。

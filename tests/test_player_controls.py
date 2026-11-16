@@ -35,12 +35,13 @@ class KeyBindingTests(IsolatedDbTestCase):
         self.assertEqual(potplayer.binding("self_destruct"), "")
 
     def test_speed_step_only_accepts_known_values(self):
-        self.assertEqual(potplayer.speed_step(), 0.1)
-        for value in (0.25, 0.5):
+        # 默认 0.25：1.25 / 1.5 / 2.0 这三个预设才能精确命中（0.1 步进到不了 1.25）
+        self.assertEqual(potplayer.speed_step(), 0.25)
+        for value in (0.1, 0.5):
             db.set_setting("pot_speed_step", value)
             self.assertEqual(potplayer.speed_step(), value)
         db.set_setting("pot_speed_step", 0.03)
-        self.assertEqual(potplayer.speed_step(), 0.1)
+        self.assertEqual(potplayer.speed_step(), 0.25)
 
 
 class SendKeyTests(IsolatedDbTestCase):
@@ -128,10 +129,18 @@ class SpeedTests(IsolatedDbTestCase):
                              (presses, actual, exact), wanted)
 
     def test_step_01_reports_inexact_125_without_pretending(self):
+        """用户显式选了 0.1 步进时，界面必须如实报「到不了 1.25」。"""
+        db.set_setting("pot_speed_step", 0.1)
         plan = potplayer.speed_plan(1.25)
         self.assertFalse(plan["exact"])
         self.assertEqual(plan["actual"], 1.2)
         self.assertEqual(plan["presses"], 2)
+
+    def test_default_step_reaches_all_presets(self):
+        """默认 0.25 之后，四个预设全部精确命中（P2-5）。"""
+        self.assertEqual(potplayer.speed_step(), 0.25)
+        for wanted in potplayer.SPEED_PRESETS:
+            self.assertTrue(potplayer.speed_plan(wanted)["exact"], wanted)
 
     def test_invalid_targets_are_rejected(self):
         for value in ("abc", 0, -1, 99):

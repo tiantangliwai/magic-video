@@ -441,7 +441,7 @@ class FrontendContractTests(unittest.TestCase):
                               self.js.split("const RENDERERS = {", 1)[1].split("};", 1)[0]))
         self.assertEqual(nav, meta)
         self.assertEqual(nav, rend)
-        self.assertEqual(len(nav), 13)
+        self.assertEqual(len(nav), 14)
 
     def test_cover_controls_moved_out_of_poster_wall(self):
         block = self.js.split("async function renderPosters()", 1)[1].split(

@@ -25,9 +25,10 @@ class BackupTableTest(IsolatedDbTestCase):
                 "watch_progress",
                 "watch_sessions",
                 "name_alias",
+                "work_meta",
             ),
         )
-        self.assertEqual(len(backup.TABLES), 9)
+        self.assertEqual(len(backup.TABLES), 10)
 
 
 class BackupExportTest(IsolatedDbTestCase):

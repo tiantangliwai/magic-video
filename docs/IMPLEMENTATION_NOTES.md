@@ -60,7 +60,7 @@
 
 ## 7. 测试与版本（细节）
 
-- `run_tests.py` + tests/ 808 个 unittest（test_websearch 20 / test_poster_watched 14 / test_blacklist +17 / test_player_controls +7 / test_concurrency 10 / test_listimport 21）。IsolatedDbTestCase 临时 SQLite + mock search_online，不碰真实库/网络，`reset_module_state()` 清 `api._MEDIA_CACHE` / `websearch.clear_cache()` / `blacklist.invalidate()` / `metadata._LAST_CALL` / `metadata._PAUSED_UNTIL`（限速状态跨用例泄漏会让"该发包却没发包"）。只统计总数用 `TestLoader().discover()`，不算跑全量。快照 `D:\magicvideo\test_last.json`。
+- `run_tests.py` + tests/ 863 个 unittest（test_websearch 20 / test_poster_watched 14 / test_blacklist +17 / test_player_controls +7 / test_concurrency 10 / test_listimport 21 / test_cache_keys 7 / test_stats 25）。IsolatedDbTestCase 临时 SQLite + mock search_online，不碰真实库/网络，`reset_module_state()` 清 `api._MEDIA_CACHE` / `websearch.clear_cache()` / `blacklist.invalidate()` / `metadata._LAST_CALL` / `metadata._PAUSED_UNTIL`（限速状态跨用例泄漏会让"该发包却没发包"）。只统计总数用 `TestLoader().discover()`，不算跑全量。快照 `D:\magicvideo\test_last.json`。
 - 版本真源 `app/__init__.py::__version__`；发版同步 README/AGENTS/CHANGELOG/FEATURES/TESTING/OBSIDIAN/index.html 并打 tag，`test_docs.py` 校验。
 
 ## 8. 提交与阶段历史（按需查，非当前状态）
@@ -127,3 +127,104 @@
 
 - `api._display_title_expr()` 生成一段 SQL 表达式，按 `title_lang_pref`（`cn` / `orig`）在 `title_cn` 与 `title_orig` 间选择并回退，**10 处列表 SQL 统一改用它**（注意有两种前缀形态：`SELECT f.*,` 与 `f.status, f.deleted_at,`，改的时候要一一核对）。
 - 前端设置页新增"列表展示标题"下拉。
+
+## 10. v0.1.6 P2 阶段实现细节（统计 / 海报墙 / 多版本 / 标注）
+
+### 10.1 看片统计（P2-1）
+
+- `Api.get_watch_stats(days)` 全部在 Python 里聚合，不写复杂 SQL：先按 `started_at >= since` 取会话，
+  再用 `blacklist.filter_rows` 过一遍（黑名单判定是归一化的，放 SQL 里写不进去），最后归日 / 归作品。
+- **为什么不用 `GROUP BY substr(started_at,1,10)`**：会话量本来就小（个人使用，一年也就几千条），
+  而黑名单过滤必须在 Python 侧做；先过滤再聚合，口径只有一处，不会出现「页面总数与明细对不上」。
+- `daily` 一定是**连续 N 天**（含 0 值的那天），前端柱状图不用自己补空洞。
+- 统计口径随返回值下发（`note`），页面直接展示。口径改了就改那一句，别在文档和 UI 各写一版。
+- 完成率取 `watch_progress` 的 `completed/total`，与「有效时长」是两套数据，不要混算。
+
+### 10.2 按季海报墙 + 继续观看行（P2-2）
+
+- `get_poster_wall` 现在同时返回 `cards`（按作品）与 `season_cards`（按季）。**cards 的语义一点没动**，
+  既有调用方与测试不受影响；前端只做「哪个数组」的切换。
+- `season_cards` 复用了作品层的 `cover_titles` 与 `watched_listed` 判定，所以同一部作品的各季
+  角标一致、封面一致（不会一季有图一季空白）。
+- 季节点需要季号：`library_tree._finalize` 里给 `kind == "season"` 的节点补 `season_no`，
+  因为内部字段 `_season` 会在 finalize 末尾被清掉。
+- `get_continue_row` 在 Python 里按 `display_title` 去重（同一作品多集只留 last_played_at 最新的那条），
+  不做 SQL 窗口函数——SQLite 版本参差，而且黑名单过滤同样在 Python 侧。
+- 继续观看行只取 `completed = 0 AND position_ms > 0 AND dismissed_at IS NULL AND deleted_at 为空`。
+
+### 10.3 多版本合并（P2-3）
+
+- **只在展示层合并**。`library_tree._collapse_versions()` 按 `(tree_season, tree_episode)` 分桶，
+  主条目用 `rank()` 挑：已看完 > 有进度 > 体积大 > id 小。其余版本进 `versions` 数组。
+- `_apply_version_merge(group)` 必须**在作品层做一次**，再把结果按季号铺回各季节点：
+  如果对作品和季各做一次，同一个 dict 会被处理两遍，`versions` 会被追加两次（这个坑踩过）。
+- 副作用（有意为之）：`file_count` 从「文件数」变成「集数」。`all_done` / `removable_count` 都跟着变，
+  语义更正确——「12 集全看完」不该因为多存了一份 BD 就变成「13 个文件里看完 12 个」。
+- 平铺列表（`get_media_files_page`）另外挂 `versions`：`_version_index()` 一次分组查询 + 按
+  `_db_signature()` 缓存，翻页不重扫。前端 `<select class="version-select">` 的 change 走
+  `playSmart('id', id, false)`，与点「播放」完全同一条路径。
+
+### 10.4 标签 / 评分 / 日历（P2-4）
+
+- `work_meta(work_key PK, rating, tags, updated_at)`：`work_key` 就是海报卡的 `group_id`
+  （`series::<key>`），与「改名覆盖」用的是同一套键，所以改完名标注不会丢。
+- **与 `media_files` 无外键**：删本地文件、换盘、清缓存都不该带走用户手写的评分。
+  因此它必须进 `backup.TABLES`（现为 10 张），`tests/test_backup.py` 的数量断言同步改了。
+- `tags` 存成逗号分隔字符串而不是子表：个人工具，标签量级是「每部几个」，
+  子表要 JOIN、要额外迁移，收益不抵成本。保存时中文逗号统一归一化。
+- 日历不落表：`get_watch_calendar` 按月 `LIKE 'YYYY-MM-%'` 取会话后聚合，删会话日历立刻变。
+
+### 10.5 倍速与快搜提示（P2-5）
+
+- `potplayer.DEFAULT_SPEED_STEP` 0.1 → 0.25。`SPEED_STEPS` 仍保留 (0.1, 0.25, 0.5)，
+  老用户存的 0.1 继续尊重——**这是配置项而不是常量，不能强行覆盖**。
+- `test_player_controls` 里原来靠默认 0.1 验证「1.25 到不了」的用例，改成显式 `set_setting(0.1)`；
+  另加一条「默认步进能精确命中全部预设」，两边都锁住。
+- `everything.capabilities()` 增加 `degraded / degraded_reason / http_enable_steps`。
+  **只读探测**：不读改 Everything 的 ini、不重启服务（项目铁律），提示里只给操作路径。
+
+### 10.6 集数置信度（OPTIMIZATION #6 尾巴）
+
+- `SEASON_RE` 的中文分支**必须要求「季/期」后缀**。旧写法 `(?:Season|S|第)\s*(\d{1,2})\s*(?:季|期)?`
+  后缀可选，导致 `第03话` 被同时读成 season=3、episode=3，一部 12 集的番会拆成 12 个季。
+- `EPISODE_PATTERNS[0]` 同理：`第` 分支也要求 `话/集/話` 后缀，否则 `第2季` 会被当成第 2 集。
+- 新增 `XFORMAT_RE`（`1x01`）优先级只在 `SxxEyy` 之后、其它规则之前。
+- `RANGE_EP_RE` 两个数字之间**不允许空格**：`Season 2 - 05` 里的「2 - 05」是季 + 集不是区间
+  （第一版允许空格，把这类文件全打成了 low，实测才发现）。
+- 置信度分三档而不是两档：`1x01` / `第01话` 是**规范写法**，没有歧义，定 medium 即可；
+  真正进待确认的只有「同一串数字两种解释都成立」的 `[01]` 与 `01-02`，定 low。
+- 落库两列 `episode_source` / `episode_confidence`；老库靠 `_migrate` 补列，
+  首次扫描时**只填空**（`episode_source` 为空才写），用户确认过的 `user` 永不被覆盖。
+- `Api.set_episode()` 校验 0~99 / 0~9999，留空表示「不区季」；写入即标 `user`+`high`。
+
+### 10.7 站点解析单一层（补强 C-1）
+
+- 新建 `app/sites.py`：正则、`blocks()`、`clean_title()`、`image_urls()`、`age_candidates()`、
+  `age_entries()`、`seeduck_entries()`、`absolute_url()`、`search_url()`、`health()`。
+- `covers.py` 用**别名转出**保留 `_blocks` / `_TITLE_RE` / `SEEDUCK_PAGES` 等旧名字：
+  这些名字被多个测试直接引用，为了「重构好看」去改一堆测试是负收益。
+- `covers.parse_agedm` 需要「含占位 src 的全部候选」，`websearch.parse_agedm` 只需要真实封面。
+  所以 `age_entries()` 同时返回 `images`（含 `src`，历史契约）与 `covers`（只 `data-original`），
+  由调用方各取所需——这是两边唯一真正的差异，其余全部共用。
+- `seeduck_entries(require_image=, legacy=)`：封面抓取要求必须有图（`require_image=True`）
+  且需要旧结构兜底；网页搜索允许无图（`require_image=False`）但要复用同一套正则。
+- 解析空结果会 `_bump(source, 0)` 计数，`sites.health()` 可查；`websearch` 的返回里带
+  `parse_health`，界面上「解析不到结果（站点可能改版）」有据可依。
+- `tests/base.py::reset_module_state()` 增加 `sites.reset_health()`，否则解析计数跨用例累加。
+
+### 10.8 缓存键守护（补强 C-2）
+
+- `tests/test_cache_keys.py` 两路守：
+  - **源码**：`_data_fingerprint` / `_db_signature` / `_cache_get` / `_cache_put` 的函数体里
+    不许出现 `mtime|st_ctime|getmtime`（docstring 里解释「为什么不用」是允许的，所以要先剥 docstring）。
+  - **行为**：写一条 `watch_progress` 不改变 `_data_fingerprint()`，但改变 `_db_signature()`；
+    增删 `media_files` / `watched_list` 必须改变指纹。
+- 这条以前只写在文档里靠人看。守护进程每 3 秒写一次进度，一旦把 mtime 放进键，缓存永远命中不了。
+
+### 10.9 已知限制
+
+- 多版本合并按 (季, 集) 判定，**同一集但季号缺失**（一个标 S1E01、一个完全没标季）不会被合并。
+  这是有意的：缺季号时无法确认它们真是同一集，宁可不合并也别合错。
+- 统计「按开始日期归日」：跨零点连看会把整段算在开始那天，不做时间切分。个人使用量级下没必要。
+- 日历只按月查，跨月对比要自己翻；不做年度热力图（数据量撑不起，且收益低于复杂度）。
+- 安装器真机 7 步仍未自动化：需要干净机器 / 提权 / 注册表，无法在单测里安全模拟。

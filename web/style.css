@@ -96,6 +96,7 @@ button, input, textarea, select { font-family: inherit; font-size: 13px; }
 .ni-track  { --ic-bg: #e6f7ef; --ic-color: #1f9d63; }
 .ni-process { --ic-bg: #e9f2f5; --ic-color: #2b7f96; }
 .ni-gear   { --ic-bg: #eeeaf2; --ic-color: #7a6a90; }
+.ni-stats  { --ic-bg: #e8f3ff; --ic-color: #2f6fd0; }
 html[data-theme="dark"] .ni-home   { --ic-bg: #25325a; --ic-color: #8aa8ff; }
 html[data-theme="dark"] .ni-play   { --ic-bg: #332a52; --ic-color: #b599ff; }
 html[data-theme="dark"] .ni-clock  { --ic-bg: #463422; --ic-color: #f5ad6b; }
@@ -108,6 +109,7 @@ html[data-theme="dark"] .ni-folder { --ic-bg: #413318; --ic-color: #f2c563; }
 html[data-theme="dark"] .ni-track  { --ic-bg: #1c3d30; --ic-color: #6ee0a8; }
 html[data-theme="dark"] .ni-process { --ic-bg: #1d3a44; --ic-color: #7fd2e8; }
 html[data-theme="dark"] .ni-gear   { --ic-bg: #322c40; --ic-color: #b9a8d0; }
+html[data-theme="dark"] .ni-stats  { --ic-bg: #1e3050; --ic-color: #7ab0ff; }
 html[data-theme="dark"] .nav-item.active .nav-icon { color: #14171d; }
 .sidebar-foot { margin-top: auto; padding: 12px 8px 0; border-top: 1px solid var(--border); }
 .daemon-state { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin-bottom: 10px; }
@@ -272,6 +274,8 @@ td[data-edit-watched]:hover { background: var(--primary-soft); }
 .switch.on::after { left: 20px; }
 .notice { background: var(--primary-soft); border-radius: 9px; padding: 12px 14px; color: var(--notice-text);
   font-size: 12px; line-height: 1.8; margin-bottom: 14px; }
+/* 降级 / 需要用户操作时的提示：琥珀色底，避免和普通蓝底说明混在一起被忽略 */
+.notice.warn { background: var(--amber-soft); color: var(--amber); }
 .toast { position: absolute; right: 26px; bottom: 24px; background: #252a36; color: #fff; padding: 11px 16px;
   border-radius: 9px; font-size: 12px; opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s;
   transform: translateY(8px); z-index: 99; max-width: 380px; }
@@ -369,6 +373,45 @@ button[disabled] { opacity: .45; cursor: not-allowed; }
 .poster-tag.amber { background: var(--amber-soft); color: var(--amber); }
 .poster-actions { margin-top: auto; display: flex; flex-wrap: wrap; gap: 5px; padding-top: 4px; }
 .poster-actions .btn { padding: 5px 8px; font-size: 11px; flex: 1 1 auto; }
+
+/* 「继续观看」置顶行：横向滚动，不换行，避免把下面的海报墙推下去 */
+.continue-row { display: flex; gap: 10px; overflow-x: auto; padding: 2px 0 10px; }
+.continue-card { flex: 0 0 210px; display: flex; gap: 9px; align-items: stretch; text-align: left;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px; cursor: pointer; transition: transform .12s, border-color .12s; }
+.continue-card:hover { transform: translateY(-2px); border-color: var(--primary); }
+.continue-art { width: 46px; flex: 0 0 46px; border-radius: 7px; display: flex; align-items: center;
+  justify-content: center; font-size: 15px; font-weight: 700; color: var(--primary);
+  background: linear-gradient(135deg, var(--primary-soft), var(--surface)); }
+.continue-body { min-width: 0; flex: 1; }
+.continue-title { font-size: 12px; font-weight: 600; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; }
+.continue-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
+
+/* 看片统计：每日时长柱状图（纯 CSS，不引图表库） */
+.stat-bars { display: flex; align-items: flex-end; gap: 3px; height: 140px; padding: 6px 2px 0;
+  border-bottom: 1px solid var(--border); overflow-x: auto; }
+.stat-bar { flex: 1 0 10px; min-width: 10px; height: 100%; display: flex; flex-direction: column;
+  justify-content: flex-end; align-items: center; gap: 3px; }
+.stat-bar-fill { width: 70%; background: linear-gradient(180deg, var(--primary), var(--primary-soft));
+  border-radius: 4px 4px 0 0; transition: height .2s; }
+.stat-bar-label { font-size: 9px; color: var(--faint); }
+
+/* 观看日历：7 列格，颜色深浅表示当天时长 */
+.cal-month { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; max-width: 520px; }
+.cal-head { font-size: 11px; color: var(--muted); text-align: center; padding-bottom: 2px; }
+.cal-cell { position: relative; aspect-ratio: 1; border-radius: 7px; background: var(--surface-2);
+  border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center;
+  justify-content: center; font-size: 11px; color: var(--muted); }
+.cal-cell.is-empty { background: transparent; border-color: transparent; }
+.cal-cell b { font-size: 10px; color: var(--primary); }
+.cal-cell.lv1 { background: var(--primary-soft); border-color: var(--primary-soft); }
+.cal-cell.lv2 { background: var(--primary-soft); border-color: var(--primary); }
+.cal-cell.lv3 { background: var(--primary); border-color: var(--primary); color: #fff; }
+.cal-cell.lv3 b { color: #fff; }
+.cal-cell.lv4 { background: var(--primary); border-color: var(--primary); color: #fff; filter: brightness(.85); }
+.cal-cell.lv4 b { color: #fff; }
 
 /* 危险操作二次确认：列出全部路径，取消是默认且最显眼的安全出口 */
 .modal-layer { position: fixed; inset: 0; z-index: 9999; display: flex; align-items: center;

@@ -44,6 +44,7 @@ const VIEW_META = {
   continue: ['继续观看', '从上次中断的位置接着看'],
   history: ['历史记录', '每次观看的时间与进度'],
   library: ['媒体库', '扫描到的本地视频文件'],
+  stats: ['看片统计', '有效观看时长、完成率与观看日历'],
   posters: ['剧集墙', '按作品展示封面、季数与续播'],
   quicksearch: ['全盘快搜', '整台电脑的视频文件，一搜即播'],
   websearch: ['网页搜索', '同时搜 AGE动漫 与 Seeduck，结果标明来源'],
@@ -683,6 +684,12 @@ function fileListRows(rows) {
         <span class="badge ${tone}">${esc(label)}</span>
         ${num(r.completed) === 1 ? '<span class="badge green">已看完</span>' : ''}
         ${r.deleted_at ? '<span class="badge amber">本地文件已移除</span>' : ''}
+        ${(r.versions && r.versions.length > 1)
+          ? `<span class="badge">${r.versions.length} 个版本</span>
+             <select class="input version-select" style="width:auto;font-size:11px;padding:2px 6px"
+               title="同一集有多个文件（BD / WEB 等），选一个播放；进度各自独立">
+               ${r.versions.map(v => `<option value="${v.file_id}" ${v.file_id === r.id ? 'selected' : ''}>${esc(v.filename)}</option>`).join('')}
+             </select>` : ''}
       </div>
       <div class="meta">${esc(r.filename)}</div>
       <div class="mono">${esc(r.path)}</div></div>
@@ -1297,8 +1304,8 @@ async function renderSettings() {
       </div>
       <div class="field"><label>倍速快捷键每次步进</label>
         <select class="input" id="set-pot_speed_step">
-          <option value="0.1" ${String(s.pot_speed_step || '0.1') === '0.1' ? 'selected' : ''}>0.1×（默认，1.25× 会就近到 1.2 或 1.3）</option>
-          <option value="0.25" ${String(s.pot_speed_step) === '0.25' ? 'selected' : ''}>0.25×（推荐，1.25 / 1.5 / 2.0 全部精确）</option>
+          <option value="0.25" ${String(s.pot_speed_step || '0.25') === '0.25' ? 'selected' : ''}>0.25×（默认，1.25 / 1.5 / 2.0 全部精确）</option>
+          <option value="0.1" ${String(s.pot_speed_step) === '0.1' ? 'selected' : ''}>0.1×（1.25× 只能就近到 1.2 或 1.3）</option>
           <option value="0.5" ${String(s.pot_speed_step) === '0.5' ? 'selected' : ''}>0.5×</option>
         </select>
         <div class="tip">倍速下拉每次先按「恢复正常倍速」归 1.0，再按 N 次「加速」，结果与当前倍速无关。步进 0.1 时 1.25× 无法精确到达，界面会提示实际值。</div></div>
@@ -1471,7 +1478,8 @@ function renderDiagnose(data) {
 }
 
 // ---------- 剧集墙：卡片式展示（参考 SeedHub / AGE动漫 的作品墙） ----------
-let posterState = { keyword: '', cards: [], covers: {}, status: {}, loading: false };
+let posterState = { keyword: '', cards: [], seasonCards: [], continueRow: [], metas: {},
+  mode: 'work', covers: {}, status: {}, loading: false };
 let esState = { keyword: '', rows: [], source: '', hint: '' };
 let procPollTimer = null;
 
@@ -1515,7 +1523,8 @@ function posterCardHtml(card, cover) {
   const art = cover
     ? `<img class="poster-art" src="${cover}" alt="${esc(card.title)}" loading="lazy">`
     : `<div class="poster-art poster-placeholder"><span>${esc((card.title || '?').slice(0, 2))}</span></div>`;
-  const seasons = card.season_count > 1 ? `<span class="poster-tag">${card.season_count} 季</span>` : '';
+  const seasons = card.season_count > 1 && posterState.mode !== 'season'
+    ? `<span class="poster-tag">${card.season_count} 季</span>` : '';
   const progress = card.playing_count ? `<span class="poster-tag amber">在看 ${num(card.playing_count)}</span>` : '';
   // 用户要求：剧集墙不放「播放下一集」；「查看分集」必须带着搜索词跳过去，
   // 否则切到媒体库后满屏文件，忘了自己是从哪部作品点进来的。
@@ -1525,14 +1534,23 @@ function posterCardHtml(card, cover) {
     : '';
   const removedTag = card.all_done && num(card.removable_count) === 0
     ? '<span class="poster-tag amber">本地文件已移除</span>' : '';
+  // 作品标注（P2-4）：评分与标签都挂在作品上，季卡片共用同一个 key
+  const metaKey = card.work_key || card.group_id || card.title;
+  const meta = posterState.metas[metaKey] || {};
+  const stars = meta.rating ? `<span class="poster-tag" title="我的评分">★ ${num(meta.rating)}</span>` : '';
+  const tagList = String(meta.tags || '').split(',').filter(Boolean).slice(0, 3)
+    .map(t => `<span class="poster-tag">${esc(t)}</span>`).join('');
   return `<div class="poster-card">${art}${posterStateTag(card)}
     <div class="poster-body">
       <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
       <div class="poster-meta">${num(card.file_count)} 集</div>
-      <div class="poster-tags">${seasons}${progress}${removedTag}</div>
+      <div class="poster-tags">${seasons}${progress}${removedTag}${stars}${tagList}</div>
       <div class="poster-actions">
         <button class="btn btn-sm" data-action="rename-work" data-node="${esc(card.group_id)}"
           data-name="${esc(card.title)}" title="修改这部作品在软件里显示的名称">改名</button>${cleanup}
+        <button class="btn btn-sm" data-action="rate-work" data-node="${esc(metaKey)}"
+          data-name="${esc(card.work_title || card.title)}" data-rating="${num(meta.rating)}"
+          data-tags="${esc(meta.tags || '')}" title="给这部作品打分、加标签（纯本地保存）">评分</button>
         <button class="btn btn-sm" data-action="set-cover" data-name="${esc(card.title)}"
           title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>
         <button class="btn btn-sm" data-action="goto" data-view="library"
@@ -1544,16 +1562,42 @@ function renderPosterCards() {
   const box = document.getElementById('posterGrid');
   if (!box) return;
   const kw = posterState.keyword.trim().toLowerCase();
-  const cards = kw ? posterState.cards.filter(c => c.title.toLowerCase().includes(kw)) : posterState.cards;
+  const source = posterState.mode === 'season' ? posterState.seasonCards : posterState.cards;
+  const cards = kw ? source.filter(c => c.title.toLowerCase().includes(kw)) : source;
   const count = document.getElementById('posterCount');
   if (count) {
     // 「未看」数量放在汇总里：整墙一百多张卡片，光靠角标数不过来
     const unseen = cards.filter(c => (c.watch_state || 'none') === 'none').length;
-    count.textContent = `${cards.length} 部作品 · 未看 ${unseen} 部 · 已有封面 ${Object.keys(posterState.covers).length} 张`;
+    const unit = posterState.mode === 'season' ? '季' : '部作品';
+    count.textContent = `${cards.length} ${unit} · 未看 ${unseen} · 已有封面 ${Object.keys(posterState.covers).length} 张`;
   }
   box.innerHTML = cards.length
     ? cards.map(c => posterCardHtml(c, posterState.covers[c.title])).join('')
     : empty('还没有作品卡片', '先在「扫描目录」添加视频目录；抓取封面后会显示海报');
+}
+
+// 「继续观看」置顶行（P2-2）：同一作品只留最新一条，点海报直接续播
+function renderContinueRow() {
+  const box = document.getElementById('continueRow');
+  if (!box) return;
+  const items = posterState.continueRow || [];
+  if (!items.length) { box.innerHTML = ''; return; }
+  box.innerHTML = `<div class="section-head" style="margin-top:4px">
+      <h3 style="font-size:14px">继续观看</h3>
+      <span class="badge blue">${items.length} 部</span></div>
+    <div class="continue-row">${items.map(it => {
+      const ep = it.episode_no ? `第 ${num(it.episode_no)} 集` : esc(it.filename || '');
+      const season = it.season_no ? `S${num(it.season_no)} · ` : '';
+      const pct = Math.max(0, Math.min(100, num(it.percent)));
+      return `<button class="continue-card" data-action="play" data-id="${num(it.file_id)}"
+          title="继续观看 ${esc(it.work_title)} ${esc(ep)}">
+        <div class="continue-art">${esc((it.work_title || '?').slice(0, 2))}</div>
+        <div class="continue-body">
+          <div class="continue-title">${esc(it.work_title)}</div>
+          <div class="continue-meta">${season}${ep}</div>
+          <div class="bar" style="margin-top:6px"><span style="width:${pct}%"></span></div>
+        </div></button>`;
+    }).join('')}</div>`;
 }
 
 function renderCoverStatus() {
@@ -1579,13 +1623,27 @@ async function loadPosterWall() {
   if (posterState.loading) return;
   posterState.loading = true;
   try {
-    const data = await call('get_poster_wall', { keyword: posterState.keyword });
+    const [data, cont] = await Promise.all([
+      call('get_poster_wall', { keyword: posterState.keyword }),
+      call('get_continue_row', 12),
+    ]);
     posterState.cards = data.cards || [];
+    posterState.seasonCards = data.season_cards || [];
+    posterState.continueRow = (cont && cont.items) || [];
     posterState.covers = data.covers || {};
     posterState.status = data.cover_status || {};
+    // 作品标注（评分/标签）一次取齐，卡片渲染时直接读，避免每张卡一次调用
+    const keys = [...new Set((posterState.cards || []).map(c => c.work_key).filter(Boolean))];
+    if (keys.length) {
+      try {
+        const meta = await call('get_work_meta', keys.slice(0, 500));
+        posterState.metas = (meta && meta.items) || {};
+      } catch (e) { posterState.metas = {}; }
+    }
     // 有缓存的封面用 data URI 补齐（后端一次性返回，避免 file:// 跨域）
     const titles = Object.keys(posterState.covers);
     if (titles.length) posterState.covers = await coverUris(titles);
+    renderContinueRow();
     renderPosterCards();
     renderCoverStatus();
   } catch (err) {
@@ -1596,6 +1654,117 @@ async function loadPosterWall() {
   }
 }
 
+// ---------- 看片统计（P2-1）+ 观看日历（P2-4） ----------
+let statsState = { days: 30, month: '', data: null, calendar: null };
+
+function statsBars(daily) {
+  if (!daily || !daily.length) return empty('这段时间没有观看记录', '去看几集，这里就会有数据');
+  const max = Math.max(1, ...daily.map(d => num(d.minutes)));
+  return `<div class="stat-bars">${daily.map(d => {
+    const h = Math.max(2, Math.round((num(d.minutes) / max) * 100));
+    const title = `${d.date} · ${d.minutes} 分钟 · ${d.sessions} 次`;
+    return `<div class="stat-bar" title="${esc(title)}">
+      <div class="stat-bar-fill" style="height:${h}%"></div>
+      <span class="stat-bar-label">${Number(d.date.slice(8))}</span></div>`;
+  }).join('')}</div>`;
+}
+
+function calendarHtml(cal) {
+  if (!cal || !cal.days) return '';
+  const [y, m] = String(cal.month || '').split('-').map(Number);
+  if (!y || !m) return '';
+  const first = new Date(y, m - 1, 1);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  // 周一为一周开始：JS 的 getDay() 周日是 0
+  const lead = (first.getDay() + 6) % 7;
+  const byDay = {};
+  (cal.days || []).forEach(d => { byDay[Number(d.day)] = d; });
+  const maxMin = Math.max(1, ...(cal.days || []).map(d => num(d.minutes)));
+  const cells = [];
+  for (let i = 0; i < lead; i++) cells.push('<div class="cal-cell is-empty"></div>');
+  for (let day = 1; day <= daysInMonth; day++) {
+    const hit = byDay[day];
+    const level = hit ? Math.min(4, Math.ceil((num(hit.minutes) / maxMin) * 4)) : 0;
+    cells.push(`<div class="cal-cell${level ? ' lv' + level : ''}"
+      title="${hit ? `${hit.date} · ${hit.minutes} 分钟 · ${esc(hit.top_title || '')}` : `${cal.month}-${String(day).padStart(2, '0')} 无记录`}">
+      <span>${day}</span>${hit ? `<b>${Math.round(num(hit.minutes))}</b>` : ''}</div>`);
+  }
+  const heads = ['一', '二', '三', '四', '五', '六', '日']
+    .map(h => `<div class="cal-head">${h}</div>`).join('');
+  return `${heads}${cells.join('')}`;
+}
+
+function renderStatsBody() {
+  const data = statsState.data || {};
+  const totals = data.totals || {};
+  const comp = data.completion || {};
+  const bar = document.getElementById('statsBody');
+  if (!bar) return;
+  bar.innerHTML = `
+    <div class="stats">
+      <div class="stat"><span>有效时长</span><b>${num(totals.minutes)} 分钟</b>
+        <small>${num(totals.hours)} 小时</small></div>
+      <div class="stat"><span>有看片的天数</span><b>${num(totals.active_days)} 天</b>
+        <small>近 ${num(totals.span_days)} 天</small></div>
+      <div class="stat"><span>日均（按有看的天）</span><b>${num(totals.avg_minutes_per_active_day)} 分钟</b>
+        <small>共 ${num(totals.sessions)} 次会话</small></div>
+      <div class="stat"><span>完成率</span><b>${num(comp.rate)}%</b>
+        <small>${num(comp.completed)} / ${num(comp.files)} 个文件</small></div>
+    </div>
+    <h3 style="margin-top:18px">每日时长</h3>
+    ${statsBars(data.daily)}
+    <h3 style="margin-top:18px">看得最多的作品</h3>
+    ${(data.by_work || []).length ? `<div class="list">${data.by_work.map((w, i) => `<div class="item">
+      <div class="thumb">${i + 1}</div>
+      <div class="body"><div class="name">${esc(w.title)}</div>
+        <div class="meta">${num(w.files)} 个文件 · ${num(w.sessions)} 次会话 · 最近 ${esc(shortDate(w.last_at) || '—')}</div></div>
+      <div class="right"><b>${num(w.minutes)}</b> 分钟</div></div>`).join('')}</div>`
+      : empty('还没有足够的数据', '看几集之后这里会按作品汇总')}
+    <p class="hint" style="margin-top:10px">${esc(data.note || '')}</p>`;
+}
+
+function renderCalendarBody() {
+  const box = document.getElementById('calendarBox');
+  if (!box) return;
+  const cal = statsState.calendar || {};
+  box.innerHTML = `<div class="cal-month">
+      <button class="btn btn-sm" data-action="calendar-shift" data-step="-1">上一月</button>
+      <b>${esc(cal.month || '')}</b>
+      <button class="btn btn-sm" data-action="calendar-shift" data-step="1">下一月</button>
+      <span class="hint" style="margin:0">本月共 ${num(cal.total_minutes)} 分钟</span>
+    </div>
+    <div class="cal-grid">${calendarHtml(cal)}</div>`;
+}
+
+async function loadStats() {
+  const [data, cal] = await Promise.all([
+    call('get_watch_stats', statsState.days),
+    call('get_watch_calendar', statsState.month || ''),
+  ]);
+  statsState.data = data || {};
+  statsState.calendar = cal || {};
+  if (!statsState.month && cal && cal.month) statsState.month = cal.month;
+  renderStatsBody();
+  renderCalendarBody();
+}
+
+async function renderStats() {
+  setContent(`<div class="card"><div class="section-head"><h3>看片统计</h3>
+      <span class="badge blue" id="statsRange">近 ${num(statsState.days)} 天</span></div>
+    <div class="watched-toolbar">
+      ${[7, 30, 90].map(d => `<button class="btn btn-sm ${statsState.days === d ? 'btn-primary' : ''}"
+        data-action="stats-range" data-days="${d}">近 ${d} 天</button>`).join('')}
+      <button class="btn btn-sm" data-action="stats-refresh">刷新</button>
+    </div>
+    <div id="statsBody">${empty('正在统计', '读取观看会话…')}</div>
+  </div>
+  <div class="card"><h3>观看日历</h3>
+    <p class="hint">颜色越深表示那天看得越多；悬停可看具体分钟数与看的是哪部。</p>
+    <div id="calendarBox"></div>
+  </div>`);
+  await loadStats();
+}
+
 async function renderPosters() {
   setContent(`<div class="card"><div class="section-head"><h3>剧集墙</h3>
       <span class="badge blue" id="posterCount">正在统计…</span></div>
@@ -1603,9 +1772,12 @@ async function renderPosters() {
       不用再手动输一次。封面的后台抓取与进度已整合到左侧<b>「后台进程」</b>页。</p>
     <div class="watched-toolbar">
       <input class="input" id="posterSearch" placeholder="搜索作品名…" value="${esc(posterState.keyword)}" autocomplete="off">
+      <button class="btn btn-sm ${posterState.mode === 'work' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="work">按作品</button>
+      <button class="btn btn-sm ${posterState.mode === 'season' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="season">按季</button>
       <button class="btn btn-sm" data-action="poster-refresh">刷新</button>
       <button class="btn btn-sm" data-action="goto" data-view="processes">去后台进程管理封面</button>
     </div>
+    <div id="continueRow"></div>
     <div id="posterGrid" class="poster-grid">${empty('正在加载剧集墙', '读取媒体库分组…')}</div>
   </div>`);
   await loadPosterWall();
@@ -1627,7 +1799,8 @@ async function renderQuickSearch() {
       <span class="hint" id="esHint"></span>
     </div>
     <div id="esResults" class="list"></div>
-  </div>`);
+  </div>
+  <div id="esDegraded"></div>`);
   renderEsResults();
   const input = document.getElementById('esSearch');
   if (input) input.focus();
@@ -1641,6 +1814,20 @@ async function renderQuickSearch() {
     if (!cap.es_available && !cap.http_configured) {
       badge.title = '未检测到 es.exe，也未配置 HTTP 服务；检索范围仅限本程序媒体库。'
         + '到「设置 → 全盘快搜」下载 es.exe 或启用 HTTP 即可升级为整机检索。';
+    }
+    // 降级时必须把「为什么降级 + 怎么修」写在页面上，不能只藏在 tooltip 里
+    const box = document.getElementById('esDegraded');
+    if (box && cap.degraded) {
+      const steps = (cap.http_enable_steps || []).map((s, i) => `<li>${esc(s)}</li>`).join('');
+      box.innerHTML = `<div class="card"><div class="notice warn">
+        <b>当前是「媒体库检索」，只搜本软件已扫描到的文件，不是整台电脑。</b><br>
+        原因：${esc(cap.degraded_reason || '未检测到 Everything 检索通道')}</div>
+        <p class="hint">想恢复整机检索，二选一即可：</p>
+        <ol class="hint" style="margin:4px 0 0 18px">${steps}</ol>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-sm btn-primary" data-action="goto" data-view="settings">去设置里启用</button>
+          <button class="btn btn-sm" data-action="everything-open">打开 Everything</button>
+        </div></div>`;
     }
     // 主程序不存在时把快捷按钮置灰，避免点了只弹错误
     const openBtn = document.querySelector('[data-action="everything-open"]');
@@ -1943,6 +2130,7 @@ async function renderProcesses() {
 const RENDERERS = {
   home: renderHome, continue: renderContinue, history: renderHistory, library: renderLibrary,
   posters: renderPosters, quicksearch: renderQuickSearch, websearch: renderWebSearch,
+  stats: renderStats,
   watched: renderWatched,
   watchlist: renderWatchlist, processes: renderProcesses,
   import: renderImport, scan: renderScan, settings: renderSettings,
@@ -2587,7 +2775,56 @@ async function handleAction(action, btn) {
       break;
     }
     case 'open-data': await call('open_data_folder'); return;
+    case 'stats-range': {
+      const days = Number(el.dataset.days) || 30;
+      statsState.days = days;
+      document.querySelectorAll('[data-action="stats-range"]').forEach(b => {
+        b.classList.toggle('btn-primary', Number(b.dataset.days) === days);
+      });
+      const badge = document.getElementById('statsRange');
+      if (badge) badge.textContent = `近 ${days} 天`;
+      await loadStats();
+      return;
+    }
+    case 'stats-refresh': await loadStats(); toast('统计已刷新'); return;
+    case 'calendar-shift': {
+      const step = Number(el.dataset.step) || 1;
+      const [y, m] = String(statsState.calendar && statsState.calendar.month || '')
+        .split('-').map(Number);
+      if (!y || !m) return;
+      const base = new Date(y, m - 1 + step, 1);
+      statsState.month = `${base.getFullYear()}-${String(base.getMonth() + 1).padStart(2, '0')}`;
+      statsState.calendar = await call('get_watch_calendar', statsState.month);
+      renderCalendarBody();
+      return;
+    }
     case 'poster-refresh': await loadPosterWall(); toast('剧集墙已刷新'); return;
+    case 'poster-mode': {
+      const mode = el.dataset.mode === 'season' ? 'season' : 'work';
+      if (posterState.mode === mode) return;
+      posterState.mode = mode;
+      document.querySelectorAll('[data-action="poster-mode"]').forEach(b => {
+        b.classList.toggle('btn-primary', b.dataset.mode === mode);
+      });
+      renderPosterCards();
+      return;
+    }
+    case 'rate-work': {
+      const key = el.dataset.node || '';
+      const name = el.dataset.name || '';
+      const current = el.dataset.rating || '';
+      const rating = prompt(`给「${name}」打分（0~10，留空表示不打分）：`, current);
+      if (rating === null) return;
+      const tags = prompt('标签（用逗号分隔，例如：神作, 已追完）：', el.dataset.tags || '');
+      if (tags === null) return;
+      const r = await call('save_work_meta', key, rating.trim(), tags);
+      if (!r.ok) { toast(r.error || '保存失败', false); return; }
+      posterState.metas[key] = r;
+      renderPosterCards();
+      toast('已保存：' + (r.rating ? `${r.rating} 分` : '未打分')
+        + (r.tags ? ` · ${r.tags}` : ''));
+      return;
+    }
     case 'cover-fetch': {
       const r = await call('start_cover_fetch', 0, false);
       toast(r.ok ? `已启动后台抓取（${r.total} 部作品）· 进度在后台进程页可见` : (r.error || '启动失败'), r.ok);
@@ -2922,6 +3159,11 @@ document.addEventListener('change', (ev) => {
     return;
   }
   if (el.classList && el.classList.contains('history-pick')) { updateHistoryBatchInfo(); return; }
+  if (el.classList && el.classList.contains('version-select')) {
+    const id = Number(el.value);
+    if (id) playSmart('id', id, false);
+    return;
+  }
   const handlers = {
     fileDir: () => { fileListState.directory_id = Number(el.value) || 0; },
     fileMatch: () => { fileListState.match_state = el.value; },

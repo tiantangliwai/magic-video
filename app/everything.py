@@ -60,17 +60,42 @@ def http_auth() -> tuple[str, str] | None:
     return (user, str(db.get_setting("everything_http_pass", "") or ""))
 
 
+HTTP_ENABLE_STEPS = (
+    "Everything 菜单「工具 → 选项 → HTTP 服务器」→ 勾选「启用 HTTP 服务器」→ 应用",
+    "确认服务地址（默认 http://127.0.0.1:80），把它填到「设置 → 全盘快搜」的服务地址里",
+)
+
+
 def capabilities() -> dict:
-    """给设置页展示：当前能用到哪一级。"""
+    """给设置页展示：当前能用到哪一级，以及降级时的具体补救步骤。
+
+    ``degraded=True`` 表示 es.exe 与 HTTP 都不可用，检索范围只剩本软件媒体库。
+    这时前端必须**明说原因和操作路径**，而不是让人以为「搜不到就是没有」。
+    注意本模块只做只读探测：不改 Everything 的 ini、不重启它的服务（项目铁律）。
+    """
     es = es_exe()
+    http = http_base()
+    available = es.is_file()
+    degraded = not available and not http
+    if available:
+        reason = ""
+    elif http:
+        reason = ""
+    elif app_exe().is_file():
+        reason = "已安装 Everything，但没用 es.exe（Lite 版或未下载）也未启用 HTTP 服务"
+    else:
+        reason = "未检测到 Everything（es.exe 与 HTTP 服务都不可用）"
     return {
         "es_path": str(es),
-        "es_available": es.is_file(),
-        "http_url": http_base(),
-        "http_configured": bool(http_base()),
+        "es_available": available,
+        "http_url": http,
+        "http_configured": bool(http),
         "library_fallback": True,
         "installed": app_exe().is_file(),
         "app_path": str(app_exe()),
+        "degraded": degraded,
+        "degraded_reason": reason,
+        "http_enable_steps": list(HTTP_ENABLE_STEPS),
     }
 
 

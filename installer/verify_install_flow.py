@@ -9,7 +9,14 @@
   4. 卸载测试产品并清理临时目录。
 
 因为 UpgradeCode、产品名、注册表键都是测试专用的，不会碰真实安装，也不会误删用户文件。
-用法：.venv/Scripts/python.exe installer/verify_install_flow.py
+
+用法：
+    .venv/Scripts/python.exe installer/verify_install_flow.py            # 端到端（要 MSI 产物）
+    .venv/Scripts/python.exe installer/verify_install_flow.py --static   # 只做静态核对，不需凭产物
+
+``--static`` 模式不需要 WiX 与 PyInstaller 产物，只检查 product.wxs 里三处易回归的属性
+（目录 Id 是否全大写、是否标 Secure、是否写并读回 InstallPath），CI 与本机随时能跑。
+真机层（安装 → 带路径升级 → 卸载）必须在干净机器上人工执行，清单见 ``MANUAL_CHECKLIST``。
 """
 from __future__ import annotations
 
@@ -21,6 +28,17 @@ import subprocess
 import sys
 import tempfile
 import winreg
+
+# 真机验证必须人工确认的项（--static 会把它打印出来，对照执行）
+MANUAL_CHECKLIST = (
+    "干净机器（或用独立用户账户）双击 MSI，向导里把路径改成 D:\\MagicVideoTest",
+    "安装完成后确认 D:\\MagicVideoTest\\Magic Video.exe 存在，C 盘默认目录不存在",
+    "确认 HKCU\\Software\\Magic Video\\InstallPath 等于刚才选的路径（regedit 查看）",
+    "直接双击新版 MSI 升级，向导默认路径应已是刚才那个目录，一路下一步即可",
+    "升级后确认程序还在原目录、开始菜单快捷方式只有一个、旧版本已从「应用和功能」消失",
+    "卸载，确认目录与快捷方式被移除、InstallPath 注册表值被清除",
+    "卸载后重装一次，确认能正常装回（验证没有残留状态互相干扰）",
+)
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WIX = ROOT / "build" / "tools" / "wix" / "tools"
@@ -96,7 +114,72 @@ def read_install_path() -> str | None:
         return None
 
 
+def static_checks() -> list[str]:
+    """不依赖任何构建产物，只核对 product.wxs 的三处高危属性。
+
+    这三处任何一处回归，症状都一样：**向导里选的路径被静默丢弃，一律装到 C 盘**。
+    而且只在真机安装时暴露，单测不看这一层就发现不了。
+    """
+    wxs = (ROOT / "installer" / "product.wxs").read_text(encoding="utf-8")
+    problems: list[str] = []
+
+    ids = [i for i in re.findall(r'<Directory Id="([^"]+)" Name="Magic Video" />', wxs)
+           if i.isupper()]
+    if not ids:
+        problems.append("找不到安装目录的 Directory 节点")
+        return problems
+    directory_id = ids[0]
+    if not re.fullmatch(r"[A-Z][A-Z0-9_]*", directory_id):
+        problems.append(f"目录 Id {directory_id} 含小写：它会退化成私有属性，选的路径传不过去")
+    if 'Id="AppInstallFolder"' in wxs:
+        problems.append("出现了历史 bug 用的 AppInstallFolder（含小写）")
+
+    wizard = re.search(r'<Property Id="WIXUI_INSTALLDIR" Value="([^"]+)"', wxs)
+    if not wizard:
+        problems.append("缺少 WIXUI_INSTALLDIR，安装向导不会显示目录选择页")
+    elif wizard.group(1) != directory_id:
+        problems.append(f"WIXUI_INSTALLDIR 指向 {wizard.group(1)}，与目录 Id {directory_id} 不一致")
+
+    secure = re.search(r'<Property Id="([A-Z][A-Z0-9_]*)"[^>]*Secure="yes"', wxs)
+    if not secure:
+        problems.append("安装目录属性没有标 Secure：提权安装时向导选的路径会在序列切换时丢失")
+    elif secure.group(1) != directory_id:
+        problems.append(f"标了 Secure 的属性是 {secure.group(1)}，不是安装目录 {directory_id}")
+
+    if "<MajorUpgrade" not in wxs:
+        problems.append("缺少 MajorUpgrade，升级会与旧版本并存")
+    if not re.search(r'<RegistrySearch[^>]*Root="HKCU"[^>]*Name="InstallPath"', wxs):
+        problems.append("缺少 InstallPath 的 RegistrySearch，升级读不回上次路径")
+    if not re.search(r'<RegistryValue[^>]*Name="InstallPath"[^>]*Value="\[[A-Z][A-Z0-9_]*\]"', wxs):
+        problems.append("安装时没有把选定的目录写进 HKCU InstallPath")
+    if '<Property Id="ARPINSTALLLOCATION" Value="[' in wxs:
+        problems.append("ARPINSTALLLOCATION 用了 Property 表赋值：Property 不做格式化，必须走 Type 51 动作")
+    if 'Property="ARPINSTALLLOCATION"' not in wxs:
+        problems.append("没有给 ARPINSTALLLOCATION 赋值，「应用和功能」里看不到安装位置")
+    return problems
+
+
+def print_checklist() -> None:
+    print("\n真机层还需要人工执行（--static 覆盖不到）：")
+    for index, item in enumerate(MANUAL_CHECKLIST, 1):
+        print(f"  {index}. {item}")
+
+
+def run_static() -> int:
+    problems = static_checks()
+    if problems:
+        print("[FAIL] 安装器静态核对未通过：")
+        for item in problems:
+            print(f"  - {item}")
+        return 1
+    print("[PASS] 安装器静态核对通过：目录 Id 全大写 + Secure + InstallPath 写入/回读 + MajorUpgrade")
+    print_checklist()
+    return 0
+
+
 def main() -> int:
+    if "--static" in sys.argv:
+        return run_static()
     if not APP_DIR.is_dir():
         raise SystemExit(f"缺少 PyInstaller 产物：{APP_DIR}（先跑 build_dist.py）")
     if not COMPONENTS.is_file():
@@ -172,6 +255,7 @@ def main() -> int:
         print("\n[FAIL] " + "\n       ".join(failures))
         return 1
     print("\n[PASS] 选路径生效 + 升级继承历史路径")
+    print_checklist()
     return 0
 
 

@@ -69,8 +69,10 @@ class ThemeFrontendContractTests(unittest.TestCase):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('data-theme="light"', html)
         self.assertIn('data-action="toggle-theme"', html)
-        self.assertEqual(html.count("<svg"), 13)  # 11 个原有视图 + 追剧列表 + 后台进程 + 网页搜索
+        # 每个左侧导航项都带一个内联 SVG 图标（新增视图时必须同步加图标，否则这里会红）
+        self.assertEqual(html.count("<svg"), 14)
         self.assertIn('data-view="posters"', html)
+        self.assertIn('data-view="stats"', html)
         self.assertIn('data-view="quicksearch"', html)
         self.assertIn('data-view="watchlist"', html)
         self.assertIn('data-view="processes"', html)

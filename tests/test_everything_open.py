@@ -37,6 +37,23 @@ class EverythingPathTests(IsolatedDbTestCase):
         self.assertIn("installed", cap)
         self.assertEqual(cap["es_path"], str(Path(everything.DEFAULT_ES_PATH)))
 
+    def test_capabilities_explain_degradation_with_actionable_steps(self):
+        """降级时必须给出原因和操作路径，不能只说「搜不到」。"""
+        cap = everything.capabilities()
+        self.assertIn("degraded", cap)
+        self.assertIn("degraded_reason", cap)
+        self.assertTrue(cap["http_enable_steps"], "降级时至少要给一条可操作的启用步骤")
+        if cap["degraded"]:
+            self.assertTrue(cap["degraded_reason"], "降级必须写明原因")
+            self.assertTrue(any("HTTP" in s for s in cap["http_enable_steps"]))
+
+    def test_http_configured_means_not_degraded(self):
+        db.set_setting("everything_http_url", "http://127.0.0.1:8080")
+        with mock.patch.object(everything, "es_exe", return_value=Path("nope/es.exe")):
+            cap = everything.capabilities()
+        self.assertFalse(cap["degraded"], "HTTP 可用时不该报降级")
+        self.assertEqual(cap["degraded_reason"], "")
+
     def test_http_auth_only_when_user_is_set(self):
         self.assertIsNone(everything.http_auth())
         db.set_setting("everything_http_user", "admin")

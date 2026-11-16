@@ -9,7 +9,7 @@ from tests.base import IsolatedDbTestCase
 
 EXPECTED_TABLES = {
     "settings", "directories", "subjects", "media_files", "watched_list",
-    "watch_progress", "watch_sessions", "name_alias",
+    "watch_progress", "watch_sessions", "name_alias", "work_meta", "scrape_cache",
 }
 
 

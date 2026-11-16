@@ -10,6 +10,8 @@ import threading
 import time
 import urllib.parse
 import webbrowser
+from collections import Counter
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import psutil
@@ -60,6 +62,47 @@ def _display_title_expr() -> str:
     if pref in ("orig", "original", "en", "jp", "ja"):
         return "COALESCE(f.title_guess, f.title_cn)"
     return "COALESCE(f.title_cn, f.title_guess)"
+
+# 多版本（P2-3）：同一 (作品, 季, 集) 存在多份文件时，平铺列表给一个版本下拉。
+# 索引按数据指纹缓存，不在每次翻页时重扫全表。
+def _version_index() -> dict:
+    key = ("versions", _db_signature())
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
+    rows = db.rows(
+        "SELECT COALESCE(NULLIF(TRIM(COALESCE(title_cn, title_guess)), ''), filename) AS t, "
+        "COALESCE(season_no, 0) AS s, episode_no AS e, id, filename "
+        "FROM media_files WHERE COALESCE(deleted_at, '') = '' AND episode_no IS NOT NULL "
+        "ORDER BY COALESCE(size, 0) DESC, id"
+    )
+    index: dict[tuple, list[dict]] = {}
+    for row in rows:
+        index.setdefault((row["t"], int(row["s"]), int(row["e"])), []).append(
+            {"file_id": row["id"], "filename": row["filename"]})
+    # 只有真的多份才附加，单版本行多带一个字段只会让前端多判断
+    return _cache_put(key, {k: v for k, v in index.items() if len(v) > 1})
+
+
+def _attach_versions(rows: list[dict]) -> None:
+    """给平铺列表的行补 ``versions``（仅当同一集有多份文件时）。"""
+    if not rows:
+        return
+    index = _version_index()
+    if not index:
+        return
+    for row in rows:
+        episode = row.get("episode_no")
+        if episode is None:
+            continue
+        title = str(row.get("title_cn") or row.get("title_guess")
+                    or row.get("filename") or "").strip()
+        if not title:
+            continue
+        versions = index.get((title, int(row.get("season_no") or 0), int(episode)))
+        if versions and len(versions) > 1:
+            row["versions"] = versions
+
 
 # 文件浏览的排序白名单：用户输入只能选键，绝不直接拼进 SQL
 _MEDIA_SORTS = {
@@ -848,6 +891,7 @@ class Api:
             last = min(offset + size, total) if first else 0
         else:
             pages, first, last = 1, (1 if total else 0), total
+        _attach_versions(rows)
         return _cache_put(cache_key, {
             "ok": True, "rows": rows, "total": total, "total_all": total_all,
             "matched": self._matched_count(), "page": page, "page_size": size, "pages": pages,
@@ -1244,13 +1288,47 @@ class Api:
         # 剧集墙本体有 20s 缓存，不会每次切视图都付这笔钱。
         watched_matches = _watched_list_matches()
         cards = []
-        for group in self._prune_blacklisted_groups(tree.get("groups") or []):
+        season_cards = []
+        groups = self._prune_blacklisted_groups(tree.get("groups") or [])
+        for group in groups:
             seasons = [c.get("label") for c in group.get("children", [])]
             watched_count = int(group.get("watched_count") or 0)
             playing_count = int(group.get("playing_count") or 0)
             all_done = bool(group.get("all_done"))
             cover_titles = self._group_cover_titles(group)
             listed = self._listed_in_watched_list(group, cover_titles, watched_matches)
+            # 按季展开的卡片（P2-2）：同一部作品的每一季单独一张，封面沿用作品封面
+            for node in group.get("children", []):
+                s_files = int(node.get("file_count") or 0)
+                s_watched = int(node.get("watched_count") or 0)
+                s_playing = int(node.get("playing_count") or 0)
+                if not s_files:
+                    continue
+                s_done = s_watched == s_files
+                season_cards.append({
+                    "title": f"{group.get('label', '')} · {node.get('label', '')}",
+                    "work_title": group.get("label", ""),
+                    "search_keyword": self._card_search_keyword(group),
+                    "file_count": s_files,
+                    "watched_count": s_watched,
+                    "playing_count": s_playing,
+                    "next_file_id": node.get("next_file_id"),
+                    "season_no": int(node.get("season_no") or 0),
+                    "season_count": len(seasons),
+                    "seasons": seasons[:12],
+                    "sub": node.get("sub", ""),
+                    "group_id": node.get("id", ""),
+                    # 评分/标签挂在作品上：季卡片共用作品的 key
+                    "work_key": group.get("id", ""),
+                    "all_done": s_done,
+                    "watch_state": _watch_state(s_done, s_watched, s_playing, listed),
+                    "watched_listed": listed,
+                    "removable_count": sum(
+                        1 for f in (node.get("files") or [])
+                        if int(f.get("completed") or 0) == 1 and not f.get("deleted_at")
+                    ),
+                    "_cover_titles": cover_titles,
+                })
             cards.append({
                 "title": group.get("label", ""),
                 "search_keyword": self._card_search_keyword(group),
@@ -1262,6 +1340,7 @@ class Api:
                 "seasons": seasons[:12],
                 "sub": group.get("sub", ""),
                 "group_id": group.get("id", ""),
+                "work_key": group.get("id", ""),
                 "all_done": all_done,
                 # 卡片「是否看过」标记：前端只认这个字符串，不在 JS 里重算优先级
                 "watch_state": _watch_state(all_done, watched_count, playing_count, listed),
@@ -1272,12 +1351,15 @@ class Api:
         keyword = str(opt.get("keyword") or "").strip().lower()
         if keyword:
             cards = [c for c in cards if keyword in c["title"].lower()]
+            season_cards = [c for c in season_cards if keyword in c["title"].lower()]
         try:
             max_cards = max(1, min(int(opt.get("limit") or 300), 2000))
         except (TypeError, ValueError):
             max_cards = 300
         total = len(cards)
         cards = cards[:max_cards]
+        season_total = len(season_cards)
+        season_cards = season_cards[:max_cards]
         # 卡片标题（树分组 label）与抓取封面时用的标题可能不同：
         # 先用卡片标题，再退到该分组内文件的中文名 / 解析原名，命中就复用同一张封面。
         pending: list[tuple[str, list[str]]] = []
@@ -1290,12 +1372,246 @@ class Api:
                 card["title"] = card["search_keyword"]
             pending.append((card["title"], [raw_label, card["title"],
                                             *card.pop("_cover_titles")]))
+        for card in season_cards:
+            pending.append((card["title"], [card["work_title"], *card.pop("_cover_titles")]))
         resolved = covers.resolve_cover_many(pending, cover_entries)
         return _cache_put(cache_key, {
             "ok": True, "cards": cards, "total": total, "shown": len(cards),
+            # 按季展开的卡片（P2-2）：前端「按季 / 按作品」切换用，默认展示 cards
+            "season_cards": season_cards, "season_total": season_total,
             "covers": resolved,
             "cover_status": covers.status(),
         })
+
+    # ---- 统计 / 日历 / 标签 / 多版本（P2-1 ~ P2-4） ------------------------
+    def get_watch_stats(self, days: int = 30) -> dict:
+        """看片时长统计。
+
+        **统计口径**（写进 FEATURES，改之前先想清楚）：
+
+        - 只用 ``watch_sessions.watched_ms``：只累加「连续播放」的位置增量，
+          快进 / 拖进度条 / 回拖都不计入（P0-5 的口径）。
+        - 按会话的**开始日期**归日；跨零点的长会话整段算在开始那天。
+        - 同一集看两遍算两次（真实发生过的观看），不做去重。
+        - 黑名单里的作品不计入。
+        """
+        try:
+            span = max(1, min(int(days or 30), 365))
+        except (TypeError, ValueError):
+            span = 30
+        since = (datetime.now() - timedelta(days=span - 1)).strftime("%Y-%m-%d %H:%M:%S")
+        rows = blacklist.filter_rows(
+            db.rows(
+                "SELECT s.started_at, COALESCE(s.watched_ms, 0) AS watched_ms, s.file_id, "
+                f"{_display_title_expr()} AS title, f.season_no, f.episode_no "
+                "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
+                "WHERE COALESCE(s.started_at, '') >= ?",
+                (since,),
+            ),
+            keys=("title",),
+        )
+
+        daily: dict[str, dict] = {}
+        works: dict[str, dict] = {}
+        total_ms = 0
+        for row in rows:
+            day = str(row.get("started_at") or "")[:10]
+            ms = int(row.get("watched_ms") or 0)
+            total_ms += ms
+            if day:
+                bucket = daily.setdefault(day, {"date": day, "minutes": 0.0, "sessions": 0})
+                bucket["minutes"] += ms / 60000
+                bucket["sessions"] += 1
+            title = str(row.get("title") or "").strip() or "（未关联文件）"
+            work = works.setdefault(title, {"title": title, "minutes": 0.0, "sessions": 0,
+                                            "files": set(), "last_at": ""})
+            work["minutes"] += ms / 60000
+            work["sessions"] += 1
+            if row.get("file_id"):
+                work["files"].add(int(row["file_id"]))
+            started = str(row.get("started_at") or "")
+            if started > work["last_at"]:
+                work["last_at"] = started
+
+        series = []
+        for offset in range(span - 1, -1, -1):
+            day = (datetime.now() - timedelta(days=offset)).strftime("%Y-%m-%d")
+            bucket = daily.get(day)
+            series.append({"date": day,
+                           "minutes": round(bucket["minutes"], 1) if bucket else 0.0,
+                           "sessions": bucket["sessions"] if bucket else 0})
+
+        by_work = sorted(works.values(), key=lambda w: w["minutes"], reverse=True)[:20]
+        for work in by_work:
+            work["minutes"] = round(work["minutes"], 1)
+            work["files"] = len(work["files"])
+
+        active_days = sum(1 for d in series if d["minutes"] > 0)
+        totals = {
+            "minutes": round(total_ms / 60000, 1),
+            "hours": round(total_ms / 3600000, 2),
+            "sessions": len(rows),
+            "active_days": active_days,
+            "span_days": span,
+            "avg_minutes_per_active_day": round(
+                (total_ms / 60000) / active_days, 1) if active_days else 0.0,
+            "works": len(works),
+        }
+        progress = db.row(
+            "SELECT COUNT(*) AS total, "
+            "COALESCE(SUM(CASE WHEN completed = 1 THEN 1 ELSE 0 END), 0) AS done "
+            "FROM watch_progress"
+        ) or {}
+        total_files = int(progress.get("total") or 0)
+        done_files = int(progress.get("done") or 0)
+        return {
+            "ok": True,
+            "days": span,
+            "since": since,
+            "daily": series,
+            "by_work": by_work,
+            "totals": totals,
+            "completion": {
+                "files": total_files,
+                "completed": done_files,
+                "rate": round(done_files / total_files * 100, 1) if total_files else 0.0,
+            },
+            "note": "时长只计连续播放，快进与拖进度条不计入；同一集重看会累计。",
+        }
+
+    def get_continue_row(self, limit: int = 12) -> dict:
+        """剧集墙顶部常驻的「继续观看」行：同一作品只留最新一条。"""
+        try:
+            size = max(1, min(int(limit or 12), 60))
+        except (TypeError, ValueError):
+            size = 12
+        rows = blacklist.filter_rows(
+            db.rows(
+                "SELECT p.file_id, p.position_ms, p.percent, p.last_played_at, "
+                f"{_display_title_expr()} AS display_title, f.title_guess, f.filename, "
+                "f.season_no, f.episode_no "
+                "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
+                "WHERE p.completed = 0 AND p.position_ms > 0 AND p.dismissed_at IS NULL "
+                "AND COALESCE(f.deleted_at, '') = '' "
+                "ORDER BY p.last_played_at DESC",
+            ),
+            keys=("display_title", "filename", "title_guess"),
+        )
+        seen: set[str] = set()
+        items: list[dict] = []
+        for row in rows:
+            title = str(row.get("display_title") or row.get("filename") or "").strip()
+            if not title or title in seen:
+                continue
+            seen.add(title)
+            items.append({
+                "work_title": title,
+                "file_id": row.get("file_id"),
+                "filename": row.get("filename"),
+                "season_no": row.get("season_no"),
+                "episode_no": row.get("episode_no"),
+                "percent": row.get("percent") or 0,
+                "position_ms": row.get("position_ms") or 0,
+                "last_played_at": row.get("last_played_at"),
+            })
+            if len(items) >= size:
+                break
+        return {"ok": True, "items": items}
+
+    def get_versions(self, file_id: int) -> dict:
+        """同一 (作品, 季, 集) 的全部文件版本，供播放时下拉选择（P2-3）。
+
+        「同作品」用中文名/猜测名 + 季 + 集判定，与展示层合并口径一致；
+        不做任何删改，只是把同一集的多份文件列出来。
+        """
+        base = db.row(
+            "SELECT id, COALESCE(NULLIF(TRIM(COALESCE(title_cn, title_guess)), ''), filename) AS title, "
+            "season_no, episode_no FROM media_files WHERE id = ?",
+            (int(file_id),),
+        )
+        if not base:
+            return {"ok": False, "error": "文件不存在", "versions": []}
+        if base["episode_no"] is None:
+            return {"ok": True, "versions": [{"file_id": base["id"], "filename": "",
+                                              "current": True}]}
+        rows = db.rows(
+            "SELECT f.id AS file_id, f.filename, f.path, f.size, f.deleted_at, "
+            "COALESCE(p.percent, 0) AS percent, COALESCE(p.completed, 0) AS completed "
+            "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+            "WHERE COALESCE(NULLIF(TRIM(COALESCE(f.title_cn, f.title_guess)), ''), f.filename) = ? "
+            "AND COALESCE(f.season_no, 0) = COALESCE(?, 0) AND f.episode_no = ? "
+            "ORDER BY COALESCE(f.size, 0) DESC, f.id",
+            (base["title"], base["season_no"], base["episode_no"]),
+        )
+        for row in rows:
+            row["current"] = int(row["file_id"]) == int(file_id)
+        return {"ok": True, "versions": rows}
+
+    def get_watch_calendar(self, month: str = "") -> dict:
+        """观看日历：某个月每天看了多少分钟（P2-4）。不落表，按会话实时算。"""
+        text = str(month or "").strip()
+        if not re.fullmatch(r"\d{4}-\d{2}", text):
+            text = datetime.now().strftime("%Y-%m")
+        prefix = text + "-"
+        rows = blacklist.filter_rows(
+            db.rows(
+                "SELECT s.started_at, COALESCE(s.watched_ms, 0) AS watched_ms, "
+                f"{_display_title_expr()} AS title "
+                "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
+                "WHERE COALESCE(s.started_at, '') LIKE ?",
+                (prefix + "%",),
+            ),
+            keys=("title",),
+        )
+        days: dict[str, dict] = {}
+        titles: dict[str, Counter] = {}
+        for row in rows:
+            day = str(row.get("started_at") or "")[8:10]
+            if not day:
+                continue
+            bucket = days.setdefault(day, {"day": day, "minutes": 0.0, "sessions": 0})
+            bucket["minutes"] += int(row.get("watched_ms") or 0) / 60000
+            bucket["sessions"] += 1
+            titles.setdefault(day, Counter())[str(row.get("title") or "")] += 1
+        out = []
+        for day, bucket in sorted(days.items()):
+            top = titles.get(day) or Counter()
+            out.append({"day": day, "date": prefix + day,
+                        "minutes": round(bucket["minutes"], 1),
+                        "sessions": bucket["sessions"],
+                        "top_title": top.most_common(1)[0][0] if top else ""})
+        return {"ok": True, "month": text, "days": out,
+                "total_minutes": round(sum(d["minutes"] for d in out), 1)}
+
+    def get_work_meta(self, work_keys: list | None = None) -> dict:
+        """批量取作品标注（评分 / 标签），前端卡片一次取齐。"""
+        keys = [str(k) for k in (work_keys or []) if str(k)]
+        if not keys:
+            return {"ok": True, "items": {}}
+        marks = ",".join("?" for _ in keys)
+        rows = db.rows(f"SELECT work_key, rating, tags, updated_at FROM work_meta "
+                       f"WHERE work_key IN ({marks})", tuple(keys))
+        return {"ok": True, "items": {r["work_key"]: r for r in rows}}
+
+    def save_work_meta(self, work_key: str, rating=None, tags=None) -> dict:
+        """保存作品评分 / 标签。``tags`` 传字符串（逗号分隔），空串即清空。"""
+        key = str(work_key or "").strip()
+        if not key:
+            return {"ok": False, "error": "缺少作品标识"}
+        try:
+            score = None if rating in (None, "", "-") else int(rating)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "评分必须是 0~10 的整数"}
+        if score is not None and not 0 <= score <= 10:
+            return {"ok": False, "error": "评分必须在 0~10 之间"}
+        text = ",".join(t.strip() for t in str(tags or "").replace("，", ",").split(",") if t.strip())
+        db.execute(
+            "INSERT INTO work_meta(work_key, rating, tags, updated_at) VALUES (?, ?, ?, ?) "
+            "ON CONFLICT(work_key) DO UPDATE SET rating = excluded.rating, "
+            "tags = excluded.tags, updated_at = excluded.updated_at",
+            (key, score, text, db.now()),
+        )
+        return {"ok": True, "work_key": key, "rating": score, "tags": text}
 
     def preview_import(self, text: str) -> dict:
         """解析预览时就完成中文名自动匹配，结果直接展示，不留待办队列。"""

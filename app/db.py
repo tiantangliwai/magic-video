@@ -195,6 +195,16 @@ CREATE TABLE IF NOT EXISTS scrape_cache (
     expires_at  TEXT
 );
 CREATE INDEX IF NOT EXISTS ix_scrape_expires ON scrape_cache(expires_at);
+
+-- 作品级的用户标注（评分 / 标签）：与 media_files 无外键，按作品分组 id
+-- （"series::xxx"，与改名覆盖用的是同一套键）挂靠，删媒体文件不会连带删标注。
+-- 纯本地，不同步到任何外部站点。
+CREATE TABLE IF NOT EXISTS work_meta (
+    work_key    TEXT PRIMARY KEY,
+    rating      INTEGER,
+    tags        TEXT,
+    updated_at  TEXT
+);
 """
 
 

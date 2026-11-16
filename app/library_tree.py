@@ -370,6 +370,9 @@ def _finalize(node: dict) -> None:
         node["sub"] = f"{len(files)} 个文件" + (f" · {len(node['children'])} 个子目录" if node["children"] else "")
     else:
         node["sub"] = f"{len(files)} 集 · 已看完 {node['watched_count']}"
+    # 季节点把季号保留给「按季海报墙」用（内部字段 _season 随后会被清掉）
+    if node["kind"] == "season":
+        node["season_no"] = node["_season"]
     for key in ("_all", "_hint", "_season", "_titles", "_guesses", "_folders"):
         node.pop(key, None)
 
@@ -439,6 +442,8 @@ def series_tree(rows: list[dict], directories: list[dict] | None = None,
     overrides = {str(k): str(v).strip() for k, v in (labels or {}).items() if str(v).strip()}
     result = []
     for key, group in groups.items():
+        # 多版本合并：同一 (季, 集) 的多个文件在展示层并成一条
+        _apply_version_merge(group)
         cns = [t for t in group["_titles"] if t]
         folders = [t for t in group["_folders"] if t]
         guesses = [g for g in group["_guesses"] if g]
@@ -515,6 +520,74 @@ def directory_tree(rows: list[dict], directories: list[dict] | None = None) -> d
         _finalize(group)
     groups.sort(key=lambda g: g["label"].lower())
     return {"mode": "folder", "groups": groups, "total": len(rows), "group_count": len(groups)}
+
+
+def _version_entry(item: dict) -> dict:
+    return {
+        "file_id": item.get("id"),
+        "filename": item.get("filename") or "",
+        "path": item.get("path") or "",
+        "size": item.get("size"),
+        "completed": int(item.get("completed") or 0),
+        "percent": item.get("percent") or 0,
+    }
+
+
+def _collapse_versions(items: list[dict]) -> list[dict]:
+    """把同一 (季, 集) 的多个文件合并成一条，其余作为 ``versions`` 挂在主条目上。
+
+    收藏党常同时存 BD / WEB 两个版本，不合并的话一集会在剧集展示里出现两次、
+    「12 集」显示成「13 集」。合并只在**展示层**做：数据库里仍是各自独立的行，
+    播放进度也各自独立，用户点「版本」下拉自选播哪一个。
+
+    主条目优先取「已看完 > 有进度 > 体积大 > id 小」的那份，这样点播默认落到
+    最可能有用的版本上。
+    """
+    def rank(item: dict) -> tuple:
+        return (
+            0 if int(item.get("completed") or 0) == 1 else 1,
+            0 if int(item.get("position_ms") or 0) > 0 else 1,
+            -int(item.get("size") or 0),
+            int(item.get("id") or 0),
+        )
+
+    buckets: dict[tuple, list[dict]] = {}
+    order: list[dict] = []
+    for item in items:
+        item.pop("versions", None)
+        episode = item.get("tree_episode")
+        if episode is None:
+            # 没集数的（剧场版 / 单集）不参与合并：它们本来就不该互相顶替
+            order.append(item)
+            continue
+        key = (item.get("tree_season") or 0, episode)
+        if key not in buckets:
+            buckets[key] = [item]
+            order.append(item)
+        else:
+            buckets[key].append(item)
+
+    for bucket in buckets.values():
+        if len(bucket) < 2:
+            bucket[0]["versions"] = [_version_entry(bucket[0])]
+            continue
+        primary = sorted(bucket, key=rank)[0]
+        primary["versions"] = [_version_entry(x) for x in sorted(bucket, key=rank)]
+        primary["version_count"] = len(bucket)
+        order[order.index(primary)] = primary
+    return order
+
+
+def _apply_version_merge(group: dict) -> None:
+    """把合并结果铺回作品节点与它下面的季节点。"""
+    group["_all"] = _collapse_versions(group["_all"])
+    by_season: dict[int, list[dict]] = {}
+    for item in group["_all"]:
+        by_season.setdefault(item.get("tree_season") or 0, []).append(item)
+    group["files"] = list(by_season.get(0, []))
+    for season_node in group["children"]:
+        season_node["_all"] = list(by_season.get(season_node["_season"], []))
+        season_node["files"] = list(season_node["_all"])
 
 
 def build_tree(rows: list[dict], mode: str = "series",

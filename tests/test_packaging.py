@@ -247,6 +247,23 @@ class InstallerDefinitionTests(unittest.TestCase):
         self.assertIn('After="CostFinalize"', self.wxs)
         self.assertNotIn('<Property Id="ARPINSTALLLOCATION" Value="[', self.wxs)
 
+    def test_verify_script_static_mode_passes(self):
+        """安装器验证脚本的静态层能独立跑通（不需要 WiX / PyInstaller 产物）。
+
+        真机层（安装 → 带路径升级 → 卸载）必须人工执行，脚本会把清单打印出来；
+        但静态层要进自动化，否则「又装回 C 盘」这类回归只能等发版后才发现。
+        """
+        import subprocess
+        import sys
+        root = Path(__file__).resolve().parent.parent
+        proc = subprocess.run(
+            [sys.executable, str(root / "installer" / "verify_install_flow.py"), "--static"],
+            capture_output=True, text=True, cwd=str(root), timeout=120,
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertIn("[PASS]", proc.stdout)
+        self.assertIn("真机层", proc.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()
