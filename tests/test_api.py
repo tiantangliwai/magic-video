@@ -133,6 +133,44 @@ class ApiTests(IsolatedDbTestCase):
         self.assertEqual(kept["pending"], 1)
         self.assertEqual(self.api.get_watched_list()[0]["status"], "pending_review")
 
+    def test_episode_review_lists_only_low_confidence(self):
+        """集数待确认只列 low，medium/high 不打扰用户。"""
+        low = self.media("Show.[01].mkv", episode_no=1, season_no=None,
+                         episode_source="bracket", episode_confidence="low")
+        self.media("Show.S01E02.mkv", season_no=1, episode_no=2,
+                   episode_source="sxxeyy", episode_confidence="high")
+        self.media("Show.1x03.mkv", season_no=1, episode_no=3,
+                   episode_source="xformat", episode_confidence="medium")
+
+        review = self.api.get_episode_review()
+        self.assertEqual(review["total"], 1)
+        self.assertEqual(review["rows"][0]["filename"], "Show.[01].mkv")
+        self.assertEqual(review["rows"][0]["id"], low["id"])
+
+    def test_set_episode_marks_user_and_leaves_review(self):
+        rec = self.media("Show.[01].mkv", episode_no=1, episode_source="bracket",
+                         episode_confidence="low")
+        result = self.api.set_episode(rec["id"], 2, 7)
+        self.assertTrue(result["ok"], result)
+
+        row = db.row("SELECT season_no, episode_no, episode_source, episode_confidence "
+                     "FROM media_files WHERE id = ?", (rec["id"],))
+        self.assertEqual((row["season_no"], row["episode_no"]), (2, 7))
+        self.assertEqual(row["episode_source"], "user")
+        self.assertEqual(row["episode_confidence"], "high")
+        self.assertEqual(self.api.get_episode_review()["total"], 0)
+
+    def test_set_episode_accepts_blank_and_rejects_garbage(self):
+        rec = self.media("Show.[01].mkv", episode_no=1, episode_confidence="low")
+        blank = self.api.set_episode(rec["id"], "", "-")
+        self.assertTrue(blank["ok"], blank)
+        self.assertIsNone(blank["season_no"])
+        self.assertIsNone(blank["episode_no"])
+
+        self.assertFalse(self.api.set_episode(rec["id"], "第二季", 1)["ok"])
+        self.assertFalse(self.api.set_episode(rec["id"], 200, 1)["ok"])
+        self.assertFalse(self.api.set_episode(999999, 1, 1)["ok"])
+
     def test_display_title_follows_language_preference(self):
         """P1-4：展示标题按偏好切换，只改显示不改库里的匹配结果。"""
         self.media("Orig.Name.01.mkv", title_guess="Orig Name", title_cn="中文名字",

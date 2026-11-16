@@ -1171,10 +1171,34 @@ function pendingBlock(data) {
     </tr>`).join('')}</tbody></table></div></div>`;
 }
 
+function episodeReviewCard(review) {
+  const rows = (review && review.rows) || [];
+  if (!rows.length) {
+    return `<div class="card"><h3>集数待确认</h3>
+      <p class="hint" style="margin:0">没有需要确认的文件。只有 <code>[01]</code>、<code>01-02</code>
+        这类<b>写义有歧义</b>的文件名才会进这里，<code>S01E02</code> / <code>第03话</code> 一律自动识别。</p></div>`;
+  }
+  return `<div class="card"><h3>集数待确认 <span class="badge amber">${num(rows.length)} 条</span></h3>
+    <p class="hint">这些文件名的集数写法有歧义（<code>[01]</code>、<code>01-02</code> 之类），
+      与其猜错不如让你确认一次。确认后会记成「手动指定」，重新扫描不会再覆盖。</p>
+    <div class="list">${rows.map(r => `<div class="item">
+      <div class="body"><div class="name">${esc(r.display_title || r.filename)}</div>
+        <div class="meta mono" style="font-size:11px">${esc(r.filename)}</div></div>
+      <div class="right"><div class="btn-row" style="justify-content:flex-end;align-items:center">
+        <label class="hint" style="margin:0">季</label>
+        <input class="input" style="width:56px" id="ep-se-${r.id}" value="${r.season_no ?? ''}" placeholder="-">
+        <label class="hint" style="margin:0">集</label>
+        <input class="input" style="width:56px" id="ep-epi-${r.id}" value="${r.episode_no ?? ''}" placeholder="-">
+        <button class="btn btn-sm btn-primary" data-action="save-episode" data-id="${r.id}">确认</button>
+      </div></div></div>`).join('')}</div>
+  </div>`;
+}
+
 async function renderScan() {
   if (!fileListState.mode_touched) fileListState.view_mode = 'folder';
-  const [dirs, dict, last] = await Promise.all([
+  const [dirs, dict, last, review] = await Promise.all([
     call('get_directories'), call('dictionary_status'), call('get_last_scan'),
+    call('get_episode_review', 200),
   ]);
   setContent(`<div class="card"><h3>添加视频目录</h3>
     <p class="hint">添加后会自动递归扫描常见的视频格式（mkv / mp4 / avi / ts 等），跳过样片、特典与字幕文件，
@@ -1196,6 +1220,7 @@ async function renderScan() {
       </div></div></div>`).join('') : empty('还没有添加目录', '添加一个已下载视频所在的文件夹')}</div>
     <div class="btn-row" style="margin-top:14px"><button class="btn" data-action="scan">重新扫描全部</button></div>
   </div>
+  ${episodeReviewCard(review)}
   <div class="card"><h3>外文名 → 中文名</h3>
     <p class="hint">匹配只在导入列表、扫描目录或点「重新匹配」时执行，<b>没有每日定时任务、没有待补全队列</b>。
     优先命中离线词典，未命中的外文名会尝试在线检索；本机连不上时自动降级，不阻塞扫描和播放记录。</p>
@@ -1397,6 +1422,18 @@ async function renderSettings() {
           <button class="btn btn-sm" data-action="backup-restore-overwrite">覆盖</button>
         </div>
         <div class="tip">「仅新增」只补缺失数据、不改现有记录；「覆盖」用备份整库替换当前数据。</div></div>
+    </div>
+    <div class="card"><h3>导出表格 / NFO</h3>
+      <div class="notice">给 Excel 或 Kodi 用的导出，<b>只写数据目录的 exports 文件夹，绝不写进视频目录</b>。
+        CSV 带 UTF-8 BOM，双击就能用 Excel 打开且中文不乱码。</div>
+      <div class="btn-row">
+        <button class="btn btn-sm" data-action="export-csv" data-kind="history">历史记录 CSV</button>
+        <button class="btn btn-sm" data-action="export-csv" data-kind="watched">看过的列表 CSV</button>
+        <button class="btn btn-sm" data-action="export-csv" data-kind="media">媒体库 CSV</button>
+        <button class="btn btn-sm" data-action="export-nfo">导出 NFO</button>
+        <button class="btn btn-sm" data-action="open-export-folder">打开导出目录</button>
+      </div>
+      <p class="hint" id="exportInfo" style="margin:8px 0 0">导出文件默认放在数据目录的 exports 文件夹。</p>
     </div>
     <div class="card"><p class="hint" style="margin:0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
 }
@@ -2439,6 +2476,51 @@ async function handleAction(action, btn) {
       toast(r.ok ? `已隐藏 ${r.dismissed} 个缺失文件` : (r.error || '操作失败'), r.ok);
       if (r.ok) renderDiagnose(await call('diagnose_library'));
       break;
+    }
+    case 'save-episode': {
+      const id = el.dataset.id;
+      const se = document.getElementById('ep-se-' + id);
+      const ep = document.getElementById('ep-epi-' + id);
+      const r = await call('set_episode', Number(id),
+        se ? se.value.trim() : '', ep ? ep.value.trim() : '');
+      if (!r.ok) { toast(r.error || '保存失败', false); return; }
+      toast('已记下：第 ' + (r.season_no ?? '-') + ' 季 第 ' + (r.episode_no ?? '-') + ' 集');
+      renderScan();
+      return;
+    }
+    case 'export-csv': {
+      const kind = el.dataset.kind || 'history';
+      btn.disabled = true;
+      try {
+        const r = await call('export_table', kind);
+        const info = document.getElementById('exportInfo');
+        if (r.ok) {
+          if (info) info.innerHTML = `已导出 ${num(r.rows)} 行 → <span class="mono">${esc(r.path)}</span>`;
+          toast('已导出：' + r.path);
+        } else {
+          toast('导出失败：' + (r.error || '未知错误'), false);
+        }
+      } finally { btn.disabled = false; }
+      return;
+    }
+    case 'export-nfo': {
+      btn.disabled = true;
+      try {
+        const r = await call('export_nfo');
+        const info = document.getElementById('exportInfo');
+        if (r.ok) {
+          if (info) info.innerHTML = `已导出 ${num(r.works)} 部作品 → <span class="mono">${esc(r.path)}</span>`;
+          toast(`已导出 ${num(r.works)} 部作品的 NFO`);
+        } else {
+          toast('导出失败：' + (r.error || '未知错误'), false);
+        }
+      } finally { btn.disabled = false; }
+      return;
+    }
+    case 'open-export-folder': {
+      const r = await call('open_export_folder');
+      if (!r.ok) toast('打开目录失败：' + (r.error || '未知错误'), false);
+      return;
     }
     case 'backup-export': {
       btn.disabled = true; btn.textContent = '正在导出…';

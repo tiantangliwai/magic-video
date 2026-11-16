@@ -85,6 +85,11 @@ CREATE TABLE IF NOT EXISTS media_files (
     tvdb_id       INTEGER,
     season_no     INTEGER,
     episode_no    INTEGER,
+    -- 集数是怎么解析出来的（sxxeyy/xformat/chinese/ep/numbered/bare/trailing/bracket/range/user），
+    -- 以及可信度 high/medium/low。low 的条目进「集数待确认」，让用户点一下确认，
+    -- 不静默猜（`[01]`、`01-02` 这类写法语义本身就有歧义）。
+    episode_source TEXT,
+    episode_confidence TEXT,
     year          INTEGER,
     subject_id    INTEGER REFERENCES subjects(id) ON DELETE SET NULL,
     status        TEXT NOT NULL DEFAULT 'new',
@@ -297,6 +302,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
             ("tmdb_id", "INTEGER"), ("tvdb_id", "INTEGER"),
             # 目录不可达时标「缺失」，只隐藏不删行、不动播放进度（P1-1）
             ("missing_since", "TEXT"),
+            # 集数解析来源与可信度：low 的进「集数待确认」（OPTIMIZATION #6 尾巴）
+            ("episode_source", "TEXT"), ("episode_confidence", "TEXT"),
         ),
         "subjects": (("tvdb_id", "INTEGER"),),
         "watched_list": (("match_by", "TEXT"),),

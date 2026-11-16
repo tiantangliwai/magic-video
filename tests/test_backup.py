@@ -243,6 +243,91 @@ class BackupRestoreTest(IsolatedDbTestCase):
         self.assertIn("tables", result["error"])
 
 
+class TableExportTest(IsolatedDbTestCase):
+    """CSV / NFO 导出（OPTIMIZATION #5 的下半句）。"""
+
+    def _seed(self):
+        db.execute(
+            "INSERT INTO media_files(path, filename, title_guess, title_cn, season_no, "
+            "episode_no, year, size, duration_ms) VALUES (?, ?, ?, ?, 1, 1, 2023, ?, ?)",
+            (str(self.tmp / "a.mkv"), "a.mkv", "Frieren", "葬送的芙莉莲", 104857600, 1440000),
+        )
+        file_id = int(db.scalar("SELECT MAX(id) FROM media_files"))
+        db.execute(
+            "INSERT INTO watch_progress(file_id, position_ms, percent, completed, "
+            "total_watched_ms, last_played_at) VALUES (?, 0, 100, 1, 720000, ?)",
+            (file_id, db.now()),
+        )
+        db.execute(
+            "INSERT INTO watch_sessions(file_id, started_at, ended_at, watched_ms) "
+            "VALUES (?, ?, ?, 600000)",
+            (file_id, "2026-11-16 20:00:00", "2026-11-16 20:15:00"),
+        )
+        db.execute(
+            "INSERT INTO watched_list(title, title_cn, season_no, episode_from, episode_to, "
+            "status, source) VALUES ('Frieren', '葬送的芙莉莲', 1, 1, 12, 'watched', 'manual')"
+        )
+        return file_id
+
+    def test_csv_export_writes_bom_and_header(self):
+        self._seed()
+        result = backup.export_csv("history")
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["rows"], 1)
+        path = Path(result["path"])
+        self.assertTrue(path.is_file())
+        self.assertEqual(path.parent, self.tmp / "exports")
+        raw = path.read_bytes()
+        # Excel 认 BOM 才不会把中文读成乱码
+        self.assertTrue(raw.startswith(b"\xef\xbb\xbf"))
+        text = raw.decode("utf-8-sig")
+        self.assertIn("开始时间", text)
+        self.assertIn("葬送的芙莉莲", text)
+
+    def test_each_kind_exports_its_own_columns(self):
+        self._seed()
+        history = backup.export_csv("history")
+        watched = backup.export_csv("watched")
+        media = backup.export_csv("media")
+        for r in (history, watched, media):
+            self.assertTrue(r["ok"], r)
+            self.assertEqual(r["rows"], 1)
+        self.assertIn("原名", Path(watched["path"]).read_text(encoding="utf-8-sig"))
+        self.assertIn("累计观看分钟", Path(media["path"]).read_text(encoding="utf-8-sig"))
+
+    def test_unknown_kind_is_rejected(self):
+        result = backup.export_csv("drop-table")
+        self.assertFalse(result["ok"])
+        self.assertIn("不支持", result["error"])
+
+    def test_export_never_writes_into_video_directory(self):
+        """铁律：导出只落数据目录的 exports，绝不写进媒体所在目录。"""
+        self._seed()
+        self.assertTrue(backup.export_csv("media")["ok"])
+        self.assertTrue(backup.export_nfo()["ok"])
+        self.assertEqual(list(self.tmp.glob("*.csv")), [])
+        self.assertEqual(list(self.tmp.glob("*.nfo")), [])
+
+    def test_nfo_export_builds_one_tvshow_per_work(self):
+        self._seed()
+        result = backup.export_nfo()
+
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["works"], 1)
+        root = Path(result["path"])
+        self.assertEqual(root, self.tmp / "exports" / "nfo")
+        nfo = root / "葬送的芙莉莲" / "tvshow.nfo"
+        self.assertTrue(nfo.is_file(), "应按作品建子目录并写 tvshow.nfo")
+        text = nfo.read_text(encoding="utf-8")
+        self.assertIn("<title>葬送的芙莉莲</title>", text)
+        self.assertIn("<year>2023</year>", text)
+
+    def test_nfo_folder_name_is_windows_safe(self):
+        self.assertEqual(backup._safe_folder('A/B:C*D?"E"'), "A_B_C_D__E_")
+        self.assertEqual(backup._safe_folder("   "), "未命名")
+
+
 if __name__ == "__main__":  # pragma: no cover
     import unittest
 

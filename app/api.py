@@ -436,6 +436,24 @@ class Api:
     def list_backups(self) -> list[dict]:
         return backup.list_backups()
 
+    def export_table(self, kind: str = "history") -> dict:
+        """把历史 / 看过的列表 / 媒体库导成 CSV 到 <数据目录>/exports/。"""
+        return backup.export_csv(kind)
+
+    def export_nfo(self) -> dict:
+        """按作品导出 Kodi tvshow.nfo 到 <数据目录>/exports/nfo/（不写视频目录）。"""
+        return backup.export_nfo()
+
+    def open_export_folder(self) -> dict:
+        """打开导出目录，方便用户取走 CSV / NFO。"""
+        path = Path(config.DATA_DIR) / backup.EXPORT_DIR_NAME
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(path))
+            return {"ok": True, "path": str(path)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
+
     def get_history(self, limit: int = 100) -> list[dict]:
         """历史记录按「每个作品只显示最新一次会话」去重。
 
@@ -1613,6 +1631,47 @@ class Api:
     def dismiss_missing(self, file_ids: list | None = None) -> dict:
         """用户确认后隐藏「缺失」文件：软删（可恢复），不真删行、不动进度。"""
         return scanner.dismiss_missing(file_ids)
+
+    # ---------- 集数待确认（v0.1.6，OPTIMIZATION #6 尾巴） ----------
+    def get_episode_review(self, limit: int = 200) -> dict:
+        """列出集数解析**低置信度**的文件，交给用户确认。
+
+        只有 ``episode_confidence='low'`` 的才进来：解析器对这类写法（`[01]`、
+        `01-02`）本身没有把握，静默猜一个不如让用户点一下。用户确认后
+        ``episode_source`` 记为 ``user``，重新扫描不会再覆盖。
+        """
+        rows = db.rows(
+            "SELECT f.id, f.filename, "
+            f"{_display_title_expr()} AS display_title, f.season_no, f.episode_no, "
+            "f.episode_source, f.path "
+            "FROM media_files f "
+            "WHERE f.episode_confidence = 'low' AND COALESCE(f.deleted_at, '') = '' "
+            "ORDER BY f.filename COLLATE NOCASE LIMIT ?",
+            (max(1, min(int(limit or 200), 1000)),),
+        )
+        return {"ok": True, "rows": blacklist.filter_rows(rows, keys=("display_title", "filename")),
+                "total": len(rows)}
+
+    def set_episode(self, file_id: int, season_no=None, episode_no=None) -> dict:
+        """用户确认某文件的季/集，并把它标成 ``user`` 来源（重新扫描不再覆盖）。"""
+        rec = db.row("SELECT id FROM media_files WHERE id = ?", (int(file_id),))
+        if not rec:
+            return {"ok": False, "error": "文件不存在"}
+        try:
+            season = None if season_no in (None, "", "-") else int(season_no)
+            episode = None if episode_no in (None, "", "-") else int(episode_no)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "季 / 集必须是数字，留空表示不区季"}
+        if season is not None and not 0 <= season <= 99:
+            return {"ok": False, "error": "季数超出范围（0~99）"}
+        if episode is not None and not 0 <= episode <= 9999:
+            return {"ok": False, "error": "集数超出范围（0~9999）"}
+        db.execute(
+            "UPDATE media_files SET season_no = ?, episode_no = ?, episode_source = 'user', "
+            "episode_confidence = 'high', updated_at = ? WHERE id = ?",
+            (season, episode, db.now(), int(file_id)),
+        )
+        return {"ok": True, "file_id": int(file_id), "season_no": season, "episode_no": episode}
 
     def set_directory_enabled(self, dir_id: int, enabled: bool) -> dict:
         return scanner.set_directory_enabled(int(dir_id), bool(enabled))

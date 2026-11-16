@@ -78,7 +78,10 @@ TAG_RE = re.compile(
 )
 # 标准剧集标记优先于模糊猜测
 SXXEYY_RE = re.compile(r"\bS(\d{1,2})E(\d{1,3})(?:-E?(\d{1,3}))?\b", re.IGNORECASE)
-SEASON_RE = re.compile(r"(?:Season|S|第)\s*(\d{1,2})\s*(?:季|期)?", re.IGNORECASE)
+# 季数：英文 `Season 2` / `S02`，中文 `第2季` / `第2期`。
+# 中文这支**必须要求「季/期」后缀**：旧版后缀可选，导致 `第03话` 被同时读成「第 3 季」，
+# 一部 12 集的番会被拆成 12 个季。集数交给 EPISODE_PATTERNS 处理。
+SEASON_RE = re.compile(r"(?:Season|S)\s*(\d{1,2})(?!\d)|第\s*(\d{1,2})\s*(?:季|期)", re.IGNORECASE)
 SEASON_WORD_RE = re.compile(
     r"\b(?:Season|S)\s*\d{1,2}\b|第\s*\d{1,2}\s*(?:季|期)|"
     r"\b(?:2nd|3rd|1st)\s+Season\b",
@@ -89,13 +92,22 @@ EPISODE_WORD_RE = re.compile(
     re.IGNORECASE,
 )
 TRAILING_EP_RE = re.compile(r"[-–—_.\s]\s*(\d{1,3})\s*(?:v\d)?\s*$", re.IGNORECASE)
+# `1x01` / `2x13`：美剧常见写法，同时给出季与集。放在 SxxEyy 之后、其它集数规则之前。
+XFORMAT_RE = re.compile(r"(?<![\dA-Za-z])(\d{1,2})x(\d{1,3})(?!\d)", re.IGNORECASE)
 EPISODE_PATTERNS = [
-    re.compile(r"(?:EP|Episode|第)\s*(\d{1,3})\s*(?:话|集|話)?"),
+    # EP12 / Episode 3 / 第03话。中文这支同样要求「话/集/話」后缀，
+    # 否则 `第2季` 会被当成第 2 集。
+    re.compile(r"(?:EP|Episode)\s*(\d{1,3})|第\s*(\d{1,3})\s*(?:话|集|話)"),
     re.compile(r"^\s*[-_]?\s*(\d{1,3})\s*(?:v\d)?\s*$"),
     # Anna.Directors.Cut.E01 / Show.E08.1080p 这类「无 S 前缀的 E01」也是剧集标记
     re.compile(r"(?<![A-Za-z0-9])E(\d{1,3})(?![A-Za-z0-9])", re.IGNORECASE),
     re.compile(r"[-_\s]\s*(\d{2,3})\s*(?:v\d)?\s*[-_\s\[]"),
 ]
+# 只有方括号里是纯数字时才当集数（`[1080p]`、`[2023]` 不算）；歧义大，标低置信度。
+BRACKET_EP_RE = re.compile(r"\[\s*(\d{1,3})\s*\]")
+# 集数区间 `01-02` / `1~12`：不知道想表达「这一集」还是「整段」，标低置信度。
+# 两个数字之间**不允许空格**：`Season 2 - 05` 里的「2 - 05」是季 + 集，不是区间。
+RANGE_EP_RE = re.compile(r"(?<!\d)(\d{1,3})[-~–—](\d{1,3})(?!\d)(?!\s*[pPiI])")
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
 # 文件名里的作品 ID 标签：{tmdb-123}、[tvdbid-456]、{tvdb=789}。
 # 数字允许为空，是为了把 `{tmdb-}` 这类残缺标签也一并剥掉，免得污染标题；
@@ -161,13 +173,23 @@ def should_ignore(path: Path) -> bool:
 
 
 def parse_filename(filename: str) -> dict:
-    """从文件名提取作品名 / 季 / 集数 / 年份。
+    """从文件名提取作品名 / 季 / 集数 / 年份，并标注集数的**可信度**。
 
-    同时兼容字幕组命名、Plex 风格 SxxEyy、中文「第 N 话」以及以集数结尾的文件名。
-    解析结果只用于识别与展示，不会回写或重命名原始文件。
+    同时兼容字幕组命名、Plex 风格 SxxEyy、美剧 ``1x01``、中文「第 N 话」以及以
+    集数结尾的文件名。解析结果只用于识别与展示，不会回写或重命名原始文件。
+
+    ``episode_confidence`` 三档，用于把「歧义写法」挑出来让用户确认：
+
+    - ``high``：``S01E02`` / ``EP12`` / ``第03话`` / ``E01`` / ``第2季 - 05``
+    - ``medium``：``1x01``（格式规范但少见）、纯数字文件名、结尾数字、区间分隔写法
+    - ``low``：``[01]`` 方括号集数、``01-02`` 区间——**语义本身有歧义**，进待确认区
+
+    低置信度不是「猜错了」，而是「同一串数字既可能是集数也可能是别的」。与其静默
+    猜一个，不如标出来让用户点一下确认（写入后 ``episode_source='user'``）。
     """
     stem = Path(filename).stem
     season, episode = None, None
+    ep_source, ep_conf = "", ""
 
     # 作品 ID 先提取出来：它比标题写法可靠（重名翻拍 / 多罗马字都绕过去了），
     # 而且必须在季集解析与清洗之前剥离，否则 `{tmdb-123}` 会污染 title_guess。
@@ -182,21 +204,52 @@ def parse_filename(filename: str) -> dict:
     id_clean = ID_TAG_RE.sub(" ", stem)
 
     s_ep = SXXEYY_RE.search(id_clean)
+    x_fmt = None if s_ep else XFORMAT_RE.search(id_clean)
     if s_ep:
         season, episode = int(s_ep.group(1)), int(s_ep.group(2))
+        ep_source, ep_conf = "sxxeyy", "high"
+    elif x_fmt:
+        # 1x01：季与集都有，格式算规范，但比 SxxEyy 少见一档
+        season, episode = int(x_fmt.group(1)), int(x_fmt.group(2))
+        ep_source, ep_conf = "xformat", "medium"
     else:
         s = SEASON_RE.search(id_clean)
         if s:
-            season = int(s.group(1))
-        for pattern in EPISODE_PATTERNS:
+            season = int(s.group(1) or s.group(2))
+        for idx, pattern in enumerate(EPISODE_PATTERNS):
             m = pattern.search(id_clean)
-            if m:
-                episode = int(m.group(1))
-                break
+            if not m:
+                continue
+            number = m.group(1) or m.group(2)
+            if not number:
+                continue
+            episode = int(number)
+            if idx == 0:
+                ep_source = "chinese" if "第" in m.group(0) else "ep"
+                ep_conf = "high"
+            elif idx == 2:
+                ep_source, ep_conf = "ep", "high"
+            elif idx == 1:
+                ep_source, ep_conf = "bare", "medium"
+            else:
+                ep_source, ep_conf = "numbered", "medium"
+            break
         if episode is None:
             m = TRAILING_EP_RE.search(id_clean)
             if m:
                 episode = int(m.group(1))
+                ep_source, ep_conf = "trailing", "medium"
+        if episode is None:
+            m = BRACKET_EP_RE.search(id_clean)
+            if m:
+                episode = int(m.group(1))
+                ep_source, ep_conf = "bracket", "low"
+
+    # 区间写法（01-02 / 1~12）：数字本身可能指「整段」，标低置信度让用户确认。
+    # 只在已经靠 trailing/bracket 这类弱规则取到集数时才升级成 low，
+    # SxxEyy 自带的 `S01E01-E03` 区间是明确的，不在此列。
+    if ep_conf in ("medium", "") and RANGE_EP_RE.search(id_clean):
+        ep_source, ep_conf = ep_source or "range", "low"
 
     year_match = YEAR_RE.search(id_clean)
     cleaned = BRACKET_RE.sub(" ", id_clean)
@@ -216,6 +269,8 @@ def parse_filename(filename: str) -> dict:
         "year": int(year_match.group(1)) if year_match else None,
         "tmdb_id": tmdb_id,
         "tvdb_id": tvdb_id,
+        "episode_source": ep_source,
+        "episode_confidence": ep_conf,
     }
 
 
@@ -409,8 +464,8 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 continue
             info = parse_filename(path.name)
             existing = db.row(
-                "SELECT id, size, mtime, deleted_at, tmdb_id, tvdb_id, missing_since "
-                "FROM media_files WHERE path = ?",
+                "SELECT id, size, mtime, deleted_at, tmdb_id, tvdb_id, missing_since, "
+                "episode_source FROM media_files WHERE path = ?",
                 (str(path),)
             )
             if existing:
@@ -430,6 +485,14 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                     db.execute("UPDATE media_files SET tmdb_id = ?, tvdb_id = COALESCE(tvdb_id, ?) "
                                "WHERE id = ?",
                                (info["tmdb_id"], info["tvdb_id"], existing["id"]))
+                # 老库补「集数来源/可信度」（同样只在原来为空时写）。
+                # 用户手工确认过的行 episode_source='user'，这里绝不会覆盖。
+                if not existing["episode_source"] and info["episode_source"]:
+                    db.execute(
+                        "UPDATE media_files SET episode_source = ?, episode_confidence = ? "
+                        "WHERE id = ?",
+                        (info["episode_source"], info["episode_confidence"], existing["id"]),
+                    )
                 if changed:
                     db.execute(
                         "UPDATE media_files SET size = ?, mtime = ?, updated_at = ? WHERE id = ?",
@@ -443,12 +506,14 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 else:
                     db.execute(
                         "INSERT INTO media_files(dir_id, path, filename, size, mtime, title_raw, "
-                        "title_guess, season_no, episode_no, year, tmdb_id, tvdb_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "title_guess, season_no, episode_no, year, tmdb_id, tvdb_id, "
+                        "episode_source, episode_confidence) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             directory["id"], str(path), path.name, stat.st_size, stat.st_mtime,
                             path.stem, info["title_guess"], info["season_no"], info["episode_no"],
                             info["year"], info["tmdb_id"], info["tvdb_id"],
+                            info["episode_source"], info["episode_confidence"],
                         ),
                     )
                     added += 1

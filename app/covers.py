@@ -32,20 +32,16 @@ import time
 import urllib.parse
 from pathlib import Path
 
-from . import config, db, textmatch
+from . import config, db, sites, textmatch
 
-AGEDM_SEARCH = "https://www.agedm.io/search"
-SEEDUCK_SEARCH = "https://seeduck.cc/s/{kw}/"
-SEEDUCK_PAGES = (   # 兼容旧契约的兜底池：只有搜索页全部失败时才用
-    "https://seeduck.cc/",
-    "https://seeduck.cc/categories/1/movies/",
-    "https://seeduck.cc/categories/2/movies/",
-    "https://seeduck.cc/categories/1/types/1/movies/",
-    "https://seeduck.cc/categories/2/types/25/movies/",
-)
-# 百度图片代理：data-original 里的 src= 参数是原始 CDN，直连最稳
-_BAIDU_PROXY_RE = re.compile(r"^https?://gimg\d*\.baidu\.com/", re.I)
-_RAW_CDN_HOSTS = ("cdn.aqdstatic.com",)
+# 站点常量与选择器统一由 ``app/sites.py``（唯一解析层）提供，这里只做别名转出：
+# 旧调用方与单测直接引用 ``covers._blocks`` / ``covers._TITLE_RE`` / ``covers.SEEDUCK_PAGES``，
+# 保留这些名字可避免为了「重构」而大面积改测试。
+AGEDM_SEARCH = sites.AGEDM_SEARCH
+SEEDUCK_SEARCH = sites.SEEDUCK_SEARCH
+SEEDUCK_PAGES = sites.SEEDUCK_PAGES
+_BAIDU_PROXY_RE = sites._BAIDU_PROXY_RE
+_RAW_CDN_HOSTS = sites._RAW_CDN_HOSTS
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 TIMEOUT = (2.5, 5.0)          # connect, read
@@ -57,21 +53,15 @@ MAX_BYTES = 3 * 1024 * 1024   # 单张封面上限，防止异常响应撑爆磁
 
 # 切块用 finditer + \Z 兜底终点：旧版用 ``(?=...|</main>)`` 的 split 捕获组，
 # 真实页面最后一块后面没有 </main>，会被整块丢掉；而精确匹配常恰好是最后一块。
-_BLOCK_RE = re.compile(r'<div class="card cata_video_item\b.*?(?=<div class="card cata_video_item\b|\Z)',
-                       re.S)
-_TITLE_RE = re.compile(r'<a\b[^>]*title="([^"]+)"', re.S)
-_ORIG_RE = re.compile(r'data-original="([^"]+)"')
-_SRC_RE = re.compile(r'class="video_thumbs[^"]*"\s+src="([^"]+)"')
-_SEED_RE = re.compile(
-    r'<a[^>]+title="([^"]+)"[^>]*class="image"[^>]*>\s*<img[^>]+src="([^"]+)"',
-    re.S,
-)
-# Seeduck 搜索页：条目块（<a class="image"> 到下一个同级块），块内 <h2> 是干净短标题
-_SEED_ITEM_RE = re.compile(
-    r'<a\b[^>]*class="image"[^>]*>.*?(?=<a\b[^>]*class="image"|\Z)', re.S)
-_SEED_IMG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.S)
-_SEED_H2_RE = re.compile(r'<h2>(.*?)</h2>', re.S)
-_TAG_RE = re.compile(r"<[^>]+>")
+_BLOCK_RE = sites._BLOCK_RE
+_TITLE_RE = sites._TITLE_RE
+_ORIG_RE = sites._ORIG_RE
+_SRC_RE = sites._SRC_RE
+_SEED_RE = sites._SEED_RE
+_SEED_ITEM_RE = sites._SEED_ITEM_RE
+_SEED_IMG_RE = sites._SEED_IMG_RE
+_SEED_H2_RE = sites._SEED_H2_RE
+_TAG_RE = sites._TAG_RE
 
 _JOB = {
     "running": False,
@@ -165,51 +155,18 @@ def _fuzzy_match(candidate: str, want: str) -> bool:
     return a == b or b in a or a in b or _norm_key(_strip_season(a)) == _norm_key(_strip_season(b))
 
 
-def _blocks(body: str) -> list[str]:
-    """AGE 搜索页结果块；用字符串末尾兜底，保证最后一块（常为精确匹配）不被丢掉。"""
-    return [m.group(0) for m in _BLOCK_RE.finditer(body)]
-
-
-def _age_candidates(block: str) -> list[str]:
-    """只取 data-original 的真实封面，彻底排除所有结果共用的占位 src。
-
-    data-original 是百度图片代理 ``...&src=<urlencoded>``，其 src 参数就是
-    原始 CDN 直连地址：优先放它，其次放代理本身。两者都比占位图可靠。
-    """
-    out: list[str] = []
-    for raw in _ORIG_RE.findall(block):
-        url = html.unescape(raw)
-        m = re.search(r"[?&]src=([^&]+)", url)
-        if m and _BAIDU_PROXY_RE.match(url):
-            try:
-                origin = urllib.parse.unquote(m.group(1))
-                if (origin.startswith("http") and any(h in origin for h in _RAW_CDN_HOSTS)):
-                    out.append(origin)
-            except (ValueError, UnicodeDecodeError):
-                pass
-        if url.startswith("http"):
-            out.append(url)
-    return list(dict.fromkeys(out))
+# 分块与封面候选的唯一实现在 app/sites.py；这里保持旧名字给内部与单测使用。
+_blocks = sites.blocks
+_age_candidates = sites.age_candidates
 
 
 def parse_agedm(body: str, want: str) -> tuple[list[str], str] | None:
     """从 AGE动漫 搜索结果里挑出与 want 最匹配的 (候选封面URL列表, 命中标题)。
 
     两轮：先找**标题完全一致**的结果（避免「葬送的芙莉莲」误拿到「第二季」封面），
-    没有完全一致时才放宽到包含匹配。
+    没有完全一致时才放宽到包含匹配。解析本身由 ``sites.age_entries`` 完成。
     """
-    blocks = []
-    for block in _blocks(body):
-        titles = _TITLE_RE.findall(block)
-        if not titles:
-            continue
-        name = html.unescape(titles[0]).strip()
-        # parse_agedm 保留旧的 URL 拼接契约（含 src 缩略图），供单测与旧调用方使用；
-        # 真实下载走 _pairs → _age_candidates，那里已排除占位图。
-        urls = [html.unescape(u) for u in (_ORIG_RE.findall(block) + _SRC_RE.findall(block))]
-        urls = list(dict.fromkeys(u for u in urls if u.startswith("http")))
-        if urls:
-            blocks.append((name, urls))
+    blocks = [(e["title"], e["images"]) for e in sites.age_entries(body) if e["images"]]
 
     key = _norm_key(want)
     for name, urls in blocks:
@@ -252,31 +209,12 @@ _GENERIC_IMG_RE = re.compile(r'(?:data-original|data-src|data-lazy-src)="([^"]+)
 def _seed_pairs(body: str) -> list[tuple[str, list[str]]]:
     """Seeduck 搜索页条目 → (短标题, [真实封面 URL])。
 
-    优先用同条目 ``<h2>`` 的干净短标题；没有 h2（旧首页/分类页）时回退到
-    ``<a title>``。title 常带日文副标题，直接参与打分会干扰匹配。
+    解析由 ``sites.seeduck_entries`` 统一完成；这里只保留「只要第一张图」的封面语义。
     """
-    items = _SEED_ITEM_RE.findall(body)
     out: list[tuple[str, list[str]]] = []
-    if items:
-        for chunk in items:
-            imgs = [html.unescape(u) for u in _SEED_IMG_RE.findall(chunk)
-                    if u.startswith("http")]
-            if not imgs:
-                continue
-            h2 = _SEED_H2_RE.search(chunk)
-            if h2:
-                name = html.unescape(_TAG_RE.sub("", h2.group(1))).replace("#", "").strip()
-            else:
-                titles = _TITLE_RE.findall(chunk)
-                name = html.unescape(titles[0]).strip() if titles else ""
-            if name:
-                out.append((name, [imgs[0]]))
-    if out:
-        return out
-    # 兼容旧页面结构（tests/test_covers.py 的 SEED_HTML 只有 <a title class=image>）
-    for name, url in _SEED_RE.findall(body):
-        if url.startswith("http"):
-            out.append((html.unescape(name).strip(), [html.unescape(url)]))
+    for entry in sites.seeduck_entries(body, require_image=True):
+        if entry["title"] and entry["images"]:
+            out.append((entry["title"], [entry["images"][0]]))
     return out
 
 

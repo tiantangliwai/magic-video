@@ -27,10 +27,12 @@ def reset_module_state() -> None:
     metadata._PAUSED_UNTIL = 0.0
     # 新增的进程内缓存（媒体库结果 / 网页搜索 / 黑名单词表）也要清，
     # 否则上一个用例的临时库数据会漏到下一个用例里。
-    from app import api, blacklist, websearch
+    from app import api, blacklist, sites, websearch
     api._MEDIA_CACHE.clear()
     websearch.clear_cache()
     blacklist.invalidate()
+    # 站点解析健康度是进程级计数，不清会让「解析失败」统计跨用例累加。
+    sites.reset_health()
 
 
 class IsolatedDbTestCase(unittest.TestCase):

@@ -5,7 +5,7 @@
 这里只取搜索结果这一层——标题、详情页链接、封面、年份/类型——渲染成卡片，
 点卡片用系统默认浏览器打开详情页（:func:`app.api.Api.open_url`）。
 
-解析规则与封面抓取共用同一套选择器（见 ``app/covers.py``）：
+解析规则与封面抓取共用**同一份实现**（``app/sites.py``，唯一解析层）：
 - AGE：``<div class="card cata_video_item">`` 切块，块内 ``<a class="d-block" title>``
   是详情页，``data-original`` 是真实封面（``src`` 是所有结果共用的占位图，不能用）。
 - Seeduck：``<a class="image" href><img src>`` + 同条目 ``<h2>`` 短标题。
@@ -15,30 +15,23 @@
 """
 from __future__ import annotations
 
-import html
-import re
 import threading
 import time
-import urllib.parse
 
-from . import covers
+from . import covers, sites
 
-SOURCE_LABELS = {"agedm": "AGE动漫", "seeduck": "Seeduck"}
-SOURCE_HOSTS = {"agedm": "https://www.agedm.io", "seeduck": "https://seeduck.cc"}
+SOURCE_LABELS = sites.SOURCE_LABELS
+SOURCE_HOSTS = sites.SOURCE_HOSTS
 
 # 单次网页搜索的总预算：两个站点并行，最慢的那个也不能把界面卡住
 SEARCH_BUDGET_SEC = 8.0
 PER_SOURCE_TIMEOUT = (2.5, 5.0)
 MAX_ITEMS_PER_SOURCE = 24
 
-# AGE 详情页锚点：href 在前、class 与 title 在后（实测顺序，别写死 class 在前）
-_AGE_HREF_RE = re.compile(
-    r'<a\b[^>]*href="([^"]+)"[^>]*class="[^"]*d-block[^"]*"[^>]*title="([^"]+)"', re.S)
-_AGE_STATUS_RE = re.compile(r'<span class="video_play_status[^"]*">([^<]*)</span>')
-# Seeduck 条目锚点
-_SEED_HREF_RE = re.compile(r'<a\b[^>]*class="image"[^>]*href="([^"]*)"', re.S)
-_SEED_META_RE = re.compile(r"<li>\s*([0-9]{4}\s*/[^<]{0,120})</li>")
-_TAG_RE = re.compile(r"<[^>]+>")
+# 站点选择器一律从 app/sites.py 取（唯一解析层），这里不再自带正则副本。
+_AGE_STATUS_RE = sites._AGE_STATUS_RE
+_SEED_META_RE = sites._SEED_META_RE
+_TAG_RE = sites._TAG_RE
 
 _CACHE_TTL = 45.0
 _CACHE: dict[str, tuple[float, dict]] = {}
@@ -46,101 +39,55 @@ _CACHE_LOCK = threading.Lock()
 
 
 def search_url(source: str, keyword: str) -> str:
-    kw = str(keyword or "").strip()
-    if source == "agedm":
-        return covers.AGEDM_SEARCH + "?" + urllib.parse.urlencode({"query": kw})
-    return covers.SEEDUCK_SEARCH.format(kw=urllib.parse.quote(kw, safe=""))
+    return sites.search_url(source, keyword)
 
 
 def _absolute(source: str, href: str) -> str:
-    text = html.unescape(str(href or "").strip())
-    if not text:
-        return ""
-    if text.startswith("//"):
-        return "https:" + text
-    if text.startswith("http://"):
-        # AGE 给的详情页链接是 http，升级到 https 免得浏览器拦混合内容
-        return "https://" + text[len("http://"):]
-    if text.startswith("https://"):
-        return text
-    if text.startswith("/"):
-        return SOURCE_HOSTS.get(source, "") + text
-    return ""
+    return sites.absolute_url(source, href)
 
 
 def _clean_title(text: str) -> str:
-    return html.unescape(_TAG_RE.sub("", str(text or ""))).replace("#", "").strip()
+    return sites.clean_title(text)
 
 
 def parse_agedm(body: str) -> list[dict]:
-    """AGE 搜索结果页 → 卡片列表。"""
+    """AGE 搜索结果页 → 卡片列表。
+
+    解析（分块、标题、封面候选、详情页链接、播出状态）由 ``sites.age_entries``
+    统一完成；这里只负责「按文档顺序全量返回 + 补搜索链接 + 限量」。
+    """
     out: list[dict] = []
-    seen: set[str] = set()
-    for block in covers._blocks(body):
-        links = _AGE_HREF_RE.findall(block)
-        if not links:
-            # 站点改版时退一步：块里任意带 title 的锚点也算
-            fallback = covers._TITLE_RE.findall(block)
-            if not fallback:
-                continue
-            href, title = "", html.unescape(fallback[0]).strip()
-        else:
-            href, title = links[0][0], links[0][1]
-        title = _clean_title(title)
+    for entry in sites.age_entries(body)[:MAX_ITEMS_PER_SOURCE]:
+        title = sites.clean_title(entry["title"])
         if not title:
             continue
-        url = _absolute("agedm", href)
-        key = title + "|" + url
-        if key in seen:
-            continue
-        seen.add(key)
-        images = covers._age_candidates(block)
-        status = _AGE_STATUS_RE.search(block)
         out.append({
             "source": "agedm",
             "source_label": SOURCE_LABELS["agedm"],
             "title": title,
-            "url": url or search_url("agedm", title),
-            "cover": images[0] if images else "",
-            "meta": html.unescape(status.group(1)).strip() if status else "",
+            "url": entry["url"] or search_url("agedm", title),
+            "cover": entry["covers"][0] if entry["covers"] else "",
+            "meta": entry["status"],
         })
-        if len(out) >= MAX_ITEMS_PER_SOURCE:
-            break
     return out
 
 
 def parse_seeduck(body: str) -> list[dict]:
     """Seeduck 搜索结果页 → 卡片列表（标题用同条目 <h2>，比 <a title> 干净）。"""
     out: list[dict] = []
-    seen: set[str] = set()
-    for chunk in covers._SEED_ITEM_RE.findall(body):
-        images = [html.unescape(u) for u in covers._SEED_IMG_RE.findall(chunk)
-                  if u.startswith("http")]
-        heading = covers._SEED_H2_RE.search(chunk)
-        if heading:
-            title = _clean_title(heading.group(1))
-        else:
-            titles = covers._TITLE_RE.findall(chunk)
-            title = _clean_title(titles[0]) if titles else ""
+    entries = sites.seeduck_entries(body, require_image=False)[:MAX_ITEMS_PER_SOURCE]
+    for entry in entries:
+        title = entry["title"]
         if not title:
             continue
-        href = _SEED_HREF_RE.search(chunk)
-        url = _absolute("seeduck", href.group(1)) if href else ""
-        key = title + "|" + url
-        if key in seen:
-            continue
-        seen.add(key)
-        meta = _SEED_META_RE.search(chunk)
         out.append({
             "source": "seeduck",
             "source_label": SOURCE_LABELS["seeduck"],
             "title": title,
-            "url": url or search_url("seeduck", title),
-            "cover": images[0] if images else "",
-            "meta": html.unescape(_clean_title(meta.group(1))) if meta else "",
+            "url": entry["url"] or search_url("seeduck", title),
+            "cover": entry["images"][0] if entry["images"] else "",
+            "meta": entry["meta"],
         })
-        if len(out) >= MAX_ITEMS_PER_SOURCE:
-            break
     return out
 
 
@@ -214,6 +161,8 @@ def search(keyword: str, limit: int = 0, use_cache: bool = True) -> dict:
         "ok": True, "keyword": kw, "items": items, "errors": errors,
         "links": {src: search_url(src, kw) for src in SOURCE_LABELS},
         "labels": dict(SOURCE_LABELS),
+        # 解析健康度：某站 parsed 在涨但 empty 也在涨 = 站点改版，不是网络问题
+        "parse_health": sites.health(),
     }
     if use_cache:
         with _CACHE_LOCK:

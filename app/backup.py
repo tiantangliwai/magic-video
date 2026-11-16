@@ -233,3 +233,151 @@ def list_backups() -> list[dict]:
         }
         for path, mtime in files
     ]
+
+
+# ---------------------------------------------------------------------------
+# 表格 / NFO 导出（v0.1.6 补充，OPTIMIZATION #5 的下半句「可选 NFO/CSV 导出」）
+#
+# 两条硬约束：
+# 1. **只写导出目录**，绝不写进视频所在目录。项目铁律是「扫描、解析、刮削一律只读
+#    视频文件，不写同目录 .nfo」——所以 NFO 也导出成独立目录树，由用户自己搬走。
+# 2. 导出是**只读查询**，不写库、不动进度，导完对现有缓存无影响。
+# ---------------------------------------------------------------------------
+EXPORT_DIR_NAME = "exports"
+EXPORT_KINDS = ("history", "watched", "media")
+
+
+def _export_dir() -> Path:
+    return Path(config.DATA_DIR) / EXPORT_DIR_NAME
+
+
+def _export_path(prefix: str, suffix: str) -> Path:
+    """导出目录下的带时间戳文件名；同名自动加序号，不覆盖已有导出。"""
+    directory = _export_dir()
+    directory.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    path = directory / f"{prefix}-{stamp}{suffix}"
+    index = 2
+    while path.exists():
+        path = directory / f"{prefix}-{stamp}-{index}{suffix}"
+        index += 1
+    return path
+
+
+def _csv_rows(kind: str) -> tuple[list[str], list[list]]:
+    """导出三类表格；列顺序固定，方便用户用 Excel 直接做透视。"""
+    if kind == "history":
+        rows = db.rows(
+            "SELECT s.started_at, s.ended_at, COALESCE(f.title_cn, f.title_guess, s.file_id) AS title, "
+            "f.season_no, f.episode_no, f.filename, "
+            "COALESCE(s.watched_ms, 0) AS watched_ms, "
+            "COALESCE(p.percent, 0) AS percent "
+            "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
+            "LEFT JOIN watch_progress p ON p.file_id = s.file_id "
+            "ORDER BY s.started_at DESC"
+        )
+        header = ["开始时间", "结束时间", "作品", "季", "集", "文件名", "观看分钟", "进度%"]
+        body = [[r["started_at"], r["ended_at"], r["title"], r["season_no"], r["episode_no"],
+                 r["filename"], round((r["watched_ms"] or 0) / 60000, 1), round(r["percent"] or 0, 1)]
+                for r in rows]
+        return header, body
+
+    if kind == "watched":
+        rows = db.rows(
+            "SELECT title, title_cn, season_no, episode_from, episode_to, status, source, "
+            "match_by, imported_at, note FROM watched_list ORDER BY id"
+        )
+        header = ["原名", "中文名", "季", "起始集", "结束集", "状态", "来源", "匹配方式", "导入时间", "备注"]
+        body = [[r["title"], r["title_cn"], r["season_no"], r["episode_from"], r["episode_to"],
+                 r["status"], r["source"], r["match_by"], r["imported_at"], r["note"]]
+                for r in rows]
+        return header, body
+
+    rows = db.rows(
+        "SELECT f.path, f.filename, COALESCE(f.title_cn, f.title_guess) AS title, "
+        "f.season_no, f.episode_no, f.size, COALESCE(f.duration_ms, 0) AS duration_ms, "
+        "COALESCE(p.total_watched_ms, 0) AS total_watched_ms, "
+        "COALESCE(p.completed, 0) AS completed, p.last_played_at "
+        "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+        "ORDER BY f.filename COLLATE NOCASE"
+    )
+    header = ["路径", "文件名", "作品", "季", "集", "大小MB", "时长分钟", "累计观看分钟", "已看完", "最后播放"]
+    body = [[r["path"], r["filename"], r["title"], r["season_no"], r["episode_no"],
+             round((r["size"] or 0) / 1048576, 1), round((r["duration_ms"] or 0) / 60000, 1),
+             round((r["total_watched_ms"] or 0) / 60000, 1),
+             "是" if r["completed"] else "否", r["last_played_at"]]
+            for r in rows]
+    return header, body
+
+
+def export_csv(kind: str = "history", path: str | Path | None = None) -> dict:
+    """把历史 / 看过的列表 / 媒体库导成 CSV（UTF-8 BOM，Excel 直接双击不乱码）。"""
+    import csv
+
+    kind = str(kind or "").strip().lower()
+    if kind not in EXPORT_KINDS:
+        return {"ok": False, "error": f"不支持的导出类型：{kind}（可选 {', '.join(EXPORT_KINDS)}）"}
+    try:
+        header, body = _csv_rows(kind)
+        target = Path(path) if path else _export_path(f"magicvideo-{kind}", ".csv")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("w", encoding="utf-8-sig", newline="") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(header)
+            writer.writerows(body)
+        return {"ok": True, "kind": kind, "path": str(target), "rows": len(body)}
+    except Exception as e:  # noqa: BLE001 - 导出失败只返回错误，不影响主流程
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def export_nfo(path: str | Path | None = None) -> dict:
+    """按作品导出 Kodi 风格 ``tvshow.nfo``，写到独立导出目录树。
+
+    目录结构：``<数据目录>/exports/nfo/<作品名>/tvshow.nfo``。
+    **不写进视频目录**（项目铁律），用户需要 Kodi 识别时自己把目录树搬过去。
+    """
+    from xml.sax.saxutils import escape
+
+    try:
+        rows = db.rows(
+            "SELECT COALESCE(NULLIF(TRIM(COALESCE(title_cn, title_guess)), ''), filename) AS title, "
+            "MIN(year) AS year, COUNT(*) AS episodes, "
+            "COUNT(DISTINCT COALESCE(season_no, 0)) AS seasons "
+            "FROM media_files WHERE COALESCE(deleted_at, '') = '' "
+            "GROUP BY title ORDER BY title COLLATE NOCASE"
+        )
+        root = Path(path) if path else (_export_dir() / "nfo")
+        root.mkdir(parents=True, exist_ok=True)
+        written = 0
+        for row in rows:
+            title = str(row["title"] or "").strip()
+            if not title:
+                continue
+            folder = root / _safe_folder(title)
+            folder.mkdir(parents=True, exist_ok=True)
+            lines = [
+                '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>',
+                "<tvshow>",
+                f"  <title>{escape(title)}</title>",
+                f"  <originaltitle>{escape(title)}</originaltitle>",
+            ]
+            if row["year"]:
+                lines.append(f"  <year>{int(row['year'])}</year>")
+            lines.append(f"  <season>{int(row['seasons'] or 1)}</season>")
+            lines.append(f"  <episode>{int(row['episodes'] or 0)}</episode>")
+            lines.append("  <status>Continuing</status>")
+            lines.append("</tvshow>")
+            (folder / "tvshow.nfo").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            written += 1
+        return {"ok": True, "path": str(root), "works": written}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+_WINDOWS_BAD = str.maketrans({c: "_" for c in '\\/:*?"<>|'})
+
+
+def _safe_folder(title: str) -> str:
+    """作品名 → 合法目录名；截断到 80 字符避免超长路径。"""
+    name = str(title).translate(_WINDOWS_BAD).strip(" .")
+    return (name or "未命名")[:80]

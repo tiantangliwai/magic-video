@@ -84,6 +84,86 @@ class IdTagTests(IsolatedDbTestCase):
         self.assertEqual(row["title_guess"], "Frieren")
 
 
+class EpisodeConfidenceTests(IsolatedDbTestCase):
+    """集数解析的来源与可信度（OPTIMIZATION #6 尾巴）。
+
+    低置信度只留给**语义本身有歧义**的写法（方括号数字、区间），
+    规范的 `SxxEyy` / `1x01` / `第03话` 一律自动识别，不打扰用户。
+    """
+
+    def test_chinese_episode_is_not_mistaken_for_season(self):
+        """`第03话` 以前会被季正则同时读成「第 3 季」，一部 12 集的番拆成 12 季。"""
+        info = scanner.parse_filename("[Group] 葬送的芙莉莲 第03话 [1080p].mkv")
+        self.assertEqual(info["episode_no"], 3)
+        self.assertIsNone(info["season_no"], "第 N 话 不是季数")
+        self.assertEqual(info["episode_confidence"], "high")
+
+    def test_chinese_season_with_suffix_still_works(self):
+        info = scanner.parse_filename("某某番 第2季 - 05.mkv")
+        self.assertEqual((info["season_no"], info["episode_no"]), (2, 5))
+        self.assertEqual(info["episode_confidence"], "medium")
+
+    def test_x_format_gives_season_and_episode(self):
+        info = scanner.parse_filename("Show.1x01.1080p.mkv")
+        self.assertEqual((info["season_no"], info["episode_no"]), (1, 1))
+        self.assertEqual(info["episode_source"], "xformat")
+        self.assertEqual(info["episode_confidence"], "medium")
+
+    def test_bracket_episode_is_low_confidence(self):
+        info = scanner.parse_filename("Show.[01].mkv")
+        self.assertEqual(info["episode_no"], 1)
+        self.assertEqual(info["episode_source"], "bracket")
+        self.assertEqual(info["episode_confidence"], "low")
+
+    def test_episode_range_is_low_confidence(self):
+        info = scanner.parse_filename("Show.01-02.mkv")
+        self.assertEqual(info["episode_confidence"], "low")
+        self.assertEqual(info["episode_source"], "trailing")
+
+    def test_season_plus_episode_dash_is_not_a_range(self):
+        """`Season 2 - 05` 里的「2 - 05」是季 + 集，不是集数区间。"""
+        info = scanner.parse_filename("Show Season 2 - 05.mkv")
+        self.assertEqual((info["season_no"], info["episode_no"]), (2, 5))
+        self.assertEqual(info["episode_confidence"], "medium")
+
+    def test_sxxeyy_is_high_and_never_flagged(self):
+        info = scanner.parse_filename("Show.S01E02.mkv")
+        self.assertEqual(info["episode_source"], "sxxeyy")
+        self.assertEqual(info["episode_confidence"], "high")
+
+    def test_year_and_quality_tags_do_not_produce_episodes(self):
+        info = scanner.parse_filename("Your.Name.(2016).[1080p].mkv")
+        self.assertIsNone(info["episode_no"])
+        self.assertEqual(info["episode_confidence"], "")
+
+    def test_scan_persists_source_and_confidence(self):
+        root = self.tmp / "conf"
+        root.mkdir()
+        (root / "Show.[01].mkv").write_bytes(b"z" * 10)
+        scanner.add_directory(str(root))
+        scanner.scan()
+        row = db.row("SELECT season_no, episode_no, episode_source, episode_confidence "
+                     "FROM media_files WHERE filename = 'Show.[01].mkv'")
+        self.assertEqual(row["episode_source"], "bracket")
+        self.assertEqual(row["episode_confidence"], "low")
+
+    def test_user_confirmation_survives_rescan(self):
+        root = self.tmp / "conf2"
+        root.mkdir()
+        (root / "Show.[01].mkv").write_bytes(b"z" * 10)
+        scanner.add_directory(str(root))
+        scanner.scan()
+        file_id = int(db.scalar("SELECT id FROM media_files WHERE filename = 'Show.[01].mkv'"))
+        # 用户手工指定成第 2 季第 7 集
+        db.execute("UPDATE media_files SET season_no = 2, episode_no = 7, "
+                   "episode_source = 'user', episode_confidence = 'high' WHERE id = ?", (file_id,))
+        scanner.scan()
+        row = db.row("SELECT season_no, episode_no, episode_source FROM media_files WHERE id = ?",
+                     (file_id,))
+        self.assertEqual((row["season_no"], row["episode_no"]), (2, 7))
+        self.assertEqual(row["episode_source"], "user", "重新扫描不能覆盖用户确认过的季集")
+
+
 class MissingAndRelocateTests(IsolatedDbTestCase):
     """P1-1：目录不可达只标缺失；路径重定位只改路径，永不删记录与进度。"""
 
