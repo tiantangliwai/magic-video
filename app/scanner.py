@@ -106,12 +106,13 @@ def add_directory(path: str) -> dict:
     if not p.exists() or not p.is_dir():
         return {"ok": False, "error": f"目录不存在：{p}"}
     try:
-        dir_id = db.execute(
-            "INSERT INTO directories(path) VALUES (?) ON CONFLICT(path) DO UPDATE SET enabled = 1",
+        # RETURNING 一步拿到 id：旧写法在 ``ON CONFLICT DO UPDATE`` 命中时
+        # lastrowid 为 0，只能再查一次，中间可能被别的进程删掉/改写。
+        dir_id = db.scalar(
+            "INSERT INTO directories(path) VALUES (?) "
+            "ON CONFLICT(path) DO UPDATE SET enabled = 1 RETURNING id",
             (str(p),),
         )
-        if not dir_id:
-            dir_id = db.scalar("SELECT id FROM directories WHERE path = ?", (str(p),))
         return {"ok": True, "id": dir_id, "path": str(p)}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}

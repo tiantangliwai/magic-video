@@ -67,10 +67,20 @@ def export_to_json(path: str | Path | None = None) -> dict:
     """
     try:
         tables: dict[str, list[dict]] = {}
-        with db.session() as conn:
+        conn = db.get_conn()
+        try:
+            # 显式开启一个读事务：9 张表读的是**同一个 WAL 快照**。否则每条
+            # SELECT 各自 autocommit，导出文件内部可能不自洽（media_files 与
+            # watch_progress 差一拍，恢复后出现「有进度没文件」的行）。
+            # WAL 下读事务不阻塞写，只会推迟 auto-checkpoint，导出后补收一次。
+            conn.isolation_level = None
+            conn.execute("BEGIN")
             for table in TABLES:
                 rows = conn.execute(f"SELECT * FROM {table}").fetchall()
                 tables[table] = [dict(r) for r in rows]
+            conn.execute("COMMIT")
+        finally:
+            conn.close()
 
         counts = {table: len(rows) for table, rows in tables.items()}
         payload: dict[str, Any] = {
@@ -85,6 +95,7 @@ def export_to_json(path: str | Path | None = None) -> dict:
         target.parent.mkdir(parents=True, exist_ok=True)
         with open(target, "w", encoding="utf-8") as fh:
             json.dump(payload, fh, ensure_ascii=False, indent=2)
+        db.checkpoint()
 
         return {
             "ok": True,
@@ -148,23 +159,43 @@ def restore_from_json(path: str | Path, mode: str = "merge") -> dict:
 
         inserted: dict[str, int] = {}
         skipped: dict[str, int] = {}
-        with db.session() as conn:
-            if mode == "overwrite":
-                for table in reversed(TABLES):
-                    conn.execute(f"DELETE FROM {table}")
+        # 恢复是最长的写事务（DELETE 9 表 + 全量插入，可达数千行）。两处加固：
+        # ① 临时关掉守护的记录开关，避免它每 3 秒来抢写锁（守护下一轮就会看到）；
+        # ② 用 BEGIN IMMEDIATE 开头就拿写锁，避免 DEFERRED 读到一半升级失败
+        #    抛 SQLITE_BUSY_SNAPSHOT（这个错误不吃 busy_timeout，会瞬间失败）。
+        # 开关必须直接改 value，不能用 set_setting：后者会刷新 updated_at，
+        # 导致「导出→恢复→再导出」的结果与原文不一致（用例会红）。
+        def _set_recording(value: int) -> None:
+            db.execute(
+                "UPDATE settings SET value = ? WHERE key = 'recording_enabled'",
+                (str(value),),
+            )
 
-            prefix = "INSERT OR IGNORE" if mode == "merge" else "INSERT"
-            for table in TABLES:
-                columns = _table_columns(conn, table)
-                used, values = _normalize_rows(tables.get(table), columns)
-                before = conn.total_changes
-                if used and values:
-                    marks = ",".join("?" for _ in used)
-                    sql = f"{prefix} INTO {table}({','.join(used)}) VALUES ({marks})"
-                    conn.executemany(sql, values)
-                written = conn.total_changes - before
-                inserted[table] = written
-                skipped[table] = len(values) - written
+        was_recording = db.get_int("recording_enabled", 1)
+        if was_recording:
+            _set_recording(0)
+        try:
+            with db.session(immediate=True) as conn:
+                conn.execute("PRAGMA busy_timeout=30000")
+                if mode == "overwrite":
+                    for table in reversed(TABLES):
+                        conn.execute(f"DELETE FROM {table}")
+
+                prefix = "INSERT OR IGNORE" if mode == "merge" else "INSERT"
+                for table in TABLES:
+                    columns = _table_columns(conn, table)
+                    used, values = _normalize_rows(tables.get(table), columns)
+                    before = conn.total_changes
+                    if used and values:
+                        marks = ",".join("?" for _ in used)
+                        sql = f"{prefix} INTO {table}({','.join(used)}) VALUES ({marks})"
+                        conn.executemany(sql, values)
+                    written = conn.total_changes - before
+                    inserted[table] = written
+                    skipped[table] = len(values) - written
+        finally:
+            if was_recording:
+                _set_recording(1)
 
         return {
             "ok": True,

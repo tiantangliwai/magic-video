@@ -4,13 +4,27 @@ WAL 模式保证「托盘守护进程」与「主窗口进程」可以并发读�
 """
 from __future__ import annotations
 
+import random
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Iterable, Sequence
+from typing import Any, Callable, Iterable, Sequence, TypeVar
 
 from . import config
+
+_T = TypeVar("_T")
+
+# 并发写加固（P1-3）：主窗口、托盘守护、扫描、备份是**多个独立进程**写同一个库。
+# WAL 只解决读写并发，写写冲突仍靠 SQLite 的 busy handler 等待。等不到就抛
+# OperationalError("database is locked")，上层此前只能静默失败（守护记 last_error）。
+# 这里统一做「短退避重试」：只对锁竞争重试，其它错误（如约束冲突）立即抛。
+# 注意 readonly 也算：WAL 模式下多个进程同时首次打开库时，抢不到 -shm 映射的
+# 一方会拿到 "attempt to write a readonly database"，这是**暂时状态**而非真只读，
+# 重试一次就能恢复；若真是权限问题，重试 4 次后仍会把原错误抛给调用方。
+_BUSY_HINTS = ("locked", "busy", "readonly")
+_RETRY_DELAYS = (0.05, 0.12, 0.30, 0.60)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS settings (
@@ -160,6 +174,28 @@ def now() -> str:
 _WAL_READY: str | None = None
 
 
+def _is_busy(exc: BaseException) -> bool:
+    if not isinstance(exc, sqlite3.OperationalError):
+        return False
+    msg = str(exc).lower()
+    return any(hint in msg for hint in _BUSY_HINTS)
+
+
+def _retry(fn: Callable[[], _T], *, tries: int = len(_RETRY_DELAYS) + 1) -> _T:
+    """执行 ``fn``，遇到 busy/locked 时按递增间隔重试，其它异常原样抛出。
+
+    注意：``fn`` 必须是可重放的（内部自己新开连接/新事务），
+    当前所有调用点都是「一条语句一个连接」，天然满足。
+    """
+    for attempt in range(tries):
+        try:
+            return fn()
+        except sqlite3.OperationalError as exc:
+            if attempt >= tries - 1 or not _is_busy(exc):
+                raise
+            time.sleep(_RETRY_DELAYS[attempt] + random.random() * 0.03)
+
+
 def get_conn() -> sqlite3.Connection:
     """新建一个连接。
 
@@ -174,22 +210,52 @@ def get_conn() -> sqlite3.Connection:
     path = str(config.DB_PATH)
     conn = sqlite3.connect(path, timeout=15, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    if _WAL_READY != path:
-        conn.execute("PRAGMA journal_mode=WAL")
-        _WAL_READY = path
-    conn.execute("PRAGMA foreign_keys=ON")
+    # busy_timeout 必须在 journal_mode 之前：切 WAL 自己也要拿锁，
+    # 两个进程同时冷启动切换时否则会立刻抛 database is locked。
     conn.execute("PRAGMA busy_timeout=10000")
+    if _WAL_READY != path:
+        try:
+            # 先读当前模式：库里已经是 WAL（写进库文件的持久属性）就不要重复设。
+            # 多个进程同时首次打开时，并发执行 ``PRAGMA journal_mode=WAL`` 会在
+            # Windows 上抢 -shm 映射，输的一方会拿到「attempt to write a readonly
+            # database」。读一次再决定，把争抢窗口压到只有真正首次建库那一次。
+            current = conn.execute("PRAGMA journal_mode").fetchone()
+            if not current or str(current[0]).lower() != "wal":
+                conn.execute("PRAGMA journal_mode=WAL")
+            _WAL_READY = path
+        except sqlite3.OperationalError:
+            # 另一个进程正好在创建 WAL 文件，本连接暂时不可写；不记住状态，
+            # 下次连接重来（调用方有 _retry 兜底）。
+            pass
+    conn.execute("PRAGMA foreign_keys=ON")
+    # WAL + NORMAL 是 SQLite 官方推荐组合：fsync 从「每次提交」挪到 checkpoint，
+    # 写锁持有区间明显缩短。最坏情况是断电丢最后一个事务（播放进度几秒），库不会损坏。
+    conn.execute("PRAGMA synchronous=NORMAL")
     return conn
 
 
 @contextmanager
-def session():
+def session(immediate: bool = False):
+    """事务上下文。
+
+    ``immediate=True`` 用 ``BEGIN IMMEDIATE`` 一开头就拿写锁，适用于
+    「先读后写」的块：默认的 DEFERRED 事务是先读后升级为写，
+    若此时别的进程已提交，SQLite 会抛 ``SQLITE_BUSY_SNAPSHOT``，
+    而这个错误**不吃 busy_timeout**，会瞬间失败。守护进程的
+    读-判断-写路径必须用 IMMEDIATE，否则偶发丢进度。
+    """
     conn = get_conn()
     try:
+        if immediate:
+            conn.isolation_level = None
+            conn.execute("BEGIN IMMEDIATE")
         yield conn
         conn.commit()
     except Exception:
-        conn.rollback()
+        try:
+            conn.rollback()
+        except sqlite3.Error:
+            pass
         raise
     finally:
         conn.close()
@@ -219,6 +285,32 @@ _WRITE_COUNT = 0
 _INITIALIZED = False
 
 
+def _create_schema() -> None:
+    """建表 + 迁移 + 写默认设置。幂等，可整体重放（供 busy 重试使用）。"""
+    conn = get_conn()
+    try:
+        # executescript 内部会先提交挂起事务，所以建表放在显式事务之外；
+        # CREATE TABLE IF NOT EXISTS 本身幂等，无需事务保护。
+        conn.executescript(SCHEMA)
+        # 迁移与默认设置放进同一个 IMMEDIATE 事务：两个进程同时冷启动时
+        # 不会交叉执行 ALTER TABLE（DDL 冲突会让其中一方直接失败）。
+        conn.isolation_level = None
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            _migrate(conn)
+            for key, value in config.DEFAULTS.items():
+                conn.execute(
+                    "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
+                    (key, str(value)),
+                )
+            conn.execute("COMMIT")
+        except Exception:
+            conn.execute("ROLLBACK")
+            raise
+    finally:
+        conn.close()
+
+
 def init_db() -> None:
     """建表 + 迁移 + 写默认设置；同一进程只执行一次，避免界面刷新时反复写库。"""
     global _INITIALIZED
@@ -227,42 +319,49 @@ def init_db() -> None:
     with _INIT_LOCK:
         if _INITIALIZED:
             return
-        with session() as conn:
-            conn.executescript(SCHEMA)
-            _migrate(conn)
-            for key, value in config.DEFAULTS.items():
-                conn.execute(
-                    "INSERT OR IGNORE INTO settings(key, value) VALUES (?, ?)",
-                    (key, str(value)),
-                )
+        _retry(_create_schema)
         _INITIALIZED = True
 
 
 def rows(sql: str, params: Sequence[Any] = ()) -> list[dict]:
-    with session() as conn:
-        return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    def run() -> list[dict]:
+        with session() as conn:
+            return [dict(r) for r in conn.execute(sql, params).fetchall()]
+    return _retry(run)
 
 
 def row(sql: str, params: Sequence[Any] = ()) -> dict | None:
-    with session() as conn:
-        r = conn.execute(sql, params).fetchone()
-        return dict(r) if r else None
+    def run() -> dict | None:
+        with session() as conn:
+            r = conn.execute(sql, params).fetchone()
+            return dict(r) if r else None
+    return _retry(run)
 
 
 def execute(sql: str, params: Sequence[Any] = ()) -> int:
     global _WRITE_COUNT
-    with session() as conn:
-        cur = conn.execute(sql, params)
-        _WRITE_COUNT += 1
-        return cur.lastrowid or cur.rowcount
+
+    def run() -> int:
+        with session() as conn:
+            cur = conn.execute(sql, params)
+            return cur.lastrowid or cur.rowcount
+    result = _retry(run)
+    _WRITE_COUNT += 1
+    return result
 
 
 def executemany(sql: str, seq: Iterable[Sequence[Any]]) -> int:
     global _WRITE_COUNT
-    with session() as conn:
-        cur = conn.executemany(sql, seq)
-        _WRITE_COUNT += 1
-        return cur.rowcount
+    # 生成器只能消费一次，重试前必须先物化，否则第二次重试会插 0 行。
+    payload = list(seq)
+
+    def run() -> int:
+        with session() as conn:
+            cur = conn.executemany(sql, payload)
+            return cur.rowcount
+    result = _retry(run)
+    _WRITE_COUNT += 1
+    return result
 
 
 def write_count() -> int:
@@ -305,6 +404,30 @@ def all_settings() -> dict:
 
 
 def scalar(sql: str, params: Sequence[Any] = ()) -> Any:
-    with session() as conn:
-        r = conn.execute(sql, params).fetchone()
-        return r[0] if r else None
+    def run() -> Any:
+        with session() as conn:
+            r = conn.execute(sql, params).fetchone()
+            return r[0] if r else None
+    return _retry(run)
+
+
+def is_busy(exc: BaseException) -> bool:
+    """公开判定：这个异常是不是「锁竞争」而非真正的错误。
+
+    上层（守护轮询）据此区分「偶发争锁，重试即可」和「真出事了」，
+    避免并发问题被静默吞掉。
+    """
+    return _is_busy(exc)
+
+
+def checkpoint(mode: str = "TRUNCATE") -> None:
+    """把 WAL 内容合回主库并尽量收缩 ``-wal``。
+
+    长读事务（备份导出）只推迟自动 checkpoint，``-wal`` 会持续膨胀，
+    导出结束后主动收一次。失败不影响业务（下一轮自动 checkpoint 还会做）。
+    """
+    try:
+        with session() as conn:
+            conn.execute(f"PRAGMA wal_checkpoint({mode})")
+    except sqlite3.Error:
+        pass
