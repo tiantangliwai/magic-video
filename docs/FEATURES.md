@@ -209,12 +209,20 @@ PotPlayer 窗口 ──WM_USER──> read_status()
 | `potplayer_path` | `D:\tool\DAUM\PotPlayer\PotPlayerMini64.exe` | 播放器可执行文件 |
 | `poll_interval_sec` | 3 | 守护轮询间隔（秒） |
 | `complete_percent` | 90 | 自动标记已看完的进度阈值 |
+| `min_resume_percent` | 5 | 续播点下限：进度低于此百分比不生成续播（v0.1.6） |
+| `ignore_seconds_at_start` | 30 | 片头忽略秒数：播放不足这么多秒不生成续播（v0.1.6） |
+| `ignore_percent_at_end` | 8 | 片尾忽略百分比：剩这么少即判已看完并清续播点（v0.1.6） |
 | `recording_enabled` | 1 | 托盘可暂停/恢复记录 |
 | `autostart` | 0 | 开机自启（注册表 Run 项） |
 | `daemon_auto_start` | 1 | 打开主窗口时自动拉起托盘守护；设置页可关。关时立即停守护，开时立即补拉起。旧库由 `init_db()` 的 `INSERT OR IGNORE` 自动补默认值 |
 | `http_proxy` | 空 | 在线元数据代理 |
 | `metadata_source` | `cache_first` | `cache_first` / `online_first` / `local_only` |
 | `bangumi_base` | `https://api.bgm.tv` | 在线源地址 |
+| `bangumi_rate_ms` | 250 | 在线刮削的最小请求间隔（毫秒），4 线程并发时同样生效（v0.1.6） |
+| `bangumi_backoff_sec` | 120 | 429 / 503 后退避秒数，到期自动恢复而不是永久熔断（v0.1.6） |
+| `online_negative_ttl_sec` | 21600 | 「未命中 / 请求失败」结果缓存多久再重试（秒）（v0.1.6） |
+| `online_cache_ttl_days` | 0 | 已命中结果缓存天数，0 = 长期有效（v0.1.6） |
+| `title_lang_pref` | `cn` | 列表展示标题偏好：`cn` 中文名优先 / `orig` 原名优先；只影响显示（v0.1.6） |
 | `window_width` / `window_height` | 1180 / 780 | 主窗口尺寸 |
 | `minimize_to_tray` | 1 | 关闭时最小化到托盘 |
 | `theme` | `light` | 展示风格 `light` / `dark`，只走 `set_theme()`，不在 `save_settings` 白名单里 |
@@ -932,7 +940,41 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ## 26. 尚未实现（明确边界，避免误判为缺陷）
 
-- 内容哈希重定位、跨设备同步、NFO/JSON 备份导出、看片时长统计、外部追番站点同步、多站点封面兜底自动投票（人工确认已实现，见 §22-B）。
+- 内容哈希重定位（指纹只用头尾各 1MB 的 `size:sha1`，避免大库首次扫描 I/O 过重）、跨设备同步、外部追番站点双向同步、多站点封面兜底自动投票（人工确认已实现，见 §22-B）。
 - 随包捆绑完整版 `Everything.exe` + `es.exe`（合法但属打包/授权层改动，需单独确认）；把开源全盘索引内核编译进本软件。
 - 换用 mpv / libVLC 等开源内核（正在调研，未决定是否迁移；当前仍是 PotPlayer 控制层方案）。
-- 这些已按优先级列入 `docs/OPTIMIZATION.md`，不属于当前版本验收范围。
+- 看片时长统计页、按季海报墙 + 继续观看置顶行、多版本文件合并、观看日历与评分等 **P2 项**见 `docs/ROADMAP_0.1.6.md`，本版不做。
+- 这些已按优先级列入 `docs/OPTIMIZATION.md` / `docs/ROADMAP_0.1.6.md`，不属于当前版本验收范围。
+
+---
+
+## 27. v0.1.6 数据地基与导入对齐（P0 + P1 全部落地）
+
+> 详细验收口径见 `docs/ROADMAP_0.1.6.md`；命令码、性能数字与踩坑结论见 `docs/IMPLEMENTATION_NOTES.md`。
+> 本版**不升版本号、未打包**，功能已可用。
+
+**A. 续播与完成判定（P0-1）**
+- 四阈值可配置：`complete_percent=90` / `min_resume_percent=5` / `ignore_seconds_at_start=30` / `ignore_percent_at_end=8`。
+- 续播点**只在前进时更新，已看完才清零**——重看片头不会抹掉上一次看到的位置。
+
+**B. 数据可备份可迁移（P0-2 / P0-4 / P1-3）**
+- 设置页「数据备份与恢复」：9 张表导出为单个 JSON，恢复支持「仅新增 / 覆盖」，恢复前自动把当前库再备份一份。
+- 文件指纹：`size:sha1`（头尾各 1MB）；文件被移动/改名时，仅在「唯一同 size/mtime 候选 + 旧路径已不存在 + 指纹一致」时重关联，**副本不合并、歧义不动**。
+- 目录不可达只标 `missing_since`（缺失），不删行、不动进度；恢复后扫描自动清标记。
+- 路径重定位向导：按前缀整体替换（整盘换符）、冲突跳过交给指纹、新目录自动注册；用户确认后才软删长期找不回的文件。
+- 并发写加固：只对锁竞争重试；守护的读-判断-写路径用 `BEGIN IMMEDIATE`；连续争锁会上报 `db_busy` 事件，不再静默丢进度。
+
+**C. 纠错与时长口径（P0-3 / P0-5）**
+- 历史页支持全选 + 批量「已看 / 未看 / 重置进度」，只改进度表不删会话。
+- `watch_sessions.watched_ms` + `watch_progress.total_watched_ms`：只累加连续播放增量（≤3 个轮询间隔），快进/拖进度条/回拖都不计入。统计页 UI 属 P2。
+
+**D. 中文名匹配更可靠（P1-4 / P1-5）**
+- 文件名里的 `{tmdb-123}` / `[tvdbid-456]` / `{tvdb=789}` 标签会被解析并剥离（旧版会把花括号留在标题里导致匹配失败）；同一 ID 组内共享中文名（`match_by='id'`），只填空不覆盖。
+- 展示标题语言偏好：`cn` 中文名优先 / `orig` 原名优先，只改显示。
+- 刮削限速 250ms + 负缓存 6 小时 + 429 退避 120 秒；「强制重新刮削」清缓存重查，手改名字永不被覆盖。
+
+**E. 清单导入（P1-2 / P1-6）**
+- 导入页支持三方输入：粘贴纯文本、MyAnimeList `animelist.xml`、Bangumi Takeout `.json`（数组或 JSONL）。
+- 解析后先给**差异报告**：只本地有 / 只清单有 / 进度不同（双向）/ 中文名冲突 / 本地有文件但没记录（文件命中 + 标题校验双判定）。
+- 合并规则：进度**只增不减**、中文名只补空、`match_by='user'` 永不覆盖、**不删除任何已有记录**、整体幂等。
+- 未匹配中文名的行进入「待确认区」：可逐行改名或勾选「暂不导入」；默认入库但标 `status='pending_review'`，看过的列表显示「待确认」徽章——不再静默混入。

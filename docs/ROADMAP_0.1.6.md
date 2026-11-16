@@ -1,7 +1,7 @@
 # Magic Video v0.1.6 需求规划
 
 > 状态：**开发中**（当前版本 v0.1.5 已发版；v0.1.6 需求自 2026-11-16 起陆续落地）。
-> **P0 全部完成（2026-11-16，本地未发版）**：P0-1 三阈值可配置、P0-2 JSON 备份导出/恢复、P0-3 批量标记、P0-4 文件指纹重关联、P0-5 真实观看时长累计。P1/P2 未开始。
+> **P0 + P1 全部完成（2026-11-16，本地未发版）**：P0-1 三阈值可配置、P0-2 JSON 备份导出/恢复、P0-3 批量标记、P0-4 文件指纹重关联、P0-5 真实观看时长累计；P1-1 路径重定位、P1-2 清单三段式对齐、P1-3 并发写加固、P1-4 作品 ID 直查、P1-5 刮削限速与负缓存、P1-6 待确认区。**P2 未开始**。
 > 需求基线见 `AGENTS.md` 第 1 节；调研依据见 `docs/OPTIMIZATION.md`；已实现能力见 `docs/FEATURES.md`；实现细节见 `docs/IMPLEMENTATION_NOTES.md`。
 > 重要等级按「纯本地个人工具」定位排定（无账号 / 无云 / 无定时任务），与 OPTIMIZATION 原始 P0–P3 略有差异。
 > 复杂度：小 <0.5 人日 / 中 1–3 人日 / 大 >1 人周。
@@ -38,12 +38,12 @@ v0.1.5 功能已相当完整（导入/媒体库/追剧/播控/搜索/封面/历�
 
 | 编号 | 需求 | 价值 | 复杂度 | 验收要点 |
 |---|---|---|---|---|
-| P1-1 | **路径失效重定位向导** | 移动硬盘/网络盘高频场景不误删历史 | 中 | 存储不可达先标「缺失」并**保留进度**（不自动删库条目）；批量前缀替换 + 指纹重匹配（复用 P0-4）；最后才由用户确认清理 |
-| P1-2 | **清单导入三段式对齐**（核心机会点） | 兑现「输入清单→自动对齐本地文件与历史」的产品定位 | 大 | 支持 MAL XML / Bangumi Takeout JSON；导入预览给差异报告；冲突按 max/不降级/不覆盖规则合并；匹配成功仍须「文件命中 + 标题校验」双判定，禁止直接用 `match_files()` 结论 |
-| P1-3 | **SQLite 并发写加固** | 守护/扫描/备份并行不炸库、不报 readonly | 中 | 全局 `busy_timeout` + 写队列（短事务，不包裹网络请求）；补多进程并发写压力测试；刮削/扫描/备份错峰 |
-| P1-4 | **文件名 ID 直查 + 稳定作品 ID 层** | 把「猜错中文名」变成「按 ID 直查」，解决重名翻拍/多罗马字 | 中 | 解析 `{tmdb-}` / `{tvdb-}` / `[tvdbid-]` 标签优先于 SxxEyy；`alias → work_id` 映射，展示标题按语言偏好选；用户手改 `source=user` 永不被覆盖 |
-| P1-5 | **刮削限速 + TTL 负缓存 + 强制重刮** | 防封禁、防错误匹配永久固化 | 中 | 请求间隔可配（Bangumi ≥200ms~5s）；成功长期缓存、失败设 TTL；429 退避暂停而非狂重试；提供「强制重刮」入口；本机网络超时时快速降级不变 |
-| P1-6 | **导入未匹配「待确认区」** | 不静默丢行、不覆盖手改数据 | 小 | 预览里未匹配项进入待确认列表，用户显式处理；导入幂等，重复导入不产生重复行 |
+| P1-1 ✅ | **路径失效重定位向导** | 移动硬盘/网络盘高频场景不误删历史 | 中 | 已完成：目录不可达时把其下文件标 `missing_since`（**只标记，不删行、不动进度、不做软删**）；`diagnose_library()` 只读体检给出目录可达性与每目录缺失数；`preview_relocate()` 纯计算受影响行/冲突/可恢复数；`apply_relocate()` 按前缀整体替换（整盘换符场景比逐文件指纹可靠），冲突跳过留给 P0-4 指纹重关联，新目录自动注册；`dismiss_missing()` 仅在用户确认后软删，硬盘插回扫描即恢复 |
+| P1-2 ✅ | **清单导入三段式对齐**（核心机会点） | 兑现「输入清单→自动对齐本地文件与历史」的产品定位 | 大 | 已完成：新建 `app/listimport.py`，纯文本 / MAL `animelist.xml` / Bangumi Takeout JSON（数组或 JSONL）三条入口统一成 importer record，共用 `preview_records`/`commit`；差异报告给「只本地有 / 只清单有 / 进度不同（双向）/ 中文名冲突 / 本地有文件但没记录」；合并按 max 只增不减、中文名只补空、`match_by='user'` 永不覆盖、不删除任何记录、整体幂等；文件对齐为「关键词命中 + 标题校验」双判定，不采信 `match_files()` 的 count |
+| P1-3 ✅ | **SQLite 并发写加固** | 守护/扫描/备份并行不炸库、不报 readonly | 中 | 已完成：`db._retry` 只对 locked/busy/readonly 短退避重试；`session(immediate=True)` 用 `BEGIN IMMEDIATE` 避开 `SQLITE_BUSY_SNAPSHOT`（不吃 busy_timeout）；`get_conn` 先读 journal_mode 再决定是否设 WAL（压掉多进程首开的 -shm 争抢）+ `synchronous=NORMAL`；watcher 三条写路径各合成单事务并原子化「读 completed 再写续播点」，连续争锁上报 `db_busy`；backup 导出走单一读事务快照 + 事后 checkpoint，恢复用 IMMEDIATE 并临时停写；新增 `tests/test_concurrency.py` 10 例（4 进程真并发不丢更新、短锁等待、integrity_check、重试策略） |
+| P1-4 ✅ | **文件名 ID 直查 + 稳定作品 ID 层** | 把「猜错中文名」变成「按 ID 直查」，解决重名翻拍/多罗马字 | 中 | 已完成：`parse_filename` 解析 `{tmdb-123}`/`[tvdbid-456]`/`{tvdb=789}` 并在清洗前剥离（`{tmdb-}` 残缺标签也剥，但不产出 ID）；`media_files.tmdb_id/tvdb_id`、`subjects.tvdb_id` 落库，老库首次扫描惰性补列；`lookup_by_ids` 先 subjects 再媒体库同 ID 行，`match_one(ids=)` 以 `by='id'` 优先于标题链；`apply_id_groups` 同 ID 组内共享中文名（只填空不覆盖）；展示标题按 `title_lang_pref`（cn/orig）切换，10 处列表 SQL 统一走 `_display_title_expr()` |
+| P1-5 ✅ | **刮削限速 + TTL 负缓存 + 强制重刮** | 防封禁、防错误匹配永久固化 | 中 | 已完成：`bangumi_rate_ms=250` 串行限速（4 线程并发也保证间隔）、`bangumi_backoff_sec=120` 退避、`online_negative_ttl_sec=21600` 负缓存、`online_cache_ttl_days=0` 成功长期缓存；新表 `scrape_cache`（可重建，不进备份）三态查询避免重复发包；429/503 只暂停退避窗口不再永久熔断，断网/超时仍整批快速降级；`rematch_all(force=True)` + 界面「强制重新刮削」清缓存重查，`match_by='user'` 仍不被覆盖 |
+| P1-6 ✅ | **导入未匹配「待确认区」** | 不静默丢行、不覆盖手改数据 | 小 | 已完成：`preview` 返回 `pending`（行 index/原名/季集/备注）；`commit` 默认保留未匹配行但写 `status='pending_review'`，不再让外文原名冒充正常记录；`skip_unmatched=True` 时按用户勾选跳过；复用早已声明未用的 `watched_list.status` 列，零 schema 变更；判重键不变，重复导入仍幂等；预览页「暂不导入」复选框 + 看过的列表「待确认」徽章 |
 
 ### 2.3 P2 · 中优先（视 P0/P1 进度取舍）
 
