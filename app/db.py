@@ -114,6 +114,9 @@ CREATE TABLE IF NOT EXISTS watch_progress (
     percent          REAL NOT NULL DEFAULT 0,
     completed        INTEGER NOT NULL DEFAULT 0,
     play_count       INTEGER NOT NULL DEFAULT 0,
+    -- 累计真实观看时长（毫秒）：只累加「连续播放的位置增量」，快进/跳转不计入。
+    -- 与 position_ms（当前续播点）是两回事，供后续时长统计使用（v0.1.6）。
+    total_watched_ms INTEGER NOT NULL DEFAULT 0,
     first_played_at  TEXT,
     last_played_at   TEXT,
     updated_at       TEXT,
@@ -129,6 +132,9 @@ CREATE TABLE IF NOT EXISTS watch_sessions (
     from_ms     INTEGER NOT NULL DEFAULT 0,
     to_ms       INTEGER NOT NULL DEFAULT 0,
     max_ms      INTEGER NOT NULL DEFAULT 0,
+    -- 本会话内累计的真实观看时长（毫秒）：位置增量在合理范围内的部分才累加，
+    -- 快进/拖进度条造成的大跳变不计入（v0.1.6 会话切分口径）。
+    watched_ms  INTEGER NOT NULL DEFAULT 0,
     source      TEXT NOT NULL DEFAULT 'potplayer'
 );
 CREATE INDEX IF NOT EXISTS ix_sessions_file ON watch_sessions(file_id);
@@ -194,7 +200,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     additions = {
         "media_files": (("title_cn", "TEXT"), ("match_by", "TEXT"), ("deleted_at", "TEXT")),
         "watched_list": (("match_by", "TEXT"),),
-        "watch_progress": (("dismissed_at", "TEXT"),),
+        "watch_progress": (
+            ("dismissed_at", "TEXT"),
+            ("total_watched_ms", "INTEGER NOT NULL DEFAULT 0"),
+        ),
+        "watch_sessions": (("watched_ms", "INTEGER NOT NULL DEFAULT 0"),),
     }
     for table, columns in additions.items():
         existing = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}

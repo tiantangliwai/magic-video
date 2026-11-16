@@ -159,6 +159,46 @@ class ThresholdTests(IsolatedDbTestCase):
         self.assertEqual(self._progress()["position_ms"], 600_000)
 
 
+class SessionDurationTests(IsolatedDbTestCase):
+    """v0.1.6 会话切分：只累加「连续播放」的位置增量，快进/回拖不计入。"""
+
+    def setUp(self):
+        super().setUp()
+        self.a = self.media("Show - 01.mkv", title_guess="Show")
+        self.watcher = Watcher()
+
+    def _tick_with(self, value):
+        with mock.patch.object(potplayer, "read_status", return_value=value), \
+             mock.patch.object(potplayer, "resolve_media",
+                               side_effect=lambda name: db.row(
+                                   "SELECT * FROM media_files WHERE filename = ?", (name,))):
+            self.watcher._tick()
+
+    def _session(self):
+        return db.row("SELECT * FROM watch_sessions ORDER BY id DESC LIMIT 1")
+
+    def _progress(self):
+        return db.row("SELECT * FROM watch_progress WHERE file_id = ?", (self.a["id"],))
+
+    def test_continuous_playback_accumulates_watched_ms(self):
+        self._tick_with(status(position=60_000))
+        self._tick_with(status(position=63_000))  # +3 秒
+        self._tick_with(status(position=66_000))  # +3 秒
+        self.assertEqual(self._session()["watched_ms"], 6_000)
+        self.assertEqual(self._progress()["total_watched_ms"], 6_000)
+
+    def test_seek_jump_is_not_counted(self):
+        self._tick_with(status(position=60_000))
+        self._tick_with(status(position=600_000))  # 拖到 10 分钟，跳 540 秒
+        self._tick_with(status(position=603_000))  # 再正常看 3 秒
+        self.assertEqual(self._session()["watched_ms"], 3_000)  # 只算后面 3 秒
+
+    def test_rewind_is_not_counted(self):
+        self._tick_with(status(position=60_000))
+        self._tick_with(status(position=30_000))  # 往回拖
+        self.assertEqual(self._session()["watched_ms"], 0)
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

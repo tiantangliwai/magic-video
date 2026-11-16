@@ -124,6 +124,8 @@ class Watcher:
             # 首次轮询必须写一次进度/时长/完成判定，不能因为「位置没变」而跳过
             "last_written_ms": None,
             "last_state": status["state"],
+            # 本会话累计真实观看时长（只累加连续播放增量，seek/快进不计）
+            "watched_ms": 0,
         }
         self._emit("session_started", {"file_id": file_id})
 
@@ -179,10 +181,19 @@ class Watcher:
 
         cur = self.current
         pos = status["position_ms"]
+        prev = cur["last_written_ms"]
         cur["max_ms"] = max(cur["max_ms"], pos)
-        moved = (cur["last_written_ms"] is None
-                 or abs(pos - cur["last_written_ms"]) >= 1000)
+        moved = (prev is None or abs(pos - prev) >= 1000)
         if moved or status["state"] != cur["last_state"]:
+            # 只把「连续播放」的位置增量算进真实观看时长；seek/快进的跳变不计入。
+            # 允许的最大增量取 3 个轮询间隔（默认 9 秒），容忍卡顿但不放过拖进度条。
+            delta = 0
+            if prev is not None:
+                raw = pos - prev
+                limit = max(1000, db.get_int("poll_interval_sec", 3) * 1000) * 3
+                if 0 < raw <= limit:
+                    delta = raw
+            cur["watched_ms"] = int(cur.get("watched_ms") or 0) + delta
             complete_at = db.get_int("complete_percent", 90)
             end_ignore = db.get_int("ignore_percent_at_end", 8)
             percent = status["percent"] or 0.0
@@ -196,13 +207,14 @@ class Watcher:
                 "position_ms = CASE WHEN ? = 1 THEN 0 WHEN ? > COALESCE(position_ms,0) THEN ? "
                 "ELSE position_ms END, "
                 "duration_ms = ?, percent = ?, completed = MAX(completed, ?), "
+                "total_watched_ms = COALESCE(total_watched_ms,0) + ?, "
                 "last_played_at = ?, updated_at = ? WHERE file_id = ?",
                 (completed, resume, resume, status["duration_ms"], percent, completed,
-                 db.now(), db.now(), file_id),
+                 delta, db.now(), db.now(), file_id),
             )
             db.execute(
-                "UPDATE watch_sessions SET to_ms = ?, max_ms = ? WHERE id = ?",
-                (pos, cur["max_ms"], cur["session_id"]),
+                "UPDATE watch_sessions SET to_ms = ?, max_ms = ?, watched_ms = ? WHERE id = ?",
+                (pos, cur["max_ms"], cur["watched_ms"], cur["session_id"]),
             )
             if status["duration_ms"] and not record.get("duration_ms"):
                 db.execute(

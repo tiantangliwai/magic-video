@@ -30,8 +30,10 @@ class ContinueDismissTests(IsolatedDbTestCase):
     def test_schema_has_dismissed_column_and_migration_registers_it(self):
         cols = {r["name"] for r in db.rows("PRAGMA table_info(watch_progress)")}
         self.assertIn("dismissed_at", cols)
-        schema = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
-        self.assertIn('"watch_progress": (("dismissed_at", "TEXT"),)', schema)
+        source = (ROOT / "app" / "db.py").read_text(encoding="utf-8")
+        # 断言迁移已登记 dismissed_at（不依赖元组排列的具体书写格式）
+        self.assertIn('"dismissed_at", "TEXT"', source)
+        self.assertIn('"watch_progress":', source)
 
     def test_dismiss_hides_only_from_continue_watching(self):
         fid = self.media_with_progress("Show - 01.mkv")
