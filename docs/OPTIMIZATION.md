@@ -1,8 +1,8 @@
-# 同类软件调研与优化建议 · v0.1.2
+# 同类软件调研与优化建议 · v0.1.6
 
 > 调研时间：2026-11-15。对象为「本地视频播放历史 + 追番/看剧记录 + 断点续播 + 元数据刮削」类软件。
 > 目的：找出成熟产品的通用做法与常见坑，给 Magic Video 排出可落地的优化优先级。
-> **本文是建议，不是已实现功能**；已落地项在第 5 节单独标注。
+> **本文是建议，不是已实现功能**；已落地项在 §5（v0.1.2）与 §9（v0.1.6）单独标注，P0–P2 共 14 条已全部随 v0.1.6 发布。
 
 ---
 
@@ -48,7 +48,7 @@
 
 > 改动量：小 <0.5 人日 / 中 1–3 人日 / 大 >1 人周。模块名对应本仓库实际文件。
 
-### P0 · 低成本高价值，建议优先做
+### P0 · 低成本高价值（v0.1.6 已全部落地）
 
 | # | 建议 | 落地模块 | 改动量 | 价值 |
 |---|---|---|---|---|
@@ -58,7 +58,7 @@
 | 4 | **会话切分与去重**：仿 Emby 的 `Started → Progress(10s + 事件立即上报) → Stopped`，按真实播放时间累计；同一集只保留一个活跃 session；连播按「最后一次用户输入」判定有效性 | `watcher.py` | 中 | 避免快进到结尾算看完、睡着后自动连播虚增时长、重复计数 |
 | 5 | **导入/导出备份做成一等公民**：JSON 完整备份 + 可选 NFO/CSV 导出，带 `覆盖/仅新增` 开关 | 新 `app/backup.py` | 中 | 换机/换盘不丢数据，降低被锁定感 |
 
-### P1 · 中等成本
+### P1 · 中等成本（v0.1.6 已全部落地）
 
 | # | 建议 | 落地模块 | 改动量 | 价值 |
 |---|---|---|---|---|
@@ -68,7 +68,7 @@
 | 9 | **路径失效重定位向导**：不可达先标「缺失」并保留进度，提供批量前缀替换与指纹重匹配，最后才由用户确认清理 | `scanner.py`、UI | 中 | 移动硬盘/网络盘高频场景，不误删历史 |
 | 10 | **刮削限速 + 缓存 + TTL 负缓存**：请求间隔可配（Bangumi ≥200ms~5s），成功长期缓存，失败设 TTL，429 退避并暂停而非狂重试；提供「强制重刮」 | `metadata.py` | 中 | 防封禁、防错误匹配永久固化 |
 
-### P2 · 体验层
+### P2 · 体验层（v0.1.6 已全部落地）
 
 | # | 建议 | 落地模块 | 改动量 | 价值 |
 |---|---|---|---|---|
@@ -168,3 +168,37 @@
 **对当前方案的影响**：调研印证了现有「先复位到 1.0 再按固定次数加速」的做法是相对步进逼近绝对值的正确折中；精确 1.25× 的根本解法是换成原生支持绝对倍速的内核，短期可在设置里把步进改为 0.25 让 1.25 / 1.5 / 2.0 全部精确可达。
 
 主要依据：<https://mpv.io/manual/master/>、<https://github.com/mpv-player/mpv/blob/master/Copyright>、<https://github.com/jaseg/python-mpv>、<https://images.videolan.org/press/lgpl-libvlc.html>、<https://github.com/oaubert/python-vlc>、<https://github.com/MediaPlayerClassic/mpc-hc/blob/master/Readme.md>。
+
+---
+
+## 9. v0.1.6 收官情况（2026-11-16）
+
+§3 的 14 条 P0–P2 建议已**全部落地并随 v0.1.6 发布**，逐条对应关系如下（细节见 `docs/ROADMAP_0.1.6.md` 与 `CHANGELOG.md`）：
+
+| 建议 | 落地物 |
+|---|---|
+| #1 三阈值可配置 | `min_resume_percent` / `ignore_seconds_at_start` / `ignore_percent_at_end` + 既有 `complete_percent`，设置页可改 |
+| #2 文件指纹主键 | `media_files.partial_hash`（头尾各 1MB）；按「唯一同 size/mtime 候选 + 旧路径已不存在 + 指纹一致」重关联，**保留路径主键**，指纹只做辅助迁移 |
+| #3 一键标记 / 批量 | `Api.batch_mark()` + 历史页全选与三操作（v0.1.2 已有单机版，本版补齐批量） |
+| #4 会话切分与去重 | `watch_sessions.watched_ms` + `watch_progress.total_watched_ms`；只累加连续播放增量，快进 / 回拖不计 |
+| #5 备份一等公民 | `app/backup.py` JSON 完整导出与 `merge`/`overwrite` 恢复；另补 CSV / NFO 导出（只写数据目录） |
+| #6 解析 ID 优先 | `{tmdb-}`/`[tvdbid-]`/`{tvdb=}` 直查 + `episode_source`/`episode_confidence` 三档置信度与待确认区 |
+| #7 别名与稳定 ID 层 | `media_files.tmdb_id/tvdb_id`、`subjects.tvdb_id`、`title_lang_pref` 控制展示标题 |
+| #8 清单三段式对齐 | `app/listimport.py`：纯文本 / MAL XML / Bangumi Takeout JSON 共用预览与幂等提交 |
+| #9 路径重定位向导 | `diagnose_library` / `preview_relocate` / `apply_relocate` / `dismiss_missing` 四步，标记不删行 |
+| #10 刮削限速与负缓存 | `bangumi_rate_ms` / `bangumi_backoff_sec` / `online_negative_ttl_sec` + 新表 `scrape_cache` + 强制重刮 |
+| #11 按季海报墙 | `get_poster_wall` 的 `season_cards` + `get_continue_row()` 置顶横滑行 |
+| #12 看片时长统计页 | 新「看片统计」视图：每日柱状图、作品 Top20、完成率、统计口径随返回下发 |
+| #13 多版本合并 | `library_tree._collapse_versions` 展示层折叠 + 平铺列表版本下拉，数据库零改动 |
+| #14 观看日历 + 标签评分 | 新表 `work_meta`（进备份）+ `get_watch_calendar(month)` + 卡片 ★ 与标签 |
+
+**§8 的倍速结论也已部分兑现**：`DEFAULT_SPEED_STEP` 改为 0.25，1.25× / 1.5× / 2× 全部精确可达；但这是「相对步进逼近绝对值」的折中，**要真正支持任意倍速仍需换内核**，即下方 P3 的第一项。
+
+**仍未做（P3，需单独立项）**：
+
+| # | 项 | 状态 |
+|---|---|---|
+| 15 | 外部站点双向同步 | 不做——涉及 OAuth、隐私、限流，与「纯本地、无账号」定位冲突 |
+| 16 | 内容哈希识别（ED2K / 头尾哈希） | 暂缓——大库首次扫描 I/O 重，需后台化与缓存，收益低于成本 |
+| 17 | 跨设备共享进度 | 不做——需要服务端，与纯本地定位冲突 |
+| — | 播放内核替换为 libmpv / libVLC | 暂缓——调研结论见 §8，待核心功能稳定后单独立项 |

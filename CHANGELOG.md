@@ -5,6 +5,62 @@
 
 ---
 
+## [0.1.6] - 2026-11-16
+
+**主题：补数据地基与体验层——从「能追番」变成「记录不丢、可备份、可迁移」。**
+
+本版不铺新功能面，集中补 v0.1.5 之后识别出的三类薄弱处（数据地基 / 边界完整性 / 外部依赖脆弱），
+并顺手补掉路线图尾巴。用例数从 **709** 涨到 **863**。
+
+### Added
+
+- **JSON 完整备份与恢复**（`app/backup.py`）：一键导出全部数据表为单个 JSON（含 `format_version`、导出时间、行数统计），恢复支持 `merge`（仅新增）与 `overwrite`（整库覆盖）两种模式，保留原始 id 以维持 `file_id` 关联；恢复前自动备份当前库。
+- **批量标记已看 / 未看 / 重置进度**：`Api.batch_mark(ids, action)`，历史页全选 + 三个批量操作；只改进度表、不删 `watch_sessions`，`completed` 保持 MAX 语义。
+- **路径失效重定位向导**：目录不可达时把其下文件标 `missing_since`（只标记、不删行、不动进度）；`diagnose_library()` 只读体检、`preview_relocate()` 纯计算影响面、`apply_relocate()` 按前缀整体替换（整盘换符场景比逐文件指纹可靠），冲突交给指纹重关联，新目录自动注册。
+- **清单导入三段式对齐**（`app/listimport.py`）：纯文本 / MAL `animelist.xml` / Bangumi Takeout JSON 三条入口统一成 importer record，共用预览与提交；差异报告给「只本地有 / 只清单有 / 进度不同 / 中文名冲突 / 本地有文件但没记录」；合并按 max 只增不减、中文名只补空、`match_by='user'` 永不覆盖、整体幂等。
+- **导入未匹配「待确认区」**：预览返回 `pending` 行，提交默认保留但标 `status='pending_review'`（不再让外文原名冒充正常记录），看过的列表显示「待确认」徽章。
+- **文件名 ID 直查 + 稳定作品 ID 层**：解析 `{tmdb-123}` / `[tvdbid-456]` / `{tvdb=789}`，`media_files.tmdb_id/tvdb_id`、`subjects.tvdb_id` 落库；`lookup_by_ids` 先查 subjects 再查媒体库，`match_one(ids=)` 以 `by='id'` 优先于标题链；展示标题按 `title_lang_pref` 切换。
+- **刮削限速 + TTL 负缓存 + 强制重刮**：`bangumi_rate_ms=250` 串行限速（多线程也保证间隔）、`bangumi_backoff_sec=120` 退避、`online_negative_ttl_sec=21600` 负缓存；新表 `scrape_cache`（可重建、不进备份）；429/503 只暂停退避窗口不再永久熔断；界面新增「强制重新刮削」。
+- **看片统计页**（新视图「看片统计」）：只用 `watch_sessions.watched_ms`（快进 / 拖动不计），按会话开始日期归日、同一集重看累计、黑名单剔除；给每日柱状图、看最多的作品 Top20、完成率与观看日历热力图，统计口径随返回下发并直接展示。
+- **按季海报墙 + 继续观看置顶行**：`get_poster_wall` 增加 `season_cards`（每季一张），前端「按作品 / 按季」切换；`get_continue_row()` 按作品去重只留最新一条，顶部横向滚动行点一下直接续播。
+- **观看日历 + 评分标签**：新表 `work_meta(work_key PK, rating, tags, updated_at)`（进备份、删媒体文件不连带删标注）；封面卡显示 ★ 评分与标签，`rate-work` 内联录入；纯本地不同步。
+- **CSV / NFO 导出**：`export_csv(kind)` 导出 history / watched / media 三张表（UTF-8-BOM），`export_nfo()` 按作品写 `<数据目录>/exports/nfo/<作品>/tvshow.nfo`——**只写数据目录，绝不写视频所在目录**。
+- **集数低置信度标记**：`media_files` 新增 `episode_source` / `episode_confidence`，扫描页新增「待确认集数」卡片，可手工改正。
+- **缓存键 mtime 守护测试**（`tests/test_cache_keys.py`）：静态扫描 `_data_fingerprint` / `_db_signature` / `_cache_get` / `_cache_put` 源码，出现 `mtime` / `st_ctime` / `getmtime` 直接失败。
+
+### Changed
+
+- **完成判定三阈值可配置**：`min_resume_percent=5` / `ignore_seconds_at_start=30` / `ignore_percent_at_end=8` + 既有 `complete_percent=90`；低于下限不建续播记录、超上限标已看并清续播点。
+- **真实观看时长累计**：`watch_sessions.watched_ms` + `watch_progress.total_watched_ms`，只累加「连续播放」的位置增量，快进 / 拖进度条 / 回拖都不计入；同一集连续播放仍是一个活跃 session。
+- **SQLite 并发写加固**：`db._retry` 只对 locked/busy/readonly 短退避重试；`session(immediate=True)` 用 `BEGIN IMMEDIATE` 避开 `SQLITE_BUSY_SNAPSHOT`；`get_conn` 先读 `journal_mode` 再决定是否设 WAL（压掉多进程首开的 `-shm` 争抢）+ `synchronous=NORMAL`；watcher 三条写路径合成单事务并原子化「读 completed 再写续播点」。
+- **多版本文件合并**：`library_tree._collapse_versions` 在**展示层**把同一 `(季, 集)` 的多文件并成一条（主条目按「已看完 > 有进度 > 体积大」挑），`file_count` 因此等于真实集数不再虚高；平铺列表给版本下拉，数据库零改动、各版本进度独立。
+- **外部解析收敛到唯一适配层**：新建 `app/sites.py`，AGE动漫 / Seeduck 的全部正则、URL 模板、HTML 清洗与健康计数集中一处；`covers.py`、`websearch.py` 改为消费 `age_entries()` / `seeduck_entries()`，两边不再各写一套选优逻辑。
+- **倍速步进精确化**：`DEFAULT_SPEED_STEP` 由 0.1 改为 0.25，四个预设（1.25 / 1.5 / 2 等）全部精确命中，仍允许用户显式选 0.1 / 0.5。
+- **全盘快搜可达性提示**：`everything.capabilities()` 返回 `degraded` / `degraded_reason` / `http_enable_steps`，快搜页降级时用琥珀色提示块写清「为什么降级 + 两条补法」，**不改 ini、不重启服务**。
+- **安装器静态核对**：`installer/verify_install_flow.py --static` 不需要 WiX 或打包产物即可核对「目录 Id 全大写 + `Secure` + `InstallPath` 写入回读 + `MajorUpgrade` + `ARPINSTALLLOCATION`」七项，并纳入单测；另附真机 7 步清单。
+
+### Fixed
+
+- **`第03话` 被读成「第 3 季」**：`SEASON_RE` 的中文季分支改为必须带「季 / 期」（`第 X 话 / 集 / 話` 归集数），`EPISODE_PATTERNS` 首条同时接受 `第 X 话 / 集 / 話`。
+- **`Season 2 - 05` 被误判为区间集数**：`RANGE_EP_RE` 要求两个数字之间**不允许空格**，`Show.01-02` 仍按低置信度区间处理。
+- **缓存键回退风险**：把「缓存键不得使用文件 mtime」从文档约定变成可执行断言（守护测试），防止再次被改回去。
+- **NFO 导出误写视频目录**：显式限定只写 `<数据目录>/exports/nfo/`，并有用例断言源目录内文件数不变。
+- **`work_meta` 漏出备份范围**：`backup.TABLES` 由 9 张扩到 10 张，用例同步守护。
+
+### Tests
+
+- 用例数 **709 → 863**，新增模块：`test_stats`（25 例，统计 / 继续观看 / 按季 / 多版本 / 评分标签 / 日历）、`test_cache_keys`（7 例）、`test_concurrency`（10 例），并在 `test_scanner` 增 `EpisodeConfidenceTests`（10 例）、`test_backup` 增 `TableExportTest`（6 例）、`test_api` / `test_everything_open` / `test_packaging` 各补新用例。
+- `run_changed_tests.py` 的 `IMPACT` / `FRONTEND_MODULES` 同步补入 `sites`、`backup`、`library_tree` 等新模块映射。
+- 全量 `python run_tests.py` 在发版前跑通（863 / 863），结果快照写入 `D:\magicvideo\test_last.json`。
+
+### Docs
+
+- 新增 `docs/ROADMAP_0.1.6.md`（需求清单与逐项落地结论）、`docs/IMPLEMENTATION_NOTES.md` §10（P2 阶段实现细节与已知限制）。
+- README 功能表与「版本输出一览」、AGENTS 需求基线（累计 53 条）、`docs/FEATURES.md` §28、`docs/TESTING.md` §12 同步到 0.1.6。
+- ZIP 与 MSI 随版本重新构建。
+
+---
+
 ## [0.1.5] - 2026-11-15
 
 **主题：一天内 27 次本地迭代的集中发布——从「能看历史」变成「能追番」。**

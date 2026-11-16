@@ -128,12 +128,15 @@ class VersionConsistencyTests(unittest.TestCase):
         self.assertIn("冷存储", text)
 
     def test_roadmap_016_has_priorities_and_hardening_plans(self):
-        """v0.1.6 规划必须含 P0/P1/P2 需求与三项补强方案，且明确是未开发的规划。"""
+        """v0.1.6 路线图必须完整记录 P0/P1/P2 需求与三项补强方案，且不得被误读为版本真源。"""
         text = (ROOT / "docs" / "ROADMAP_0.1.6.md").read_text(encoding="utf-8")
         for token in ("P0", "P1", "P2", "JSON 完整备份", "三阈值", "数据地基", "外部依赖"):
             self.assertIn(token, text, f"路线图缺少要素：{token}")
-        # 规划中 / 开发中 都算有效状态（开发推进后文案会变），但不能是已完成版本
-        self.assertTrue("规划中" in text or "开发中" in text, "路线图需标明规划/开发状态")
+        # 状态文案随进度变化：开发中写「规划中/开发中」，发版后写「已完成/已发版」，两者都合法
+        self.assertTrue(
+            "规划中" in text or "开发中" in text or "已完成" in text or "已发版" in text,
+            "路线图需标明规划 / 开发 / 完成状态",
+        )
         # 计划文档不能被误读为当前版本
         self.assertNotIn("__version__ = \"0.1.6\"", text)
 
