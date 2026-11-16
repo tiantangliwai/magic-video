@@ -7,10 +7,67 @@
 """
 from __future__ import annotations
 
+import hashlib
+import os
 import re
 from pathlib import Path
 
 from . import config, db, metadata
+
+# 指纹只读头尾各 1MB：大文件不用整文件读，仍足以区分不同集（同 size + 同 mtime
+# 到秒级 + 头尾内容一致，几乎不可能是两个不同文件）。
+_HASH_CHUNK = 1024 * 1024
+
+
+def partial_hash(path: Path) -> str | None:
+    """返回 ``size:sha1(头1MB+尾1MB)`` 指纹；读失败返回 None（不中断扫描）。"""
+    try:
+        size = path.stat().st_size
+        h = hashlib.sha1()
+        with open(path, "rb") as fh:
+            h.update(fh.read(_HASH_CHUNK))
+            if size > _HASH_CHUNK * 2:
+                fh.seek(-_HASH_CHUNK, os.SEEK_END)
+                h.update(fh.read(_HASH_CHUNK))
+        return f"{size}:{h.hexdigest()}"
+    except OSError:
+        return None
+
+
+def _relink_moved_file(path: Path, stat, dir_id: int) -> bool:
+    """同一文件被移动/重命名后，把旧记录重关联到新路径（保留 id 与播放进度）。
+
+    只在「新路径查不到记录」时调用，且满足全部条件才重关联，宁可不做也不误关联：
+    * 存在**唯一**一条同 size、mtime 相差 ≤1 秒、路径不同的旧记录；
+    * 旧路径当前已不存在（否则是副本，不该合并）；
+    * 头尾指纹一致（旧记录没存过哈希时，直接补上并重关联）。
+    """
+    candidates = db.rows(
+        "SELECT id, path, size, mtime, partial_hash FROM media_files "
+        "WHERE size = ? AND mtime IS NOT NULL AND ABS(mtime - ?) <= 1 AND path <> ?",
+        (stat.st_size, stat.st_mtime, str(path)),
+    )
+    if len(candidates) != 1:
+        return False
+    candidate = candidates[0]
+    try:
+        if Path(candidate["path"]).exists():
+            return False
+    except OSError:
+        return False
+    digest = partial_hash(path)
+    if not digest:
+        return False
+    stored = candidate.get("partial_hash")
+    if stored and stored != digest:
+        return False
+    db.execute(
+        "UPDATE media_files SET path = ?, filename = ?, dir_id = ?, size = ?, mtime = ?, "
+        "partial_hash = ?, deleted_at = NULL, updated_at = ? WHERE id = ?",
+        (str(path), path.name, dir_id, stat.st_size, stat.st_mtime, digest,
+         db.now(), candidate["id"]),
+    )
+    return True
 
 BRACKET_RE = re.compile(r"\[[^\]]*\]")
 PAREN_RE = re.compile(r"\([^)]*\)")
@@ -182,15 +239,19 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                     )
                     updated += 1
             else:
-                db.execute(
-                    "INSERT INTO media_files(dir_id, path, filename, size, mtime, title_raw, "
-                    "title_guess, season_no, episode_no, year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                    (
-                        directory["id"], str(path), path.name, stat.st_size, stat.st_mtime,
-                        path.stem, info["title_guess"], info["season_no"], info["episode_no"], info["year"],
-                    ),
-                )
-                added += 1
+                # 同一文件被移动/改名时优先重关联（保留 id 与播放进度），否则按新文件入库
+                if _relink_moved_file(path, stat, directory["id"]):
+                    updated += 1
+                else:
+                    db.execute(
+                        "INSERT INTO media_files(dir_id, path, filename, size, mtime, title_raw, "
+                        "title_guess, season_no, episode_no, year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            directory["id"], str(path), path.name, stat.st_size, stat.st_mtime,
+                            path.stem, info["title_guess"], info["season_no"], info["episode_no"], info["year"],
+                        ),
+                    )
+                    added += 1
             count += 1
             if progress_cb and count % 50 == 0:
                 progress_cb(count)

@@ -101,6 +101,49 @@ class ScanFlowTests(IsolatedDbTestCase):
         titles = {r["title_cn"] for r in db.rows("SELECT title_cn FROM media_files")}
         self.assertIn("进击的巨人", titles)
 
+    def test_moved_file_is_relinked_and_keeps_progress(self):
+        """文件移动/改名后按指纹重关联：id 与播放进度都不丢，不新增重复行。"""
+        root = self.tmp / "videos"
+        root.mkdir()
+        src = root / "Show - 01.mkv"
+        src.write_bytes(b"content-A" * 200)
+        scanner.add_directory(str(root))
+        scanner.scan()
+        original = db.row("SELECT * FROM media_files WHERE filename = 'Show - 01.mkv'")
+        fid = original["id"]
+        db.execute("INSERT INTO watch_progress(file_id, position_ms, percent) VALUES (?, ?, ?)",
+                   (fid, 123_000, 42.0))
+        dest_dir = root / "Sub"
+        dest_dir.mkdir()
+        dest = dest_dir / "Show - 01 Renamed.mkv"
+        src.rename(dest)  # rename 保留 mtime
+        result = scanner.scan()
+        rows = db.rows("SELECT * FROM media_files")
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["id"], fid)
+        self.assertEqual(rows[0]["filename"], "Show - 01 Renamed.mkv")
+        self.assertEqual(
+            db.scalar("SELECT position_ms FROM watch_progress WHERE file_id = ?", (fid,)), 123_000)
+        self.assertEqual(result["added"], 0)
+
+    def test_copy_with_same_metadata_is_not_relinked(self):
+        """原文件还在时，同 size/mtime 的另一份是副本，应各自入库而不是合并。"""
+        import shutil
+        root = self.tmp / "videos"
+        root.mkdir()
+        original = root / "Show - 01.mkv"
+        original.write_bytes(b"content-B" * 200)
+        scanner.add_directory(str(root))
+        scanner.scan()
+        first = db.row("SELECT * FROM media_files WHERE filename = 'Show - 01.mkv'")
+        copy = root / "Show - 01 copy.mkv"
+        shutil.copy2(original, copy)  # 保留 mtime、内容相同
+        scanner.scan()
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 2)
+        duplicated = db.row("SELECT * FROM media_files WHERE filename = 'Show - 01 copy.mkv'")
+        self.assertIsNotNone(duplicated)
+        self.assertNotEqual(duplicated["id"], first["id"])
+
     def test_scan_honours_disabled_directory(self):
         root = self._make_library()
         added = scanner.add_directory(str(root))
