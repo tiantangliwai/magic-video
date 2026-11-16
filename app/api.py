@@ -1283,8 +1283,9 @@ class Api:
         """解析预览时就完成中文名自动匹配，结果直接展示，不留待办队列。"""
         return importer.preview(text or "")
 
-    def commit_import(self, rows: list[dict]) -> dict:
-        return importer.commit(rows or [])
+    def commit_import(self, rows: list[dict], skip_unmatched: bool = False) -> dict:
+        """确认导入。``skip_unmatched=True`` 时不导入未匹配中文名的行。"""
+        return importer.commit(rows or [], skip_unmatched=bool(skip_unmatched))
 
     def get_settings(self) -> dict:
         settings = db.all_settings()

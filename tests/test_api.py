@@ -120,6 +120,19 @@ class ApiTests(IsolatedDbTestCase):
         self.assertFalse(self.api.mark_watched(999999)["ok"])
         self.assertFalse(self.api.reset_progress(999999)["ok"])
 
+    def test_commit_import_can_skip_unmatched_rows(self):
+        """P1-6：未匹配行默认入库并标待确认，显式选择时才跳过。"""
+        preview = self.api.preview_import("Totally Unknown Show XYZ")
+        self.assertEqual(preview["pending_count"], 1)
+        skipped = self.api.commit_import(preview["rows"], skip_unmatched=True)
+        self.assertEqual(skipped["inserted"], 0)
+        self.assertEqual(len(self.api.get_watched_list()), 0)
+
+        kept = self.api.commit_import(preview["rows"])
+        self.assertEqual(kept["inserted"], 1)
+        self.assertEqual(kept["pending"], 1)
+        self.assertEqual(self.api.get_watched_list()[0]["status"], "pending_review")
+
     def test_display_title_follows_language_preference(self):
         """P1-4：展示标题按偏好切换，只改显示不改库里的匹配结果。"""
         self.media("Orig.Name.01.mkv", title_guess="Orig Name", title_cn="中文名字",

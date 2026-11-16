@@ -123,5 +123,52 @@ class ImportFlowTests(IsolatedDbTestCase):
         self.assertEqual(saved["season_no"], 2)
 
 
+class PendingReviewTests(IsolatedDbTestCase):
+    """P1-6：未匹配行进入待确认区，不静默丢行，也不冒充正常记录。"""
+
+    def test_preview_lists_unmatched_rows_as_pending(self):
+        result = importer.preview("Attack on Titan\nTotally Unknown Show XYZ")
+        self.assertEqual(result["pending_count"], 1)
+        self.assertEqual(result["unmatched_cn"], result["pending_count"])
+        item = result["pending"][0]
+        self.assertEqual(item["title"], "Totally Unknown Show XYZ")
+        # index 指回 rows 里的同一条，前端才能按行勾选「暂不导入」
+        self.assertEqual(result["rows"][item["index"]]["title"], item["title"])
+
+    def test_matched_rows_are_watched_and_unmatched_are_pending(self):
+        rows = importer.preview("Attack on Titan\nTotally Unknown Show XYZ")["rows"]
+        out = importer.commit(rows, source="test")
+        self.assertEqual(out["inserted"], 2)
+        self.assertEqual(out["pending"], 1)
+        statuses = {r["title"]: r["status"]
+                    for r in db.rows("SELECT title, status FROM watched_list")}
+        self.assertEqual(statuses["Attack on Titan"], "watched")
+        self.assertEqual(statuses["Totally Unknown Show XYZ"], "pending_review")
+
+    def test_skip_unmatched_drops_them_only_when_asked(self):
+        rows = importer.preview("Attack on Titan\nTotally Unknown Show XYZ")["rows"]
+        out = importer.commit(rows, source="test", skip_unmatched=True)
+        self.assertEqual(out["inserted"], 1)
+        self.assertEqual(out["skipped"], 1)
+        self.assertEqual(out["pending"], 0)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watched_list"), 1)
+
+    def test_reimport_is_idempotent_including_pending_rows(self):
+        rows = importer.preview("Totally Unknown Show XYZ")["rows"]
+        importer.commit(rows, source="test")
+        again = importer.commit(rows, source="test")
+        self.assertEqual((again["inserted"], again["skipped"]), (0, 1))
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watched_list"), 1)
+
+    def test_naming_a_pending_row_turns_it_into_a_normal_record(self):
+        rows = importer.preview("Totally Unknown Show XYZ")["rows"]
+        rows[0]["title_cn"] = "神秘作品"
+        rows[0]["cn_edited"] = True
+        out = importer.commit(rows, source="test")
+        self.assertEqual(out["pending"], 0)
+        self.assertEqual(out["learned"], 1)
+        self.assertEqual(db.scalar("SELECT status FROM watched_list"), "watched")
+
+
 if __name__ == "__main__":
     unittest.main()

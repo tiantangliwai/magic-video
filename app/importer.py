@@ -376,12 +376,30 @@ def preview(text: str) -> dict:
             if season_cn:
                 rec["title_cn"] = season_cn
         rec["matched_cn"] = bool(rec["title_cn"] and rec["title_cn"] != rec["title"])
+    # 「待确认区」：未匹配到中文名的行单独列出来，由用户显式处理
+    # （改中文名 / 选择不导入）。不给每行建待办记录，只在本次预览结果里体现。
+    pending = [
+        {
+            "index": idx,
+            "title": rec["title"],
+            "raw_text": rec.get("raw_text") or "",
+            "season_no": rec.get("season_no"),
+            "episode_from": rec.get("episode_from"),
+            "episode_to": rec.get("episode_to"),
+            "note": rec.get("note") or "",
+            "duplicate": rec["duplicate"],
+        }
+        for idx, rec in enumerate(records)
+        if rec["match_by"] == "none"
+    ]
     return {
         "ok": True,
         "rows": records,
         "total": len(records),
         "duplicates": sum(1 for r in records if r["duplicate"]),
-        "unmatched_cn": sum(1 for r in records if r["match_by"] == "none"),
+        "unmatched_cn": len(pending),
+        "pending": pending,
+        "pending_count": len(pending),
         "groups": group_watched(records),
         "match": {
             "matched": match_result["matched"],
@@ -393,11 +411,18 @@ def preview(text: str) -> dict:
     }
 
 
-def commit(records: list[dict], source: str = "manual") -> dict:
-    """入库；界面里手改过的中文名会被记住，下次导入自动命中。"""
+def commit(records: list[dict], source: str = "manual", skip_unmatched: bool = False) -> dict:
+    """入库；界面里手改过的中文名会被记住，下次导入自动命中。
+
+    ``skip_unmatched=True`` 时未匹配中文名的行**不入库**（用户在预览里明确选择
+    「只导入匹配上的」）；默认保留，但标记 ``status='pending_review'``，
+    界面上显示「待确认」徽章，用户可事后改中文名或删除——
+    而不是像旧版那样让外文原名静默混进看过的列表冒充正常记录。
+    判重键不变，所以重复导入仍然幂等，不会产生重复行。
+    """
     db.init_db()
     metadata.ensure_builtin_loaded()
-    inserted = skipped = learned = 0
+    inserted = skipped = learned = pending = 0
     for rec in records:
         # 防旧版前端 / 旧缓存把脏串再次塞进库：先剥噪音外壳，再按干净标题判重。
         raw_title = rec.get("title") or ""
@@ -423,17 +448,26 @@ def commit(records: list[dict], source: str = "manual") -> dict:
             metadata.remember(title, title_cn, source="user")
             match_by = "user"
             learned += 1
+        status = "watched"
+        if match_by == "none":
+            if skip_unmatched:
+                skipped += 1
+                continue
+            status = "pending_review"
+            pending += 1
         db.execute(
             "INSERT INTO watched_list(raw_text, title, title_cn, match_by, season_no, "
-            "episode_from, episode_to, source, note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "episode_from, episode_to, source, note, status) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 rec.get("raw_text"), title, title_cn, match_by,
                 rec.get("season_no"), rec.get("episode_from"), rec.get("episode_to"), source,
-                rec.get("note") or "",
+                rec.get("note") or "", status,
             ),
         )
         inserted += 1
-    return {"ok": True, "inserted": inserted, "skipped": skipped, "learned": learned}
+    return {"ok": True, "inserted": inserted, "skipped": skipped,
+            "learned": learned, "pending": pending}
 
 
 def clean_watched_rows(dry_run: bool = False) -> dict:

@@ -919,7 +919,7 @@ function watchedRowHtml(r) {
     </tr>`;
   }
   return `<tr>
-    <td data-edit-watched="${r.id}" data-field="title" title="双击编辑">${esc(r.title)}</td>
+    <td data-edit-watched="${r.id}" data-field="title" title="双击编辑">${esc(r.title)}${r.status === 'pending_review' ? ' <span class="badge amber" title="导入时未匹配到中文名，可双击左侧作品名补上">待确认</span>' : ''}</td>
     <td><span class="badge ${tone}">${esc(label)}</span></td>
     <td data-edit-watched="${r.id}" data-field="season_no" title="双击修改第几季">${r.season_no ? esc(r.season_no) : '—'}</td>
     <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to || r.episode_from}`) : '—'}</td>
@@ -1102,7 +1102,28 @@ function renderPreview(data) {
       <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to}`) : '—'}</td>
       <td><span class="badge ${tone}">${esc(label)}</span></td>
     </tr>`;
-    }).join('') : `<tr><td colspan="5">没有解析出有效条目</td></tr>`}</tbody></table></div>`;
+    }).join('') : `<tr><td colspan="5">没有解析出有效条目</td></tr>`}</tbody></table></div>${pendingBlock(data)}`;
+}
+
+function pendingBlock(data) {
+  const pending = (data && data.pending) || [];
+  if (!pending.length) return '';
+  return `<div class="card" style="margin-top:14px">
+    <h3>待确认：${pending.length} 条未匹配到中文名</h3>
+    <p class="hint">这些行的标题是外文原名，离线词典和在线检索都没查到。三种处理方式：
+      <b>直接导入</b>（在「看过的列表」里带「待确认」徽章，随时可补名字）、
+      <b>先在上方「中文名」列补上</b>再导入（改动会被记住）、
+      <b>勾选「暂不导入」</b>本次跳过该条（下次还能再导入）。
+      程序不会因为没匹配上就静默丢行。</p>
+    <div class="table-wrap"><table><thead><tr>
+      <th>暂不导入</th><th>原名</th><th>季</th><th>集数</th><th>备注</th></tr></thead><tbody>
+    ${pending.map(p => `<tr>
+      <td><input type="checkbox" class="skip-row" data-idx="${p.index}"></td>
+      <td>${esc(p.title)}</td>
+      <td>${p.season_no || '—'}</td>
+      <td>${p.episode_from ? esc(`${p.episode_from}–${p.episode_to}`) : '—'}</td>
+      <td>${esc(p.note || '—')}</td>
+    </tr>`).join('')}</tbody></table></div></div>`;
 }
 
 async function renderScan() {
@@ -2192,8 +2213,13 @@ async function handleAction(action, btn) {
           lastPreviewRows[i].title_cn = value || lastPreviewRows[i].title;
         }
       });
-      const r = await call('commit_import', lastPreviewRows);
+      // 「待确认区」里勾了「暂不导入」的行本次跳过
+      const skippedIdx = new Set(
+        Array.from(document.querySelectorAll('.skip-row:checked')).map(el => Number(el.dataset.idx)));
+      const payload = lastPreviewRows.filter((_, i) => !skippedIdx.has(i));
+      const r = await call('commit_import', payload);
       toast(`导入 ${r.inserted} 条 · 跳过重复 ${r.skipped} 条` +
+        (r.pending ? ` · 待确认 ${r.pending} 条` : '') +
         (r.learned ? ` · 已记住 ${r.learned} 条中文名` : ''), r.ok);
       lastPreviewRows = [];
       document.getElementById('previewBox').innerHTML = empty('导入完成', '到「看过的列表」查看结果');
