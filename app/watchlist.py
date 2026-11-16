@@ -14,7 +14,9 @@ from . import blacklist, db, textmatch
 
 _SECTION_RE = re.compile(r"^\s*(已下载|未下载)\s*[:：]\s*$")
 _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
+_CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]+")
 MAX_FILES_PER_ITEM = 8          # 界面「固定展示」的条数；match_count 仍是全量
+LOOSE_MAX_HITS = 400            # 词序兜底命中行数超此值说明锚点太泛，放弃（宁漏不错）
 
 
 def clean_line(line: str) -> str:
@@ -131,8 +133,82 @@ def _media_haystacks() -> list[dict]:
 
 
 def media_index() -> list[dict]:
-    """给其它模块复用的媒体检索索引（追剧列表 / 看过的列表共用同一套归一化）。"""
-    return _media_haystacks()
+    """给其它模块复用的媒体检索索引（追剧列表 / 看过的列表共用同一套归一化）。
+
+    返回 ``MediaIndex``，它比普通 list 多一个**懒加载**的中文二字组倒排：
+    只有真的走到词序兜底时才会建表，建好一次后整批标题复用。
+    """
+    return MediaIndex(_media_haystacks())
+
+
+class MediaIndex(list):
+    """媒体检索索引 + 懒加载锚点倒排（词序兜底用，避免每条标题全表扫一遍）。"""
+
+    _anchor_map: dict[str, list[dict]] | None = None
+
+    def anchor_pools(self, key: str) -> list[list[dict]]:
+        if self._anchor_map is None:
+            self._anchor_map = _build_anchor_index(self)
+        pools = []
+        for anchor in dict.fromkeys((key[:2], key[-2:])):
+            rows = self._anchor_map.get(anchor)
+            if rows:
+                pools.append(rows)
+        pools.sort(key=len)      # 小池先试，大部分情况下第一次就命中
+        return pools
+
+
+def _build_anchor_index(media: list[dict]) -> dict[str, list[dict]]:
+    """中文二字组 → 命中行。只索引「两个都是汉字」的组合，英文段不进表。"""
+    index: dict[str, list[dict]] = {}
+    for row in media:
+        hay = row["_full_hay"]
+        seen: set[str] = set()
+        for i in range(len(hay) - 1):
+            a, b = hay[i], hay[i + 1]
+            if not ("\u4e00" <= a <= "\u9fff" and "\u4e00" <= b <= "\u9fff"):
+                continue
+            gram = a + b
+            if gram in seen:
+                continue
+            seen.add(gram)
+            index.setdefault(gram, []).append(row)
+    return index
+
+
+def _loose_keyword(row: dict, key: str) -> str:
+    """兜底命中后，用**目录名里的中文片段**当搜索词。
+
+    清单写「会长大人是女仆」，磁盘目录叫「会长是女仆大人」：前端「媒体库搜索」
+    拿清单写法去搜是 0 条（文件名还是罗马字、``title_cn`` 为空）。取 path 里与
+    变体用字重合最多的那段连续中文，媒体库按路径就能搜到全部剧集。
+    """
+    runs = _CJK_RUN_RE.findall(str(row.get("path") or ""))
+    if not runs:
+        return ""
+    want = set(key)
+    best = max(runs, key=lambda run: (len(set(run) & want), len(run)))
+    return best if len(set(best) & want) >= textmatch.LOOSE_MIN_CJK else ""
+
+
+def _loose_match(title: str, media: list[dict]) -> tuple[list[dict], str]:
+    """词序不同的同一译名兜底：``会长大人是女仆`` ↔ ``会长是女仆大人``。
+
+    只在常规关键词全部落空后调用，口径仍是「宁漏不错」：先用中文二字组倒排
+    把候选压回同一部剧的量级，再交给 ``textmatch.loose_title_hit`` 做严格判定
+    （纯中文 + 汉字全中 + 二字组覆盖 ≥60% + 首末二字组都在）。
+    """
+    pools = getattr(media, "anchor_pools", None)
+    for variant in textmatch.query_variants(title, limit=6):
+        key = textmatch.normalize(variant)
+        if len(key) < textmatch.LOOSE_MIN_CJK:
+            continue
+        candidates = pools(key) if pools else []
+        for pool in candidates:
+            found = [row for row in pool if textmatch.loose_title_hit(key, row["_full_hay"])]
+            if found and len(found) <= LOOSE_MAX_HITS:
+                return found, (_loose_keyword(found[0], key) or variant)
+    return [], ""
 
 
 def match_files(title: str, media: list[dict]) -> tuple[int, list[dict], str]:
@@ -140,6 +216,9 @@ def match_files(title: str, media: list[dict]) -> tuple[int, list[dict], str]:
 
     早期把全部关键词 OR 在一起，结果「Zero」「Life」这类短英文词子串匹配到
     上百个无关文件。现在优先用最具体的主标题，短英文词只认文件名里的独立单词。
+    全部落空后再走一次**词序容错**兜底（见 ``_loose_match``）：同一部剧的不同
+    中文译名常常只是词序不同（「会长大人是女仆」/「会长是女仆大人」），而中文名
+    有时只存在于目录名里、``title_cn`` 为空，纯包含判断会整条漏掉。
     """
     hits: list[dict] = []
     keyword = ""
@@ -163,6 +242,8 @@ def match_files(title: str, media: list[dict]) -> tuple[int, list[dict], str]:
             hits, keyword = found, variant
             break
     if not hits:
+        hits, keyword = _loose_match(title, media)
+    if not hits:
         return 0, [], ""
     hits.sort(key=lambda r: (int(r.get("season_no") or 0), int(r.get("episode_no") or 0),
                              str(r.get("filename") or "")))
@@ -178,7 +259,7 @@ def items(keyword: str = "") -> dict:
     db.init_db()
     rows = db.rows("SELECT id, title, downloaded, sort_order, note, source, created_at "
                    "FROM watchlist ORDER BY sort_order ASC, id ASC")
-    media = _media_haystacks()
+    media = media_index()
     kw = textmatch.normalize(keyword)
     out = []
     for r in rows:

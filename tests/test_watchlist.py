@@ -484,5 +484,84 @@ class FrontendContractTests(unittest.TestCase):
             self.assertIn(token, self.js)
 
 
+class LooseTitleHitTests(unittest.TestCase):
+    """``textmatch.loose_title_hit`` 的口径：只救「词序不同但用字相同」的同一译名。
+
+    起因：清单写「会长大人是女仆」，磁盘目录是「[SAIO-Raws] 会长是女仆大人
+    Kaichou wa Maid-sama!」，两者子串互不包含；而这类文件的 ``title_cn`` 是空的
+    （中文名只存在于目录名里），纯包含判断会整条漏掉，追剧列表点不到本地文件。
+    """
+
+    SHOW = "[SAIO-Raws] 会长是女仆大人Kaichou wa Maid-sama! [BD 1920x1080 HEVC-10bit OPUS]"
+
+    def test_reordered_translation_hits(self):
+        self.assertTrue(textmatch.loose_title_hit("会长大人是女仆", textmatch.normalize(self.SHOW)))
+
+    def test_short_english_word_never_hits(self):
+        """「nana」字符集只有 {n,a}，曾经把 267 个无关文件算成命中。"""
+        hay = textmatch.normalize("Melody Marks Loves When People Watch Her")
+        self.assertFalse(textmatch.loose_title_hit("nana", hay))
+
+    def test_two_char_cjk_is_rejected(self):
+        """少于 4 个汉字不做词序容错，否则「安娜」会撞上一切含这两个字的目录。"""
+        self.assertFalse(textmatch.loose_title_hit("安娜", textmatch.normalize("安娜2022 全6集 简繁英字幕")))
+
+    def test_first_bigram_is_required(self):
+        """首尾二字组必须都在：只凑齐中间的字说明是撞词，不是同一部剧。"""
+        hay = textmatch.normalize("我的女友的妹妹的朋友")
+        self.assertFalse(textmatch.loose_title_hit("女朋友的朋友", hay))
+
+    def test_mixed_latin_title_is_rejected(self):
+        self.assertFalse(textmatch.loose_title_hit("魔法少女奈叶vivid", textmatch.normalize("魔法少女奈叶vividstrike")))
+
+
+class LooseTitleMatchTests(IsolatedDbTestCase):
+    """追剧列表的词序兜底：真命中的要出现「本地 N 个文件」，误配的一条都不能多。"""
+
+    DIR = r"D:\magic\[SAIO-Raws] 会长是女仆大人Kaichou wa Maid-sama! [BD 1920x1080 HEVC-10bit OPUS]"
+
+    def setUp(self):
+        super().setUp()
+        for ep in (1, 2, 3):
+            self.media(
+                f"[SAIO-Raws] Kaichou wa Maid-sama! {ep:02d}.mkv",
+                title_guess=f"Kaichou wa Maid-sama! {ep:02d}",
+                path=f"{self.DIR}\\[SAIO-Raws] Kaichou wa Maid-sama! {ep:02d}.mkv",
+                episode_no=ep,
+            )
+
+    def test_reordered_title_matches_local_files(self):
+        count, files, keyword = watchlist.match_files("会长大人是女仆", watchlist.media_index())
+        self.assertEqual(count, 3)
+        # 搜索词换成目录里的写法，「媒体库搜索」才搜得到（清单写法的结果是 0 条）
+        self.assertEqual(keyword, "会长是女仆大人")
+        self.assertTrue(all(f["path"].startswith(self.DIR) for f in files))
+
+    def test_strict_match_still_wins_first(self):
+        """能用原关键词命中时不能走兜底，避免把 search_keyword 换掉。"""
+        count, _files, keyword = watchlist.match_files("Kaichou wa Maid-sama!", watchlist.media_index())
+        self.assertEqual(count, 3)
+        self.assertEqual(keyword, "Kaichou wa Maid-sama")   # clean_title 会剥掉尾部感叹号
+
+    def test_short_title_does_not_fall_back(self):
+        count, _files, _kw = watchlist.match_files("安娜", watchlist.media_index())
+        self.assertEqual(count, 0)
+
+    def test_partial_overlap_with_other_show_does_not_match(self):
+        """真实误配场景：「女朋友的朋友」与「超超超…100个女朋友」共享 4 个字。"""
+        self.media("超超超超超喜欢你的100个女朋友 - 01.mkv",
+                   title_guess="超超超超超喜欢你的100个女朋友", episode_no=1)
+        count, _files, _kw = watchlist.match_files("女朋友的朋友", watchlist.media_index())
+        self.assertEqual(count, 0)
+
+    def test_items_exposes_match_for_reordered_title(self):
+        watchlist.import_text("已下载：\n会长大人是女仆\n", replace=True)
+        data = watchlist.items()
+        row = [x for x in data["items"] if x["title"] == "会长大人是女仆"][0]
+        self.assertEqual(row["match_count"], 3)
+        self.assertEqual(row["search_keyword"], "会长是女仆大人")
+        self.assertTrue(row["files"])
+
+
 if __name__ == "__main__":
     unittest.main()

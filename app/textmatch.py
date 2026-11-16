@@ -36,6 +36,7 @@ _CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 _CJK_RUN_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
 _LATIN_RUN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{3,}")
 _NOISE_RE = re.compile(r"[^0-9a-z\u4e00-\u9fff]+")
+_LATIN_DIGIT_RE = re.compile(r"[a-z0-9]")
 _TRAIL_RE = re.compile(r"[\s\-_·:：,，.。!！?？、~～#]+$")
 _LEAD_PUNCT_RE = re.compile(r"^[\s\-_·:：,，.。!！?？、~～#]+")
 
@@ -145,6 +146,50 @@ def query_variants(title: str, limit: int = 6) -> list[str]:
         if len(out) >= max(1, limit):
             break
     return out
+
+
+LOOSE_MIN_CJK = 4          # 至少 4 个汉字才做词序容错，短标题太容易撞词
+LOOSE_BIGRAM_COVER = 0.6   # 二字组覆盖率下限
+
+
+def _bigrams(text: str) -> set[str]:
+    return {text[i:i + 2] for i in range(len(text) - 1)}
+
+
+def loose_title_hit(variant: str, haystack: str) -> bool:
+    """词序不同但用字相同的同一译名：``会长大人是女仆`` ↔ ``会长是女仆大人``。
+
+    这两个写法子串互不包含，纯包含判断永远不命中。但**只比字符集合太松**：
+    「nana」的字符集只有 {n,a}、「女朋友的朋友」只有 4 个字，随便一部剧都能
+    凑齐，实测会把 762 条清单里的 36 条错标成已下载。所以收紧成四条同时成立：
+
+    1. **只认纯中文**（不含 a-z0-9）且至少 ``LOOSE_MIN_CJK`` 个汉字——
+       英文标题的词序问题少，字符集又小，做容错的收益远小于误配风险；
+    2. 变体里的汉字**必须全部出现**（不是 90%，少一个字就可能只是撞词）；
+    3. 二字组覆盖率 ≥ ``LOOSE_BIGRAM_COVER``，保证大体顺序还对得上；
+    4. **首、末两个二字组都必须出现**——词序错位通常发生在中间
+       （「会长**大人是**女仆」→「会长**是**女仆**大人**」），首尾还在；
+       缺任一边就说明只是撞到了几个常用字（「女朋」在、「的朋」不在）。
+
+    只在常规关键词全部落空后作为兜底使用，口径是「宁漏不错」。
+    """
+    key = normalize(variant)
+    if not haystack:
+        return False
+    if len(_CJK_RE.findall(key)) < LOOSE_MIN_CJK:
+        return False
+    if _LATIN_DIGIT_RE.search(key):
+        return False
+    chars = set(key)
+    if not chars <= set(haystack):
+        return False
+    grams = _bigrams(key)
+    if not grams:
+        return False
+    hit = grams & _bigrams(haystack)
+    if len(hit) / len(grams) < LOOSE_BIGRAM_COVER:
+        return False
+    return key[:2] in hit and key[-2:] in hit
 
 
 def match_score(candidate: str, want: str) -> float:
