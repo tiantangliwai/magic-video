@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_DOCS = (
     "README.md", "AGENTS.md", "CHANGELOG.md",
     "docs/FEATURES.md", "docs/OPTIMIZATION.md", "docs/TESTING.md", "docs/OBSIDIAN.md",
-    "docs/IMPLEMENTATION_NOTES.md",
+    "docs/IMPLEMENTATION_NOTES.md", "docs/ROADMAP_0.1.6.md",
     "app/obsidian.py", "run_tests.py", "requirements.txt", ".gitignore",
 )
 
@@ -126,6 +126,15 @@ class VersionConsistencyTests(unittest.TestCase):
         self.assertTrue(path.exists(), "缺少 L0 冷存储 docs/IMPLEMENTATION_NOTES.md")
         text = path.read_text(encoding="utf-8")
         self.assertIn("冷存储", text)
+
+    def test_roadmap_016_has_priorities_and_hardening_plans(self):
+        """v0.1.6 规划必须含 P0/P1/P2 需求与三项补强方案，且明确是未开发的规划。"""
+        text = (ROOT / "docs" / "ROADMAP_0.1.6.md").read_text(encoding="utf-8")
+        for token in ("P0", "P1", "P2", "JSON 完整备份", "三阈值", "数据地基", "外部依赖"):
+            self.assertIn(token, text, f"路线图缺少要素：{token}")
+        self.assertIn("规划中", text)
+        # 计划文档不能被误读为当前版本
+        self.assertNotIn("__version__ = \"0.1.6\"", text)
 
     def test_obsidian_doc_declares_current_version(self):
         text = (ROOT / "docs/OBSIDIAN.md").read_text(encoding="utf-8")
