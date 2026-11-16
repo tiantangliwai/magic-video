@@ -242,8 +242,25 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 测试结果快照 / 同步历史 | `data/` | `test_last.json` / `obsidian_history.json` | ❌ |
 | Obsidian 同步笔记 | vault 内 `Magic Video/` | `00 项目总览.md` 等 6 篇 + `06 开发日志/YYYY-MM-DD.md` | ❌ 仓库外 |
 | 手动补充词典 | `data/alias_import.json` | 可选，用户自行放置 | ❌ |
-| 项目工作日志 | `.workbuddy/memory/YYYY-MM-DD.md` | **追加式**，不覆写 | ❌ |
-| 项目长期笔记 | `.workbuddy/memory/MEMORY.md` | 原地更新，≤3000 字 | ❌ |
+| 项目工作日志（L2） | `.workbuddy/memory/YYYY-MM-DD.md` | **追加式**，不覆写；单日 <10KB | ❌ |
+| 项目长期笔记（L1） | `.workbuddy/memory/MEMORY.md` | 原地更新，**≤3000 字**（固定注入，超了持续吃积分） | ❌ |
+| 实现细节冷存储（L0） | `docs/IMPLEMENTATION_NOTES.md` | 按需检索，不注入；实现细节的唯一去处 | ✅ |
+
+### 4.1 Agent 记忆分层（2026-11-16，解决反复触顶与整理耗时）
+
+文件名大小写以本表为准：`AGENTS.md`、`MEMORY.md`、`IMPLEMENTATION_NOTES.md` 均大写扩展名，路径唯一，禁止另建同义文件（如 `agents.md`、`memory.md`）造成口径分裂。
+
+| 层 | 文件 | 放什么 | 怎么读 | 字数 |
+|---|---|---|---|---|
+| L0 冷存储 | `docs/IMPLEMENTATION_NOTES.md` | 命令码、性能数字、函数名、踩坑细节、提交历史 | **不注入**，需要改某块代码时按关键词搜索 | 不限 |
+| L1 长期笔记 | `.workbuddy/memory/MEMORY.md` | 铁律 / 不变量 / 指针（指向 L0 与本文档） | 每次会话全量注入 | **≤3000 字** |
+| L2 工作日志 | `.workbuddy/memory/YYYY-MM-DD.md` | 当天做了什么：结论 + 待办，每条 1–3 行 | 只在回看历史时按需读 | 单日 <10KB |
+
+**归类规则（写之前先判层）**：一句话能说清的「约束 / 铁律 / 不变量 / 去哪查」→ L1；具体函数名、参数、命令码、实测数字、历史流水 → L0；当天发生了什么 → L2。**禁止把实现细节写进 L1**（这是反复触顶的根因），也**禁止把 L2 日志全文搬进 L1**（一个月后必然再次爆炸）。
+
+**维护节奏**：L1 用「替换式更新」——新约定进来先删同类旧条目，长度守恒，不是无限追加；超过 3000 字当场蒸馏，把细节移到 L0，不要等触顶再大整理。字数上限由 `tests/test_docs.py::test_project_memory_stays_under_budget` 守护。L2 日志满 30 天后蒸馏出仍有效的不变量并入 L1，随后删除旧日志。
+
+**与 Obsidian 笔记的区别（不要混淆）**：`docs/OBSIDIAN.md` 契约下的 vault 笔记是**交付给用户的产品文档**（带 `managed-by` 标记、只写 `Magic Video/` 命名空间）；本节的 `.workbuddy/memory/` 是 **Agent 自己的工作记忆**，仓库外、不入库。两者互不覆盖、互不同步、职责不重叠。
 
 **禁止**：在仓库根目录散落临时 `.txt` / `.json` 报告；把 `data/` 整目录加入版本库；把 `.gitignore` 写成裸 `data/`（会连带忽略 `app/data/aliases_builtin.json`）；删除 `.workbuddy/` 目录；在文档里编造未实测的数据或功能；
 在 Obsidian 命名空间之外写任何文件；覆盖没有 `managed-by` 标记的用户笔记；把观看明细 / 视频路径写进笔记；为 Obsidian 引入定时任务或云同步；把 `dist/` / `build/` / `.venv/` 提交进版本库。
@@ -318,7 +335,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 3. 只同步**本次受影响**的功能/使用说明；版本号、CHANGELOG、TESTING 报告留到发版时统一处理（见 3.0）。
 4. 语法检查 + **增量测试**（`python run_changed_tests.py`，见 3.0.1）；仅当界面有可见改动才做窗口冒烟。**增量全绿就提交，不要再加跑全量**；只有命中 3.0.1 白名单 ①②③ 时才跑全量。
 5. 按 3.3 规范做**本地提交**（不主动推送，见 3.0.2）；**仅用户明确要求发版**时才走 3.2 清单、构建产物并打 tag。
-6. 把有长期价值的结论追加到 `.workbuddy/memory/YYYY-MM-DD.md`。
+6. 按 4.1 分层写记忆：当天结论/待办以 1–3 行追加到 `.workbuddy/memory/YYYY-MM-DD.md`（L2，单日 <10KB）；有长期价值的**铁律/不变量**进 `MEMORY.md`（L1，先删同类旧条目、≤3000 字）；实现细节进 `docs/IMPLEMENTATION_NOTES.md`（L0）。禁止往 L1 堆细节。
 
 ---
 

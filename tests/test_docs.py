@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parent.parent
 REQUIRED_DOCS = (
     "README.md", "AGENTS.md", "CHANGELOG.md",
     "docs/FEATURES.md", "docs/OPTIMIZATION.md", "docs/TESTING.md", "docs/OBSIDIAN.md",
+    "docs/IMPLEMENTATION_NOTES.md",
     "app/obsidian.py", "run_tests.py", "requirements.txt", ".gitignore",
 )
 
@@ -100,6 +101,31 @@ class VersionConsistencyTests(unittest.TestCase):
         # 被明确否决的借口也要在，避免只写「尽量」留口子
         for token in ("改动面大", "兜底", "收尾"):
             self.assertIn(token, text)
+
+    def test_memory_layers_are_documented_in_agents(self):
+        """三层 memory 分层必须写进 AGENTS.md，且与 MEMORY.md 口径一致、不冲突。
+
+        L0 冷存储 docs/IMPLEMENTATION_NOTES.md（按需读，不注入）
+        L1 .workbuddy/memory/MEMORY.md（≤3000 字，每次会话注入）
+        L2 .workbuddy/memory/YYYY-MM-DD.md（追加式短日志）
+        """
+        text = (ROOT / "AGENTS.md").read_text(encoding="utf-8")
+        for token in ("IMPLEMENTATION_NOTES.md", "MEMORY.md", "YYYY-MM-DD.md", "3000"):
+            self.assertIn(token, text, f"AGENTS.md 未声明分层要素：{token}")
+
+    def test_project_memory_stays_under_budget(self):
+        """L1 MEMORY.md 是每次会话全量注入的固定成本，超 3000 字会持续吃掉积分。"""
+        path = ROOT / ".workbuddy" / "memory" / "MEMORY.md"
+        self.assertTrue(path.exists(), "缺少 L1 长期笔记 MEMORY.md")
+        char_count = len(path.read_text(encoding="utf-8"))
+        self.assertLessEqual(char_count, 3000, f"MEMORY.md {char_count} 字超过 3000 字上限，需蒸馏到 L0 冷存储")
+
+    def test_l0_cold_storage_exists(self):
+        """被 MEMORY.md 剥离的实现细节必须有去处，避免信息丢失。"""
+        path = ROOT / "docs" / "IMPLEMENTATION_NOTES.md"
+        self.assertTrue(path.exists(), "缺少 L0 冷存储 docs/IMPLEMENTATION_NOTES.md")
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("冷存储", text)
 
     def test_obsidian_doc_declares_current_version(self):
         text = (ROOT / "docs/OBSIDIAN.md").read_text(encoding="utf-8")
