@@ -525,6 +525,24 @@ def clean_watched_rows(dry_run: bool = False) -> dict:
     }
 
 
+def _season_key(value) -> int:
+    """季号的**比较键**：把    「没有季标记」统一算作第 1 季。
+
+    目录名里常常没有季标记（``Sono Bisque Doll wa Koi wo Suru``），扫描出的
+    ``season_no`` 是 NULL；而老版本同步留下的行可能写着 1。若直接用
+    ``season_no or 0`` 当键，NULL 与 1 是两把不同的键，同一部剧会被当成两季
+    各插一行 —— 看过的列表里就出现「更衣人偶坠入爱河 3-12」的两条重复。
+
+    所以入库仍按原值存（NULL 就还是不显示季），但**比对与分组**统一折算成
+    「NULL/0 → 1」。真正的第 2 季（season_no=2）不受影响，不会和第 1 季合并。
+    """
+    try:
+        season = int(value or 0)
+    except (TypeError, ValueError):
+        season = 0
+    return season or 1
+
+
 def _merge_playback_duplicates() -> int:
     """合并旧版「每集一条」的 playback 记录，返回删除的重复行数（幂等）。
 
@@ -532,6 +550,8 @@ def _merge_playback_duplicates() -> int:
     12 条同作品记录。这里只处理 ``source='playback'``：按 (作品名, 季) 分组，
     组内保留一条（``match_by='user'`` 优先，其次最早写入），区间取并集，
     其余行删除。手动导入行（source != 'playback'）一律不动。
+
+    季号用 :func:`_season_key` 折算，「无季标记」与「第 1 季」视为同组。
     """
     rows = db.rows(
         "SELECT id, title, season_no, episode_from, episode_to, match_by "
@@ -540,7 +560,7 @@ def _merge_playback_duplicates() -> int:
     )
     groups: dict[tuple[str, int], list[dict]] = {}
     for r in rows:
-        key = (str(r.get("title") or "").strip().lower(), int(r.get("season_no") or 0))
+        key = (str(r.get("title") or "").strip().lower(), _season_key(r.get("season_no")))
         groups.setdefault(key, []).append(r)
     removed = 0
     for items in groups.values():
@@ -593,7 +613,7 @@ def sync_watched_from_progress() -> dict:
         season = int(item.get("season_no") or 0)
         ep = item.get("episode_no")
         cn = (item.get("title_cn") or "").strip()
-        key = (title.lower(), season)
+        key = (title.lower(), _season_key(season))
         bucket = buckets.get(key)
         if bucket is None:
             buckets[key] = {
@@ -608,6 +628,8 @@ def sync_watched_from_progress() -> dict:
             bucket["ep_max"] = ep if bucket["ep_max"] is None else max(bucket["ep_max"], ep)
 
     # 第二遍：与既有行合并区间（整部行覆盖一切；部分重叠则扩展，不新增）
+    # 季号比对用 _season_key：「无季标记」与「第 1 季」是同一组，否则同一部剧
+    # 会因扫描时目录名有没有季标记而各插一行（同步不幂等）。
     added = updated = covered = 0
     for bucket in buckets.values():
         title, cn, season = bucket["title"], bucket["cn"], bucket["season"]
@@ -615,8 +637,8 @@ def sync_watched_from_progress() -> dict:
         existing = db.rows(
             "SELECT id, episode_from, episode_to FROM watched_list "
             "WHERE (lower(title) = lower(?) OR lower(COALESCE(title_cn,'')) = lower(?)) "
-            "AND COALESCE(season_no, 0) = ? ORDER BY id ASC",
-            (title, cn, season),
+            "AND COALESCE(NULLIF(season_no, 0), 1) = ? ORDER BY id ASC",
+            (title, cn, _season_key(season)),
         )
         if existing:
             target = existing[0]

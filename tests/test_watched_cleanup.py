@@ -247,6 +247,39 @@ class SyncFromProgressTests(IsolatedDbTestCase):
         self.assertEqual(result["added"], 1)
         self.assertEqual(len(self.api.get_watched_list(0)), 1)
 
+    def test_no_season_marker_reuses_existing_season_one_row(self):
+        """目录名没有季标记（season_no=NULL）时，不能与已存在的第 1 季行重复。
+
+        真实案例：``Sono Bisque Doll wa Koi wo Suru`` 的目录名不带季标记，
+        扫描出 season_no=NULL；而老同步留下的行写的是 1。若拿 ``season_no or 0``
+        当幂等键，NULL 与 1 对不上，同一部剧会多插一条「3-12」。
+        """
+        self._watched("Frieren", season_no=1, episode_from=3, episode_to=12,
+                      source="playback")
+        for ep in (3, 8, 12):
+            self._completed(filename=f"Frieren - {ep:02d}.mkv", season_no=None, episode_no=ep)
+        result = importer.sync_watched_from_progress()
+        self.assertEqual(result["added"], 0)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watched_list"), 1)
+
+    def test_playback_rows_with_and_without_season_are_merged(self):
+        """已有的「无季号」与「第 1 季」重复行要在下次同步时自动合并掉。"""
+        self._watched("Frieren", season_no=1, episode_from=3, episode_to=12,
+                      source="playback")
+        self._watched("Frieren", season_no=None, episode_from=3, episode_to=12,
+                      source="playback")
+        self.assertEqual(importer._merge_playback_duplicates(), 1)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watched_list"), 1)
+
+    def test_season_two_row_is_not_merged_into_season_one(self):
+        """「无季标记 → 第 1 季」的折算不能把真正的第 2 季也并进来。"""
+        self._watched("Frieren", season_no=1, episode_from=1, episode_to=12,
+                      source="playback")
+        self._watched("Frieren", season_no=2, episode_from=1, episode_to=12,
+                      source="playback")
+        self.assertEqual(importer._merge_playback_duplicates(), 0)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watched_list"), 2)
+
 
 class WatcherCloseFallbackTests(IsolatedDbTestCase):
     """关闭 PotPlayer 时窗口已消失，不得把断点丢成 0。"""

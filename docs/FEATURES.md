@@ -452,7 +452,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 15-6 | 双击作品名/中文名单元格直接编辑，焦点离开整行或 Enter 自动保存；切到另一输入框/点取消不误触发 |
 | 15-7 | 顶栏背景用互斥的 `html[data-theme=light/dark] .topbar` 显式规则，切主题当场重绘，无需点别处 |
 | 15-8 | 关闭 PotPlayer 且窗口句柄消失时，`Watcher._close_session()` 用本次 `max_ms` 兜底写 `watch_progress`，不让断点停在 0；切回软件窗口立即刷新首页/继续观看 |
-| 15-9 | 播放记录与看过的列表是两条独立数据流；「从播放记录同步」按钮幂等回补 `completed=1` 的作品，区间覆盖判重，不改手动导入行 |
+| 15-9 | 播放记录与看过的列表是两条独立数据流；「从播放记录同步」按钮幂等回补 `completed=1` 的作品，区间覆盖判重（无季标记的目录按第 1 季折算），不改手动导入行 |
 | 15-10 | 「清洗脏数据」按钮幂等修正旧版解析器残留标题、删纯 `- 完` 垃圾行，保留 `raw_text`/季/集/备注与用户手改中文名 |
 | 15-11 | 封面任务状态含 `current`，剧集墙工具栏显示进度条与当前作品名；轮询仍只在任务运行期存在，非常驻定时任务 |
 
@@ -747,8 +747,10 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 23-A4 | 历史遗留的 `source='playback'` 每集一条记录，点一次同步即合并成一行，返回 `merged` 计数；`match_by='user'` 的手改行优先保留 |
 | 23-A5 | 不同季各自一行；手动导入行与其它来源的行一律不动；无集号文件生成区间为 NULL 的单行且只生成一次 |
 | 23-A6 | 只改 `watched_list`，不动 `watch_progress` / `watch_sessions` / `media_files` |
+| 23-A7 | **季号折算**：目录名没有季标记时扫描出的 `season_no` 是 NULL，与老数据里的 `1` 视为同一季（`_season_key`）。同一部剧不会因为「目录名有没有季标记」而在看过的列表里留下两行「3-12」 |
+| 23-A8 | 真正的第 2 季（`season_no=2`）不参与折算，绝不与第 1 季合并；入库仍按原值存（NULL 就是不显示季） |
 
-对应测试：`tests/test_sync_dedupe.py`（10 个用例）；`tests/test_watched_folders.py` 的同步规模用例已按新语义更新（3 集→1 行，匹配仍只扫一次索引）。
+对应测试：`tests/test_sync_dedupe.py`（10 个用例）、`tests/test_watched_cleanup.py::SyncFromProgressTests`（含季号折算三条）；`tests/test_watched_folders.py` 的同步规模用例已按新语义更新（3 集→1 行，匹配仍只扫一次索引）。
 
 ### 23-B 视频黑名单（设置页，默认开启）
 
