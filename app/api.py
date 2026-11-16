@@ -1565,6 +1565,27 @@ class Api:
     def remove_directory(self, dir_id: int) -> dict:
         return scanner.remove_directory(int(dir_id))
 
+    # ---- 媒体库体检与路径重定位（P1-1）----------------------------------
+    def diagnose_library(self) -> dict:
+        """体检：目录是否可达、有多少文件找不到了。只读，不改任何数据。"""
+        return scanner.diagnose_library()
+
+    def preview_relocate(self, old_prefix: str, new_prefix: str) -> dict:
+        """路径重定位预览：算出会改哪些行、有多少冲突，不写库。"""
+        return scanner.preview_relocate(old_prefix, new_prefix)
+
+    def apply_relocate(self, old_prefix: str, new_prefix: str) -> dict:
+        """确认执行路径重定位：只 UPDATE 路径与缺失标记，不删除任何记录。
+
+        播放进度、观看历史、看过的列表全部原样保留（主键不变）。
+        缓存靠写库次数自动失效，无需手动清。
+        """
+        return scanner.apply_relocate(old_prefix, new_prefix)
+
+    def dismiss_missing(self, file_ids: list | None = None) -> dict:
+        """用户确认后隐藏「缺失」文件：软删（可恢复），不真删行、不动进度。"""
+        return scanner.dismiss_missing(file_ids)
+
     def set_directory_enabled(self, dir_id: int, enabled: bool) -> dict:
         return scanner.set_directory_enabled(int(dir_id), bool(enabled))
 
@@ -1603,6 +1624,10 @@ class Api:
         if not Path(path).exists():
             if record["deleted_at"]:
                 raise ValueError("本地文件已移入回收站；观看记录已保留，恢复文件后再播放")
+            if record.get("missing_since"):
+                raise ValueError(
+                    "文件所在目录当前不可达（移动硬盘没插 / 网络盘掉线 / 盘符变了）。"
+                    "观看进度已完整保留——插回硬盘后在设置页用「路径重定位」修正路径即可继续播放")
             raise ValueError("文件不在扫描库中或已被移动，请先扫描所在目录")
         position = 0
         if not from_start:

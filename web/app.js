@@ -1330,6 +1330,13 @@ async function renderSettings() {
       </div>
       ${switchHtml('obsidian_auto_sync', isOn(o.auto_sync), '跑完单元测试自动同步', '命令行执行 cli.py test 通过后自动写入一次结果')}
     </div>
+    <div class="card"><h3>媒体库体检与路径重定位</h3>
+      <p class="hint">移动硬盘换盘符、目录改名、网络盘掉线后，观看进度会完整保留——程序只把文件标为「缺失」，
+        <b>绝不删记录、不动播放进度</b>。这里可以整体修正路径前缀（比逐个文件重关联可靠），
+        也能在确认后隐藏长期找不回的文件（软删，插回硬盘扫描即可恢复）。</p>
+      <div id="relocateBox" class="hint">点「检查媒体库」查看当前状态。</div>
+      <div class="btn-row"><button class="btn" data-action="diagnose-library">检查媒体库</button></div>
+    </div>
     <div class="card"><h3>数据备份与恢复</h3>
       <div class="notice">把播放记录、看过的列表、追剧清单、中文名对照等 9 张表导出成一个 JSON 文件。
         换机 / 换盘前先备份，误删也能恢复。<b>每次恢复前都会自动把当前库再备份一份</b>，恢复本身也可回退。</div>
@@ -1347,6 +1354,38 @@ async function renderSettings() {
         <div class="tip">「仅新增」只补缺失数据、不改现有记录；「覆盖」用备份整库替换当前数据。</div></div>
     </div>
     <div class="card"><p class="hint" style="margin:0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
+}
+
+let lastMissingIds = [];
+
+function renderDiagnose(data) {
+  const box = document.getElementById('relocateBox');
+  if (!box) return;
+  const dirs = data.directories || [];
+  const rows = dirs.map(d => `<tr>
+      <td class="mono" style="font-size:12px">${esc(d.path)}</td>
+      <td>${d.reachable ? '<span class="badge green">可达</span>' : '<span class="badge amber">不可达</span>'}</td>
+      <td>${num(d.files)}</td>
+      <td>${d.missing ? `<span class="badge amber">${num(d.missing)}</span>` : '—'}</td>
+      <td>${d.last_scan_at ? esc(shortDate(d.last_scan_at)) : '—'}</td>
+    </tr>`).join('');
+  box.innerHTML = `<div class="table-wrap"><table><thead><tr>
+      <th>目录</th><th>状态</th><th>文件数</th><th>缺失</th><th>上次扫描</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="5">还没有添加目录</td></tr>'}</tbody></table></div>
+    ${data.total_missing ? `
+      <div class="notice" style="margin-top:12px">共 <b>${num(data.total_missing)}</b> 个文件标记为缺失
+        （观看进度与历史仍完整保留）。若原因是盘符变化 / 目录改名，填新旧前缀整体修正：</div>
+      <div class="field"><label>原路径前缀</label>
+        <input class="input" id="relocOld" placeholder="例如 D:\\Anime"></div>
+      <div class="field"><label>新路径前缀</label>
+        <input class="input" id="relocNew" placeholder="例如 E:\\Anime"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" data-action="preview-relocate">预览影响</button>
+        <button class="btn" data-action="dismiss-missing">隐藏这些缺失文件</button>
+      </div>
+      <div id="relocPreview"></div>`
+      : '<p class="hint" style="margin-top:10px">没有缺失文件，无需重定位。</p>'}`;
+  lastMissingIds = data.missing_ids || [];
 }
 
 // ---------- 剧集墙：卡片式展示（参考 SeedHub / AGE动漫 的作品墙） ----------
@@ -2266,6 +2305,46 @@ async function handleAction(action, btn) {
         }
       } finally { btn.disabled = false; }
       return;
+    }
+    case 'diagnose-library': {
+      btn.disabled = true; btn.textContent = '检查中…';
+      try { renderDiagnose(await call('diagnose_library')); }
+      finally { btn.disabled = false; btn.textContent = '检查媒体库'; }
+      break;
+    }
+    case 'preview-relocate': {
+      const oldP = ((document.getElementById('relocOld') || {}).value || '').trim();
+      const newP = ((document.getElementById('relocNew') || {}).value || '').trim();
+      const p = await call('preview_relocate', oldP, newP);
+      if (!p.ok) { toast(p.error || '预览失败', false); break; }
+      document.getElementById('relocPreview').innerHTML = `<div class="notice">
+        将影响 <b>${num(p.affected)}</b> 个文件 · 路径已就绪可立即恢复 <b>${num(p.restorable)}</b> 个 ·
+        冲突跳过 ${num(p.conflicts)} 个 · 新路径${p.new_prefix_exists ? '存在' : '<b>当前不存在</b>（可能还没插盘，仍可先改路径）'}
+        <br><span class="hint">只改数据库里的路径与缺失标记，不移动/删除任何本地文件，播放进度与历史不受影响。</span></div>
+        ${p.affected ? `<div class="btn-row"><button class="btn btn-primary"
+          data-action="apply-relocate" data-old="${esc(p.old_prefix)}" data-new="${esc(p.new_prefix)}">确认执行重定位</button></div>`
+          : '<p class="hint">没有匹配到任何文件，检查前缀是否写错（要写完整目录，不含末尾斜杠也可以）。</p>'}`;
+      break;
+    }
+    case 'apply-relocate': {
+      btn.disabled = true; btn.textContent = '正在重定位…';
+      try {
+        const r = await call('apply_relocate', btn.dataset.old, btn.dataset.new);
+        toast(r.ok
+          ? `已重定位 ${r.moved} 个文件${r.conflicts ? `，${r.conflicts} 个冲突留给扫描处理` : ''}`
+          : (r.error || '重定位失败'), r.ok);
+        if (r.ok) renderDiagnose(await call('diagnose_library'));
+      } finally { btn.disabled = false; btn.textContent = '确认执行重定位'; }
+      break;
+    }
+    case 'dismiss-missing': {
+      if (!lastMissingIds.length) { toast('没有可隐藏的缺失文件', false); break; }
+      if (!confirm(`将隐藏 ${lastMissingIds.length} 个缺失文件的记录（软删，可恢复）。\n`
+        + '播放进度与观看历史不会被删除；硬盘插回后扫描到文件会自动恢复。继续？')) break;
+      const r = await call('dismiss_missing', lastMissingIds);
+      toast(r.ok ? `已隐藏 ${r.dismissed} 个缺失文件` : (r.error || '操作失败'), r.ok);
+      if (r.ok) renderDiagnose(await call('diagnose_library'));
+      break;
     }
     case 'backup-export': {
       btn.disabled = true; btn.textContent = '正在导出…';

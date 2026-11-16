@@ -84,6 +84,147 @@ class IdTagTests(IsolatedDbTestCase):
         self.assertEqual(row["title_guess"], "Frieren")
 
 
+class MissingAndRelocateTests(IsolatedDbTestCase):
+    """P1-1：目录不可达只标缺失；路径重定位只改路径，永不删记录与进度。"""
+
+    def _media_folder(self, folder: Path, names=("Show - 01.mkv", "Show - 02.mkv")) -> Path:
+        folder.mkdir()
+        for name in names:
+            (folder / name).write_bytes(b"x" * 64)
+        scanner.add_directory(str(folder))
+        scanner.scan()
+        return folder
+
+    def test_unreachable_directory_marks_missing_without_deleting(self):
+        folder = self._media_folder(self.tmp / "gone")
+        record = db.row("SELECT * FROM media_files ORDER BY id LIMIT 1")
+        db.execute("INSERT INTO watch_progress(file_id, position_ms, percent) VALUES (?, ?, ?)",
+                   (record["id"], 600_000, 50))
+
+        # 模拟 U 盘被拔：整个目录消失
+        for item in folder.iterdir():
+            item.unlink()
+        folder.rmdir()
+
+        result = scanner.scan()
+        self.assertEqual(result["missing_dirs"], 1)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 2, "绝不能删行")
+        self.assertIsNotNone(db.scalar("SELECT missing_since FROM media_files WHERE id = ?",
+                                      (record["id"],)))
+        self.assertEqual(db.scalar("SELECT position_ms FROM watch_progress"), 600_000,
+                         "播放进度必须原样保留")
+        self.assertIsNone(db.scalar("SELECT deleted_at FROM media_files WHERE id = ?",
+                                    (record["id"],)), "标记缺失不等于软删")
+
+    def test_directory_coming_back_clears_missing_flag(self):
+        folder = self._media_folder(self.tmp / "back")
+        for item in folder.iterdir():
+            item.unlink()
+        folder.rmdir()
+        scanner.scan()
+        self.assertIsNotNone(db.scalar("SELECT missing_since FROM media_files LIMIT 1"))
+
+        # 硬盘插回来：同样的文件重新出现
+        folder.mkdir()
+        (folder / "Show - 01.mkv").write_bytes(b"x" * 64)
+        (folder / "Show - 02.mkv").write_bytes(b"x" * 64)
+        scanner.scan()
+        self.assertIsNone(db.scalar("SELECT missing_since FROM media_files LIMIT 1"))
+
+    def test_diagnose_reports_reachability_and_missing_counts(self):
+        folder = self._media_folder(self.tmp / "diag")
+        for item in folder.iterdir():
+            item.unlink()
+        folder.rmdir()
+        scanner.scan()
+
+        data = scanner.diagnose_library()
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["total_missing"], 2)
+        self.assertEqual(len(data["missing_ids"]), 2)
+        entry = data["directories"][0]
+        self.assertFalse(entry["reachable"])
+        self.assertEqual(entry["files"], 2)
+        self.assertEqual(entry["missing"], 2)
+
+    def test_relocate_preview_then_apply_keeps_progress(self):
+        old_root = self._media_folder(self.tmp / "old")
+        record = db.row("SELECT * FROM media_files ORDER BY id LIMIT 1")
+        db.execute("INSERT INTO watch_progress(file_id, position_ms, percent) VALUES (?, ?, ?)",
+                   (record["id"], 600_000, 50))
+
+        # 整盘换符：文件挪到新根目录
+        new_root = self.tmp / "new"
+        new_root.mkdir()
+        for item in sorted(old_root.iterdir()):
+            item.rename(new_root / item.name)
+        old_root.rmdir()
+
+        preview = scanner.preview_relocate(str(old_root), str(new_root))
+        self.assertTrue(preview["ok"])
+        self.assertEqual(preview["affected"], 2)
+        self.assertEqual(preview["restorable"], 2)
+        self.assertEqual(preview["conflicts"], 0)
+        self.assertTrue(preview["new_prefix_exists"])
+
+        result = scanner.apply_relocate(str(old_root), str(new_root))
+        self.assertEqual(result["moved"], 2)
+        self.assertEqual(result["conflicts"], 0)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 2, "只改路径不删行")
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files WHERE missing_since IS NOT NULL"), 0)
+        self.assertEqual(db.scalar("SELECT position_ms FROM watch_progress"), 600_000)
+        for row in db.rows("SELECT path FROM media_files"):
+            self.assertIn(str(new_root), row["path"])
+
+    def test_relocate_skips_conflicting_targets(self):
+        old_root = self._media_folder(self.tmp / "src", names=("Same.mkv",))
+        new_root = self.tmp / "dst"
+        new_root.mkdir()
+        # 目标路径已经挂在另一条记录上：不能覆盖，只能跳过
+        db.execute(
+            "INSERT INTO media_files(path, filename, title_raw, title_guess, size, mtime) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (str(new_root / "Same.mkv"), "Same.mkv", "Same", "Same", 1, 1.0),
+        )
+
+        preview = scanner.preview_relocate(str(old_root), str(new_root))
+        self.assertEqual(preview["conflicts"], 1)
+        result = scanner.apply_relocate(str(old_root), str(new_root))
+        self.assertEqual(result["moved"], 0)
+        self.assertEqual(result["conflicts"], 1)
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 2, "冲突时谁都不能被删")
+
+    def test_relocate_rejects_empty_or_identical_prefixes(self):
+        self.assertFalse(scanner.preview_relocate("", "D:/x")["ok"])
+        self.assertFalse(scanner.preview_relocate("D:/x", "D:/x/")["ok"])
+
+    def test_dismiss_missing_only_soft_deletes_missing_rows(self):
+        kept_folder = self._media_folder(self.tmp / "keep", names=("Keep.mkv",))
+        gone_folder = self.tmp / "gone"
+        gone_folder.mkdir()
+        (gone_folder / "Gone.mkv").write_bytes(b"x" * 64)
+        scanner.add_directory(str(gone_folder))
+        scanner.scan()
+        for item in gone_folder.iterdir():
+            item.unlink()
+        gone_folder.rmdir()
+        scanner.scan()
+
+        missing = db.row("SELECT * FROM media_files WHERE filename = 'Gone.mkv'")
+        alive = db.row("SELECT * FROM media_files WHERE filename = 'Keep.mkv'")
+        db.execute("INSERT INTO watch_progress(file_id, position_ms) VALUES (?, 120000)", (missing["id"],))
+
+        out = scanner.dismiss_missing([missing["id"], alive["id"]])
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["dismissed"], 1, "只处理标记为缺失的行")
+        self.assertIsNotNone(db.scalar("SELECT deleted_at FROM media_files WHERE id = ?",
+                                      (missing["id"],)))
+        self.assertIsNone(db.scalar("SELECT deleted_at FROM media_files WHERE id = ?",
+                                    (alive["id"],)))
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 2, "软删不是真删")
+        self.assertEqual(db.scalar("SELECT position_ms FROM watch_progress"), 120000)
+
+
 class IgnoreRuleTests(IsolatedDbTestCase):
     def test_subtitles_and_unknown_extensions_are_ignored(self):
         self.assertTrue(scanner.should_ignore(Path("D:/Anime/show.srt")))

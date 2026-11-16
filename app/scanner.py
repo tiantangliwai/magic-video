@@ -219,6 +219,167 @@ def parse_filename(filename: str) -> dict:
     }
 
 
+def _under_prefix(path: str, prefix: str) -> bool:
+    """``path`` 是否位于 ``prefix`` 目录之下（Windows 路径，大小写不敏感）。"""
+    p = str(path).replace("/", "\\").lower()
+    pre = str(prefix).replace("/", "\\").rstrip("\\").lower()
+    if not pre:
+        return False
+    return p == pre or p.startswith(pre + "\\")
+
+
+def _mark_missing(dir_id: int) -> int:
+    """把某个不可达目录下的文件标为「缺失」。
+
+    只写 ``missing_since``：不删行、不动 ``deleted_at``、不碰播放进度与历史。
+    移动硬盘没插、网络盘掉线是高频场景，误删历史比暂时看不到严重得多。
+    """
+    return db.execute(
+        "UPDATE media_files SET missing_since = ? WHERE dir_id = ? AND missing_since IS NULL",
+        (db.now(), dir_id),
+    )
+
+
+def diagnose_library() -> dict:
+    """体检：目录是否可达、有多少文件找不到了。**只读**，不改库。"""
+    dirs = []
+    total_missing = 0
+    for d in db.rows("SELECT * FROM directories ORDER BY id"):
+        root = Path(d["path"])
+        reachable = root.exists() and root.is_dir()
+        stats = db.row(
+            "SELECT COUNT(*) AS total, "
+            "SUM(CASE WHEN missing_since IS NOT NULL THEN 1 ELSE 0 END) AS missing "
+            "FROM media_files WHERE dir_id = ?",
+            (d["id"],),
+        ) or {}
+        total = int(stats.get("total") or 0)
+        missing = int(stats.get("missing") or 0)
+        dirs.append({
+            "id": d["id"], "path": d["path"], "enabled": bool(d["enabled"]),
+            "reachable": reachable, "files": total, "missing": missing,
+            "last_scan_at": d["last_scan_at"],
+            # 目录不可达但还没扫过一轮：提示用户「跑一次扫描以标记缺失」
+            "needs_scan": (not reachable) and total > 0 and missing < total,
+        })
+        total_missing += missing
+    missing_ids = [
+        r["id"] for r in db.rows(
+            "SELECT id FROM media_files WHERE missing_since IS NOT NULL ORDER BY id LIMIT 500")
+    ]
+    return {"ok": True, "directories": dirs, "total_missing": total_missing,
+            "missing_ids": missing_ids}
+
+
+def preview_relocate(old_prefix: str, new_prefix: str) -> dict:
+    """重定位预览：算出会改哪些行、有多少冲突。**只计算不写库**。
+
+    整盘换符（D:\\ 变 E:\\）或目录改名后，逐文件依赖指纹重关联会因「候选不唯一」
+    失效；这里按路径前缀整体替换，再用指纹校验兜底。
+    """
+    old = (old_prefix or "").strip().strip('"')
+    new = (new_prefix or "").strip().strip('"')
+    if not old or not new:
+        return {"ok": False, "error": "新旧路径前缀都不能为空"}
+    if old.replace("/", "\\").rstrip("\\").lower() == new.replace("/", "\\").rstrip("\\").lower():
+        return {"ok": False, "error": "新旧路径前缀相同，无需重定位"}
+
+    existing_paths = {r["path"] for r in db.rows("SELECT path FROM media_files")}
+    items = []
+    for r in db.rows("SELECT id, path, filename, missing_since FROM media_files"):
+        if not _under_prefix(r["path"], old):
+            continue
+        rel = str(r["path"])[len(old.rstrip("\\/")):].lstrip("\\/")
+        target = str(Path(new.rstrip("\\/")) / rel)
+        items.append({
+            "id": r["id"],
+            "old_path": r["path"],
+            "new_path": target,
+            "filename": r["filename"],
+            "was_missing": bool(r["missing_since"]),
+            # 目标路径已被别的行占用（重名/重复扫描）时不能直接改，交给指纹匹配
+            "conflict": target in existing_paths and target != r["path"],
+            "target_exists": Path(target).exists(),
+        })
+    conflicts = sum(1 for i in items if i["conflict"])
+    return {
+        "ok": True,
+        "old_prefix": old,
+        "new_prefix": new,
+        "new_prefix_exists": Path(new).is_dir(),
+        "affected": len(items),
+        "conflicts": conflicts,
+        "restorable": sum(1 for i in items if i["target_exists"] and not i["conflict"]),
+        "samples": items[:10],
+        "items": items,
+    }
+
+
+def apply_relocate(old_prefix: str, new_prefix: str) -> dict:
+    """执行前缀替换 + 指纹兜底。**只 UPDATE，不 DELETE**。
+
+    - 目标路径存在且无冲突：直接改路径、清缺失标记、重挂到新目录；
+    - 冲突：跳过并报告，交给下一次扫描的指纹重关联（P0-4）处理；
+    - 目标文件不存在：仍改写路径（用户可能只是还没插盘），但保留缺失标记。
+    """
+    preview = preview_relocate(old_prefix, new_prefix)
+    if not preview.get("ok"):
+        return preview
+    items = preview["items"]
+    if not items:
+        return {"ok": True, "moved": 0, "conflicts": 0, "kept_missing": 0,
+                "new_prefix": preview["new_prefix"]}
+
+    new_root = preview["new_prefix"]
+    dir_id = None
+    if Path(new_root).is_dir():
+        for d in db.rows("SELECT id, path FROM directories"):
+            if _under_prefix(new_root, d["path"]):
+                dir_id = d["id"]
+                break
+        if dir_id is None:
+            added = add_directory(new_root)
+            dir_id = added.get("id")
+
+    moved = conflicts = kept_missing = 0
+    stamp = db.now()
+    with db.session(immediate=True) as conn:
+        for item in items:
+            if item["conflict"]:
+                conflicts += 1
+                continue
+            clear_missing = "missing_since = NULL" if item["target_exists"] else "missing_since = missing_since"
+            if not item["target_exists"]:
+                kept_missing += 1
+            conn.execute(
+                f"UPDATE media_files SET path = ?, filename = ?, "
+                f"dir_id = COALESCE(?, dir_id), {clear_missing}, updated_at = ? WHERE id = ?",
+                (item["new_path"], Path(item["new_path"]).name, dir_id, stamp, item["id"]),
+            )
+            moved += 1
+    return {"ok": True, "moved": moved, "conflicts": conflicts,
+            "kept_missing": kept_missing, "dir_id": dir_id,
+            "new_prefix": new_root}
+
+
+def dismiss_missing(file_ids: list[int] | None = None) -> dict:
+    """用户确认后隐藏「缺失」文件：软删（``deleted_at``），不真删行。
+
+    只处理 ``missing_since`` 非空的行，绝不碰播放进度与观看历史：
+    硬盘重新插上后扫描到文件会自动清掉这两个标记，记录照旧可用。
+    """
+    ids = [int(i) for i in (file_ids or []) if str(i).strip().isdigit()]
+    if not ids:
+        return {"ok": False, "error": "没有选中任何文件"}
+    marks = ",".join("?" for _ in ids)
+    affected = db.execute(
+        f"UPDATE media_files SET deleted_at = COALESCE(deleted_at, ?) "
+        f"WHERE missing_since IS NOT NULL AND id IN ({marks})",
+        tuple([db.now()] + ids),
+    )
+    return {"ok": True, "dismissed": int(affected or 0)}
+
+
 def scan(directory_id: int | None = None, progress_cb=None) -> dict:
     """增量扫描：已存在的文件只更新 size/mtime，不重复插入；结束即刻匹配中文名。"""
     db.init_db()
@@ -227,11 +388,14 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
     params = (directory_id,) if directory_id else ()
     directories = db.rows(target, params)
 
-    added = updated = skipped = 0
+    added = updated = skipped = missing_dirs = 0
     for directory in directories:
         root = Path(directory["path"])
         if not root.exists():
-            # 目录暂时不可达（移动硬盘未插、网络盘掉线）时保留历史，不删记录
+            # 目录暂时不可达（移动硬盘未插、网络盘掉线）：只标「缺失」保留历史，
+            # 不删记录、不动播放进度；下次能读到文件时自动清除标记。
+            _mark_missing(directory["id"])
+            missing_dirs += 1
             continue
         count = 0
         for path in root.rglob("*"):
@@ -245,7 +409,8 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 continue
             info = parse_filename(path.name)
             existing = db.row(
-                "SELECT id, size, mtime, deleted_at, tmdb_id, tvdb_id FROM media_files WHERE path = ?",
+                "SELECT id, size, mtime, deleted_at, tmdb_id, tvdb_id, missing_since "
+                "FROM media_files WHERE path = ?",
                 (str(path),)
             )
             if existing:
@@ -255,6 +420,10 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 # 观看进度、历史与看过的列表始终不动。
                 if existing["deleted_at"]:
                     db.execute("UPDATE media_files SET deleted_at = NULL WHERE id = ?",
+                               (existing["id"],))
+                # 文件重新可见（硬盘插回来了 / 路径重定位成功）→ 清掉「缺失」标记
+                if existing["missing_since"]:
+                    db.execute("UPDATE media_files SET missing_since = NULL WHERE id = ?",
                                (existing["id"],))
                 # 老库升级后首次扫描：把文件名里的作品 ID 补上（只在原来为空时补，不改已有值）
                 if info["tmdb_id"] and not existing["tmdb_id"]:
@@ -293,7 +462,7 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
     # 扫描结束即完成中文名匹配，结果当场写入媒体库，不依赖任何定时任务
     match_result = metadata.auto_match_media()
     return {"ok": True, "added": added, "updated": updated, "skipped": skipped,
-            "directories": len(directories),
+            "directories": len(directories), "missing_dirs": missing_dirs,
             "matched_cn": match_result.get("matched", 0),
             "match_total": match_result.get("total", 0),
             "match_online": match_result.get("online_available", False)}
