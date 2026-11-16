@@ -97,6 +97,14 @@ EPISODE_PATTERNS = [
     re.compile(r"[-_\s]\s*(\d{2,3})\s*(?:v\d)?\s*[-_\s\[]"),
 ]
 YEAR_RE = re.compile(r"\b(19\d{2}|20\d{2})\b")
+# 文件名里的作品 ID 标签：{tmdb-123}、[tvdbid-456]、{tvdb=789}。
+# 数字允许为空，是为了把 `{tmdb-}` 这类残缺标签也一并剥掉，免得污染标题；
+# 但没有数字时不产出 ID（不能凭一个空标签认作品）。
+# 必须放在 BRACKET_RE/PAREN_RE 之前处理：`{}` 不在那两个正则的覆盖范围内。
+ID_TAG_RE = re.compile(
+    r"[\[{(]\s*(tmdb|tvdb)(?:id)?\s*[-_:= ]?\s*(\d{0,9})\s*[\]})]",
+    re.IGNORECASE,
+)
 # 「SP」这类短标记必须独立成词，Spy / Special 不能被误判为特典
 SPECIAL_RE = re.compile(r"(?<![A-Za-z])sp(?=\d|[^A-Za-z]|$)", re.IGNORECASE)
 
@@ -161,25 +169,37 @@ def parse_filename(filename: str) -> dict:
     stem = Path(filename).stem
     season, episode = None, None
 
-    s_ep = SXXEYY_RE.search(stem)
+    # 作品 ID 先提取出来：它比标题写法可靠（重名翻拍 / 多罗马字都绕过去了），
+    # 而且必须在季集解析与清洗之前剥离，否则 `{tmdb-123}` 会污染 title_guess。
+    tmdb_id = tvdb_id = None
+    for kind, number in ID_TAG_RE.findall(stem):
+        if not number:
+            continue
+        if kind.lower() == "tmdb":
+            tmdb_id = tmdb_id or int(number)
+        else:
+            tvdb_id = tvdb_id or int(number)
+    id_clean = ID_TAG_RE.sub(" ", stem)
+
+    s_ep = SXXEYY_RE.search(id_clean)
     if s_ep:
         season, episode = int(s_ep.group(1)), int(s_ep.group(2))
     else:
-        s = SEASON_RE.search(stem)
+        s = SEASON_RE.search(id_clean)
         if s:
             season = int(s.group(1))
         for pattern in EPISODE_PATTERNS:
-            m = pattern.search(stem)
+            m = pattern.search(id_clean)
             if m:
                 episode = int(m.group(1))
                 break
         if episode is None:
-            m = TRAILING_EP_RE.search(stem)
+            m = TRAILING_EP_RE.search(id_clean)
             if m:
                 episode = int(m.group(1))
 
-    year_match = YEAR_RE.search(stem)
-    cleaned = BRACKET_RE.sub(" ", stem)
+    year_match = YEAR_RE.search(id_clean)
+    cleaned = BRACKET_RE.sub(" ", id_clean)
     cleaned = PAREN_RE.sub(" ", cleaned)
     cleaned = TAG_RE.sub(" ", cleaned)
     cleaned = SXXEYY_RE.sub(" ", cleaned)
@@ -194,6 +214,8 @@ def parse_filename(filename: str) -> dict:
         "season_no": season,
         "episode_no": episode,
         "year": int(year_match.group(1)) if year_match else None,
+        "tmdb_id": tmdb_id,
+        "tvdb_id": tvdb_id,
     }
 
 
@@ -223,7 +245,8 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 continue
             info = parse_filename(path.name)
             existing = db.row(
-                "SELECT id, size, mtime, deleted_at FROM media_files WHERE path = ?", (str(path),)
+                "SELECT id, size, mtime, deleted_at, tmdb_id, tvdb_id FROM media_files WHERE path = ?",
+                (str(path),)
             )
             if existing:
                 changed = (existing["size"] != stat.st_size
@@ -233,6 +256,11 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 if existing["deleted_at"]:
                     db.execute("UPDATE media_files SET deleted_at = NULL WHERE id = ?",
                                (existing["id"],))
+                # 老库升级后首次扫描：把文件名里的作品 ID 补上（只在原来为空时补，不改已有值）
+                if info["tmdb_id"] and not existing["tmdb_id"]:
+                    db.execute("UPDATE media_files SET tmdb_id = ?, tvdb_id = COALESCE(tvdb_id, ?) "
+                               "WHERE id = ?",
+                               (info["tmdb_id"], info["tvdb_id"], existing["id"]))
                 if changed:
                     db.execute(
                         "UPDATE media_files SET size = ?, mtime = ?, updated_at = ? WHERE id = ?",
@@ -246,10 +274,12 @@ def scan(directory_id: int | None = None, progress_cb=None) -> dict:
                 else:
                     db.execute(
                         "INSERT INTO media_files(dir_id, path, filename, size, mtime, title_raw, "
-                        "title_guess, season_no, episode_no, year) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        "title_guess, season_no, episode_no, year, tmdb_id, tvdb_id) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                         (
                             directory["id"], str(path), path.name, stat.st_size, stat.st_mtime,
-                            path.stem, info["title_guess"], info["season_no"], info["episode_no"], info["year"],
+                            path.stem, info["title_guess"], info["season_no"], info["episode_no"],
+                            info["year"], info["tmdb_id"], info["tvdb_id"],
                         ),
                     )
                     added += 1

@@ -114,6 +114,9 @@ DEFAULTS = {
     "bangumi_backoff_sec": 120,
     "online_negative_ttl_sec": 21600,
     "online_cache_ttl_days": 0,
+    # 列表展示标题偏好（v0.1.6）：cn = 中文名优先（默认），orig = 原名（日文/英文）优先。
+    # 纯展示层偏好，不改数据库里的匹配结果。
+    "title_lang_pref": "cn",
     "window_width": 1180,
     "window_height": 780,
     "minimize_to_tray": 1,

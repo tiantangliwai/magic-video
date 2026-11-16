@@ -46,6 +46,7 @@ CREATE TABLE IF NOT EXISTS subjects (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     bgm_id       INTEGER,
     tmdb_id      INTEGER,
+    tvdb_id      INTEGER,
     title_cn     TEXT,
     title_orig   TEXT,
     aliases      TEXT,
@@ -77,6 +78,11 @@ CREATE TABLE IF NOT EXISTS media_files (
     title_guess   TEXT,
     title_cn      TEXT,
     match_by      TEXT,
+    -- 文件名里的作品 ID（{tmdb-123} / [tvdbid-456]）：稳定的作品键。
+    -- 同一部番不同季、不同压制组的标题写法差异很大，按 ID 归组后
+    -- 只要组内有一条匹配成功，其余同组文件直接共享，不再逐个猜。
+    tmdb_id       INTEGER,
+    tvdb_id       INTEGER,
     season_no     INTEGER,
     episode_no    INTEGER,
     year          INTEGER,
@@ -284,7 +290,15 @@ def session(immediate: bool = False):
 def _migrate(conn: sqlite3.Connection) -> None:
     """为已存在的旧库补列：只 ALTER ADD COLUMN，不重建表、不丢已有播放记录。"""
     additions = {
-        "media_files": (("title_cn", "TEXT"), ("match_by", "TEXT"), ("deleted_at", "TEXT")),
+        "media_files": (
+            ("title_cn", "TEXT"), ("match_by", "TEXT"), ("deleted_at", "TEXT"),
+            ("partial_hash", "TEXT"),
+            # 作品 ID（v0.1.6 P1-4）：老库靠这条 ALTER 补列，首次扫描惰性填充
+            ("tmdb_id", "INTEGER"), ("tvdb_id", "INTEGER"),
+            # 目录不可达时标「缺失」，只隐藏不删行、不动播放进度（P1-1）
+            ("missing_since", "TEXT"),
+        ),
+        "subjects": (("tvdb_id", "INTEGER"),),
         "watched_list": (("match_by", "TEXT"),),
         "watch_progress": (
             ("dismissed_at", "TEXT"),

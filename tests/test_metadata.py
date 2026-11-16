@@ -271,5 +271,57 @@ class OnlineScrapeTests(IsolatedDbTestCase):
         self.assertIn("total", stats["scrape_cache"])
 
 
+class IdGroupTests(IsolatedDbTestCase):
+    """P1-4：作品 ID 作为稳定键，同组共享匹配结果。"""
+
+    def test_same_tmdb_id_shares_title_within_group(self):
+        source = self.media("Ep01.mkv", title_guess="Write-Up A", tmdb_id=555)
+        db.execute("UPDATE media_files SET title_cn = '共享中文名', match_by = 'local' WHERE id = ?",
+                   (source["id"],))
+        target = self.media("Ep02.mkv", title_guess="Totally Different B", tmdb_id=555)
+        other = self.media("Other.mkv", title_guess="Other Show", tmdb_id=999)
+
+        changed = metadata.apply_id_groups()
+        self.assertEqual(changed, 1, "只有同组里缺中文名的那一条该被填充")
+        self.assertEqual(
+            db.scalar("SELECT title_cn FROM media_files WHERE id = ?", (target["id"],)),
+            "共享中文名")
+        self.assertEqual(
+            db.scalar("SELECT match_by FROM media_files WHERE id = ?", (target["id"],)), "id")
+        self.assertIsNone(
+            db.scalar("SELECT title_cn FROM media_files WHERE id = ?", (other["id"],)),
+            "别的作品 ID 不能被牵连")
+
+    def test_existing_title_is_never_overwritten(self):
+        source = self.media("A.mkv", title_guess="A", tmdb_id=777)
+        db.execute("UPDATE media_files SET title_cn = '源名字' WHERE id = ?", (source["id"],))
+        target = self.media("B.mkv", title_guess="B", tmdb_id=777)
+        db.execute("UPDATE media_files SET title_cn = '自己的名字', match_by = 'user' WHERE id = ?",
+                   (target["id"],))
+
+        metadata.apply_id_groups()
+        self.assertEqual(
+            db.scalar("SELECT title_cn FROM media_files WHERE id = ?", (target["id"],)),
+            "自己的名字",
+            "按 ID 扩散只能填空，不能覆盖已有值（更不能覆盖手改）")
+
+    def test_lookup_by_ids_reads_subjects_first(self):
+        db.execute(
+            "INSERT INTO subjects(tmdb_id, title_cn, title_orig, verified) VALUES (?, ?, ?, 1)",
+            (888, "ID 直查中文名", "ID Original"))
+        hit = metadata.lookup_by_ids({"tmdb_id": 888})
+        self.assertEqual(hit["title_cn"], "ID 直查中文名")
+
+        r = metadata.match_one("Totally Unknown Show XYZ", allow_online=False,
+                               ids={"tmdb_id": 888})
+        self.assertTrue(r["matched"])
+        self.assertEqual(r["by"], "id")
+        self.assertEqual(r["title_cn"], "ID 直查中文名")
+
+    def test_match_one_without_ids_keeps_old_behaviour(self):
+        r = metadata.match_one("Totally Unknown Show XYZ", allow_online=False)
+        self.assertFalse(r["matched"])
+
+
 if __name__ == "__main__":
     unittest.main()

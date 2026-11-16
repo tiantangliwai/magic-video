@@ -120,6 +120,21 @@ class ApiTests(IsolatedDbTestCase):
         self.assertFalse(self.api.mark_watched(999999)["ok"])
         self.assertFalse(self.api.reset_progress(999999)["ok"])
 
+    def test_display_title_follows_language_preference(self):
+        """P1-4：展示标题按偏好切换，只改显示不改库里的匹配结果。"""
+        self.media("Orig.Name.01.mkv", title_guess="Orig Name", title_cn="中文名字",
+                   match_by="builtin")
+        default_rows = self.api.get_media_files_page({"limit": 10})["rows"]
+        self.assertEqual(default_rows[0]["display_title"], "中文名字")
+
+        self.api.save_settings({"title_lang_pref": "orig"})
+        orig_rows = self.api.get_media_files_page({"limit": 10})["rows"]
+        self.assertEqual(orig_rows[0]["display_title"], "Orig Name")
+
+        # 库里的中文名不受展示偏好影响
+        self.assertEqual(db.scalar("SELECT title_cn FROM media_files"), "中文名字")
+        self.api.save_settings({"title_lang_pref": "cn"})
+
     def test_batch_mark_watched_and_reset(self):
         """批量标记复用单条语义：只改进度表，不删会话。"""
         records = [self.media(f"Show - 0{i}.mkv") for i in (1, 2, 3)]

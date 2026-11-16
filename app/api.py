@@ -49,6 +49,18 @@ _COVER_URI_CACHE: dict[str, tuple[int, int, str]] = {}
 _MEDIA_CACHE_TTL = 20.0
 _MEDIA_CACHE: dict[tuple, tuple[float, dict]] = {}
 
+
+def _display_title_expr() -> str:
+    """列表展示用标题表达式，按 ``title_lang_pref`` 决定中文名与原名谁优先。
+
+    ``cn``（默认）：优先中文名，没有则用原名；``orig``：优先原名（日文/英文），
+    没有则回退中文名。两种都不会改变数据库里存的值，纯展示偏好。
+    """
+    pref = str(db.get_setting("title_lang_pref", "cn") or "cn").lower()
+    if pref in ("orig", "original", "en", "jp", "ja"):
+        return "COALESCE(f.title_guess, f.title_cn)"
+    return "COALESCE(f.title_cn, f.title_guess)"
+
 # 文件浏览的排序白名单：用户输入只能选键，绝不直接拼进 SQL
 _MEDIA_SORTS = {
     "newest": "f.id DESC",
@@ -302,7 +314,7 @@ class Api:
     def get_continue_watching(self, limit: int = 50) -> list[dict]:
         rows = db.rows(
             "SELECT p.*, f.filename, f.path, f.title_guess, f.deleted_at, "
-            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"{_display_title_expr()} AS display_title, "
             "f.season_no, f.episode_no "
             "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
             "WHERE p.completed = 0 AND p.position_ms > 0 AND p.dismissed_at IS NULL "
@@ -315,7 +327,7 @@ class Api:
         """已看完的条目，供「继续观看」页做纠错（标记未看 / 重看）。"""
         rows = db.rows(
             "SELECT p.*, f.filename, f.path, f.title_guess, f.deleted_at, "
-            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"{_display_title_expr()} AS display_title, "
             "f.season_no, f.episode_no "
             "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
             "WHERE p.completed = 1 ORDER BY p.last_played_at DESC LIMIT ?",
@@ -435,7 +447,7 @@ class Api:
         return blacklist.filter_rows(
             db.rows(
                 "SELECT s.*, f.filename, "
-                "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+                f"{_display_title_expr()} AS display_title, "
                 "f.season_no, f.episode_no, f.path "
                 "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
                 "WHERE s.id IN ("
@@ -698,7 +710,7 @@ class Api:
         like = f"%{keyword.strip()}%"
         ban_sql, ban_params = blacklist.sql_clause("f")
         sql = (
-            "SELECT f.*, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"SELECT f.*, {_display_title_expr()} AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "WHERE (f.filename LIKE ? OR COALESCE(f.title_guess,'') LIKE ? "
@@ -795,7 +807,7 @@ class Api:
             str(opt.get("sort") or "newest").strip().lower(), _MEDIA_SORTS["newest"]
         )
         sql = (
-            "SELECT f.*, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"SELECT f.*, {_display_title_expr()} AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "WHERE " + where + " ORDER BY " + order
@@ -842,7 +854,7 @@ class Api:
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.size, f.title_raw, "
             "f.title_guess, f.title_cn, f.match_by, f.season_no, f.episode_no, f.year, "
-            "f.status, f.deleted_at, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"f.status, f.deleted_at, {_display_title_expr()} AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
@@ -947,7 +959,7 @@ class Api:
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.size, f.title_raw, "
             "f.title_guess, f.title_cn, f.match_by, f.season_no, f.episode_no, f.year, "
-            "f.status, f.deleted_at, COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"f.status, f.deleted_at, {_display_title_expr()} AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC"
@@ -967,7 +979,7 @@ class Api:
         """列出一个待删文件并给出能否删除的理由；只读，不改任何东西。"""
         row = db.row(
             "SELECT f.id, f.filename, f.path, f.size, f.status, f.deleted_at, "
-            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"{_display_title_expr()} AS display_title, "
             "COALESCE(p.completed, 0) AS completed "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "WHERE f.id = ?",
@@ -1200,7 +1212,7 @@ class Api:
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.title_raw, f.title_guess, "
             "f.title_cn, f.match_by, f.season_no, f.episode_no, f.deleted_at, "
-            "COALESCE(f.title_cn, f.title_guess) AS display_title, "
+            f"{_display_title_expr()} AS display_title, "
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "WHERE " + where + " ORDER BY f.filename COLLATE NOCASE ASC, f.id ASC",
@@ -1293,6 +1305,8 @@ class Api:
             # 刮削限速与缓存（v0.1.6）：请求间隔 / 429 退避秒数 / 负缓存 TTL / 成功缓存天数
             "bangumi_rate_ms", "bangumi_backoff_sec", "online_negative_ttl_sec",
             "online_cache_ttl_days",
+            # 列表展示标题偏好（P1-4）：cn 中文名优先 / orig 原名优先
+            "title_lang_pref",
             "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
             "everything_es_path", "everything_http_url", "everything_app_path",
             "everything_http_user", "everything_http_pass",

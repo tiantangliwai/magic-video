@@ -237,6 +237,46 @@ def lookup_season(base_title: str, season: int) -> str | None:
     return None
 
 
+def lookup_by_ids(ids: dict | None) -> dict | None:
+    """按文件名里的作品 ID（tmdb / tvdb）直查中文名，优先于任何标题猜测。
+
+    先查 ``subjects``（正式作品表），再查媒体库里同 ID 且已匹配成功的行——
+    同一部番的其它集/其它季往往标题写法完全不同，靠 ID 归组才不会逐个猜错。
+    ID 是稳定的：重名翻拍、不同罗马字拼写都不会混淆。
+    """
+    if not ids:
+        return None
+    tmdb, tvdb = ids.get("tmdb_id"), ids.get("tvdb_id")
+    if not tmdb and not tvdb:
+        return None
+    clauses, params = [], []
+    if tmdb:
+        clauses.append("tmdb_id = ?")
+        params.append(tmdb)
+    if tvdb:
+        clauses.append("tvdb_id = ?")
+        params.append(tvdb)
+    where = " OR ".join(clauses)
+    r = db.row(
+        f"SELECT title_cn, title_orig, bgm_id, season_no FROM subjects "
+        f"WHERE ({where}) AND title_cn IS NOT NULL AND title_cn <> '' "
+        f"ORDER BY verified DESC, id LIMIT 1",
+        tuple(params),
+    )
+    if r:
+        return _entry(r["title_cn"], r["title_orig"] or "", (), r["bgm_id"],
+                      r["season_no"], "id")
+    r = db.row(
+        f"SELECT title_cn, title_guess FROM media_files "
+        f"WHERE ({where}) AND title_cn IS NOT NULL AND title_cn <> '' "
+        f"ORDER BY COALESCE(updated_at, '') DESC, id DESC LIMIT 1",
+        tuple(params),
+    )
+    if r:
+        return _entry(r["title_cn"], r["title_guess"] or "", (), None, None, "id")
+    return None
+
+
 def _online_config() -> dict:
     """设置短缓存，避免批量匹配时每条标题都开一次数据库连接。"""
     global _CFG_CACHE, _CFG_AT
@@ -487,10 +527,20 @@ def remember(raw_title: str, title_cn: str, *, title_orig: str = "", bgm_id=None
         _INDEX_DIRTY = True
 
 
-def match_one(title: str, *, allow_online: bool = True) -> dict:
+def match_one(title: str, *, allow_online: bool = True, ids: dict | None = None) -> dict:
     title = (title or "").strip()
     if not title:
         return {"matched": False, "title_cn": "", "by": "none"}
+    # 文件名带作品 ID（{tmdb-123} / [tvdbid-456]）时先按 ID 直查，
+    # 这一步优先于内置词典与在线搜索：ID 不会重名，也不受拼写风格影响。
+    if ids:
+        by_id = lookup_by_ids(ids)
+        if by_id:
+            return {
+                "matched": True, "title_cn": by_id["title_cn"],
+                "title_orig": by_id["title_orig"], "bgm_id": by_id["bgm_id"],
+                "by": "id", "season_no": by_id["season_no"],
+            }
     mode = _online_config()["mode"]
     is_foreign = not CJK_RE.search(title)
 
@@ -626,16 +676,52 @@ def apply_to_watched(results: dict, *, force: bool = False) -> int:
     return changed
 
 
+def apply_id_groups() -> int:
+    """把同一作品 ID（tmdb / tvdb）下已匹配的中文名共享给同组其它文件。
+
+    ID 稳定的价值就在这里：同一部番不同季、不同压制组的文件名差异极大，
+    逐个按标题猜容易猜错甚至互相覆盖；按 ID 归组后只要组内有一条成功，
+    其余同组文件直接采用（``match_by='id'``）。
+    只填充 **title_cn 为空** 的行，绝不覆盖已有值，也不动 ``match_by='user'``。
+    """
+    changed = 0
+    with db.session(immediate=True) as conn:
+        for column in ("tmdb_id", "tvdb_id"):
+            cur = conn.execute(
+                f"UPDATE media_files SET title_cn = ("
+                f"    SELECT src.title_cn FROM media_files src "
+                f"    WHERE src.{column} = media_files.{column}"
+                f"      AND src.{column} IS NOT NULL AND src.{column} > 0"
+                f"      AND src.title_cn IS NOT NULL AND src.title_cn <> ''"
+                f"    ORDER BY COALESCE(src.updated_at, '') DESC, src.id DESC LIMIT 1"
+                f"), match_by = 'id' "
+                f"WHERE title_cn IS NULL AND {column} IS NOT NULL AND {column} > 0 "
+                # 组内必须真的有一条已匹配结果：否则子查询返回 NULL，
+                # 会把「同 ID 但全组都没匹配」的行白写一遍（rowcount 虚高）。
+                f"  AND EXISTS (SELECT 1 FROM media_files src "
+                f"              WHERE src.{column} = media_files.{column}"
+                f"                AND src.{column} IS NOT NULL AND src.{column} > 0"
+                f"                AND src.title_cn IS NOT NULL AND src.title_cn <> '')"
+            )
+            changed += max(0, cur.rowcount)
+    return changed
+
+
 def auto_match_media() -> dict:
-    """扫描完成后调用：只处理还没匹配过的新标题。"""
+    """扫描完成后调用：只处理还没匹配过的新标题，再按作品 ID 扩散结果。"""
     rows = db.rows(
         "SELECT DISTINCT COALESCE(title_guess, title_raw) AS t FROM media_files "
         "WHERE title_cn IS NULL AND COALESCE(title_guess, title_raw) IS NOT NULL LIMIT 500"
     )
-    if not rows:
-        return {"ok": True, "total": 0, "matched": 0, "online_available": _online_usable()}
-    out = match_titles([r["t"] for r in rows])
-    out["applied"] = apply_to_media(out["results"])
+    if rows:
+        out = match_titles([r["t"] for r in rows])
+        out["applied"] = apply_to_media(out["results"])
+    else:
+        out = {"ok": True, "total": 0, "matched": 0,
+               "online_available": _online_usable(), "applied": 0}
+    # 即使本轮没有新标题也要跑：新扫描进来的文件可能带 ID 标签，
+    # 而同组已有一条历史匹配结果可以直接共享。
+    out["applied_by_id"] = apply_id_groups()
     return out
 
 

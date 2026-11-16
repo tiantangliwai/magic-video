@@ -46,6 +46,44 @@ class FilenameTests(IsolatedDbTestCase):
         self.assertEqual(info["year"], 2020)
 
 
+class IdTagTests(IsolatedDbTestCase):
+    """P1-4：文件名里的作品 ID 标签（{tmdb-123} / [tvdbid-456]）。"""
+
+    def test_tmdb_tag_is_extracted_and_removed_from_title(self):
+        info = scanner.parse_filename("[Group] Frieren S01E03 [1080p]{tmdb-209867}.mkv")
+        self.assertEqual(info["tmdb_id"], 209867)
+        self.assertIsNone(info["tvdb_id"])
+        self.assertEqual((info["season_no"], info["episode_no"]), (1, 3))
+        self.assertEqual(info["title_guess"], "Frieren", "ID 标签不能污染标题")
+        self.assertNotIn("tmdb", info["title_guess"].lower())
+
+    def test_tvdbid_tag_variant(self):
+        info = scanner.parse_filename("Some.Show.S02E05.[tvdbid-345678].mkv")
+        self.assertEqual(info["tvdb_id"], 345678)
+        self.assertNotIn("tvdbid", info["title_guess"].lower())
+
+    def test_tag_without_number_is_stripped_but_yields_no_id(self):
+        """`{tmdb-}` 这种残缺标签要剥掉，但不能凭它认作品。"""
+        info = scanner.parse_filename("Show.Name.{tmdb-}.S01E01.mkv")
+        self.assertIsNone(info["tmdb_id"])
+        self.assertNotIn("tmdb", info["title_guess"].lower())
+
+    def test_normal_names_carry_no_ids(self):
+        info = scanner.parse_filename("Frieren - 01.mkv")
+        self.assertIsNone(info["tmdb_id"])
+        self.assertIsNone(info["tvdb_id"])
+
+    def test_scan_persists_ids_on_media_rows(self):
+        folder = self.tmp / "idscan"
+        folder.mkdir()
+        (folder / "Frieren S01E01 {tmdb-209867}.mkv").write_bytes(b"x" * 64)
+        scanner.add_directory(str(folder))
+        scanner.scan()
+        row = db.row("SELECT tmdb_id, title_guess FROM media_files WHERE filename LIKE '%tmdb%'")
+        self.assertEqual(row["tmdb_id"], 209867)
+        self.assertEqual(row["title_guess"], "Frieren")
+
+
 class IgnoreRuleTests(IsolatedDbTestCase):
     def test_subtitles_and_unknown_extensions_are_ignored(self):
         self.assertTrue(scanner.should_ignore(Path("D:/Anime/show.srt")))

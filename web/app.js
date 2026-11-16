@@ -1218,6 +1218,12 @@ async function renderSettings() {
       导入预览里改过的中文名会被永久记住，下次自动命中。</div>
       <p class="hint" style="margin:0 0 12px">当前词典 ${num(d.alias_total)} 条 · 未匹配 ${num(d.unmatched)} 条 ·
         在线检索${d.online_available ? '已启用' : '已禁用或已降级（可在下方配置代理）'}</p>
+      <div class="field"><label>列表展示标题</label>
+        <select class="input" id="set-title_lang_pref">
+          <option value="cn" ${s.title_lang_pref === 'cn' ? 'selected' : ''}>中文名优先（推荐）</option>
+          <option value="orig" ${s.title_lang_pref === 'orig' ? 'selected' : ''}>原文名优先（日文 / 英文）</option>
+        </select>
+        <div class="tip">只影响列表和图卡的显示文字，不改已匹配的中文名，也不影响播放记录与历史。</div></div>
       <div class="field"><label>元数据来源策略</label>
         <select class="input" id="set-metadata_source">
           <option value="cache_first" ${s.metadata_source === 'cache_first' ? 'selected' : ''}>离线词典优先，未命中再联网（推荐）</option>
@@ -2197,6 +2203,7 @@ async function handleAction(action, btn) {
       const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent',
         'min_resume_percent', 'ignore_seconds_at_start', 'ignore_percent_at_end', 'http_proxy',
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
+        'title_lang_pref',
         // 刮削限速与缓存（v0.1.6）：负缓存按小时输入，保存时换算成秒
         'bangumi_rate_ms', 'bangumi_backoff_sec', 'online_cache_ttl_days',
         'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url',
