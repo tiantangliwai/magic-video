@@ -88,7 +88,15 @@ IGNORE_NAME_PATTERNS = ("sample", "trailer", "特典", "SP", "NCOP", "NCED", "Me
 DEFAULTS = {
     "potplayer_path": str(POTPLAYER_DEFAULT),
     "poll_interval_sec": 3,
+    # 完成判定四阈值（v0.1.6 可配置）：位置比例 ≥ complete_percent 或剩余比例
+    # ≤ ignore_percent_at_end 判已看完并清续播点；位置比例 < min_resume_percent
+    # 或播放时长 < ignore_seconds_at_start 秒时不生成续播点。
+    # 默认值刻意保守：30 秒片头 + 5% 下限，既能挡掉「点开 3 秒生成续播」，
+    # 又不影响正常观看（60 秒 / 5% 仍照常记录，见 tests/test_watcher.py）。
     "complete_percent": 90,
+    "min_resume_percent": 5,
+    "ignore_seconds_at_start": 30,
+    "ignore_percent_at_end": 8,
     "recording_enabled": 1,
     "autostart": 0,  # 开机自启：写 HKCU Run 注册表项，只影响系统登录时
     # 主窗口启动时自动拉起托盘守护（默认开）。与 autostart（开机自启）、

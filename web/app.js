@@ -553,10 +553,21 @@ async function renderContinue() {
 
 async function renderHistory() {
   const list = await call('get_history', 200);
+  const batchBar = list.length ? `<div class="btn-row" style="margin:0 0 12px;align-items:center">
+      <label class="hint" style="display:flex;align-items:center;gap:6px;margin:0">
+        <input type="checkbox" id="historySelectAll"> 全选</label>
+      <button class="btn btn-sm" data-action="history-batch" data-mode="watched">批量标记已看</button>
+      <button class="btn btn-sm" data-action="history-batch" data-mode="unwatched">批量标记未看</button>
+      <button class="btn btn-sm" data-action="history-batch" data-mode="reset">批量重置进度</button>
+      <span class="hint" id="historyBatchInfo" style="margin:0">未选择</span>
+    </div>` : '';
   setContent(`<div class="card"><h3>历史记录</h3>
     <p class="hint">共 ${list.length} 部作品，每部只显示<b>最新一次</b>观看（旧会话原样保留在数据库里，只是不重复刷屏）。可人工删除单条记录；
       <b>软件不会自动删除任何观看记录</b>，删除一条会话也不会影响播放进度、本地文件或看过的列表。</p>
+    ${batchBar}
     <div class="list">${list.length ? list.map(r => `<div class="item">
+      <label style="display:flex;align-items:center;padding:0 6px 0 2px">
+        <input type="checkbox" class="history-pick" data-file-id="${num(r.file_id)}"></label>
       <div class="thumb">⌚</div>
       <div class="body"><div class="name">${esc(r.display_title || r.filename || '未知文件')}
         ${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}</div>
@@ -568,6 +579,13 @@ async function renderHistory() {
             data-name="${esc(r.display_title || r.filename || '未知文件')}">删除</button>
         </div></div>
     </div>`).join('') : empty('还没有历史记录', '播放任意视频后会自动出现在这里')}</div></div>`);
+}
+
+// 历史页批量选择：勾选变化时更新「已选 N 项」提示
+function updateHistoryBatchInfo() {
+  const picked = document.querySelectorAll('.history-pick:checked');
+  const info = document.getElementById('historyBatchInfo');
+  if (info) info.textContent = picked.length ? `已选 ${picked.length} 项` : '未选择';
 }
 
 // ---- 全量文件列表：「扫描结果」与「媒体库」共用 ---------------------------
@@ -1161,6 +1179,14 @@ async function renderSettings() {
         <input class="input" type="number" min="1" max="30" id="set-poll_interval_sec" value="${esc(s.poll_interval_sec)}"></div>
       <div class="field"><label>自动标记「已看完」的进度阈值（%）</label>
         <input class="input" type="number" min="50" max="100" id="set-complete_percent" value="${esc(s.complete_percent)}"></div>
+      <div class="field"><label>片头忽略（秒）</label>
+        <input class="input" type="number" min="0" max="600" id="set-ignore_seconds_at_start" value="${esc(s.ignore_seconds_at_start ?? 30)}">
+        <div class="tip">看不够这么久不留续播点，避免「点开几秒就被记成在看」</div></div>
+      <div class="field"><label>最低续播进度（%）</label>
+        <input class="input" type="number" min="0" max="50" id="set-min_resume_percent" value="${esc(s.min_resume_percent ?? 5)}"></div>
+      <div class="field"><label>片尾忽略（%）</label>
+        <input class="input" type="number" min="0" max="30" id="set-ignore_percent_at_end" value="${esc(s.ignore_percent_at_end ?? 8)}">
+        <div class="tip">剩余不足这个比例就直接算看完（不必拖到 90%）</div></div>
       ${switchHtml('daemon_auto_start', isOn(s.daemon_auto_start), '启动软件时自动开启后台记录',
         '默认开启：打开本软件就自动拉起托盘守护并续记播放进度；关闭后不再自动启动，可在设置里随时改回')}
       ${switchHtml('recording_enabled', isOn(s.recording_enabled), '启用播放记录', '关闭后守护进程不再写入历史')}
@@ -1263,6 +1289,22 @@ async function renderSettings() {
           <div class="tip">只会写这个文件夹，不会碰你已有的任何笔记。</div></div>
       </div>
       ${switchHtml('obsidian_auto_sync', isOn(o.auto_sync), '跑完单元测试自动同步', '命令行执行 cli.py test 通过后自动写入一次结果')}
+    </div>
+    <div class="card"><h3>数据备份与恢复</h3>
+      <div class="notice">把播放记录、看过的列表、追剧清单、中文名对照等 9 张表导出成一个 JSON 文件。
+        换机 / 换盘前先备份，误删也能恢复。<b>每次恢复前都会自动把当前库再备份一份</b>，恢复本身也可回退。</div>
+      <div class="btn-row">
+        <button class="btn btn-sm btn-primary" data-action="backup-export">导出备份</button>
+        <button class="btn btn-sm" data-action="backup-list">查看已有备份</button>
+      </div>
+      <p class="hint" id="backupInfo" style="margin:8px 0 0">备份文件默认放在数据目录的 backups 文件夹。</p>
+      <div class="field"><label>从备份文件恢复</label>
+        <div class="btn-row">
+          <input class="input" id="backupPath" placeholder="粘贴备份 JSON 的完整路径">
+          <button class="btn btn-sm" data-action="backup-restore-merge">仅新增</button>
+          <button class="btn btn-sm" data-action="backup-restore-overwrite">覆盖</button>
+        </div>
+        <div class="tip">「仅新增」只补缺失数据、不改现有记录；「覆盖」用备份整库替换当前数据。</div></div>
     </div>
     <div class="card"><p class="hint" style="margin:0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
 }
@@ -2139,7 +2181,8 @@ async function handleAction(action, btn) {
       return;
     }
     case 'save-settings': {
-      const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent', 'http_proxy',
+      const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent',
+        'min_resume_percent', 'ignore_seconds_at_start', 'ignore_percent_at_end', 'http_proxy',
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
         'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url',
         'everything_http_user', 'everything_http_pass', 'everything_app_path',
@@ -2153,6 +2196,71 @@ async function handleAction(action, btn) {
       await call('save_settings', data);
       await refreshEmbedState();
       toast('设置已保存');
+      return;
+    }
+    case 'history-batch': {
+      const ids = [...document.querySelectorAll('.history-pick:checked')]
+        .map(c => Number(c.dataset.fileId)).filter(Boolean);
+      if (!ids.length) { toast('请先勾选要处理的条目', false); return; }
+      const mode = btn.dataset.mode || 'watched';
+      const label = { watched: '标记已看', unwatched: '标记未看', reset: '重置进度' }[mode] || mode;
+      if (!confirm(`确定对选中的 ${ids.length} 项执行「${label}」？只改进度，不会删除观看记录。`)) return;
+      btn.disabled = true;
+      try {
+        const r = await call('batch_mark', ids, mode);
+        if (r.ok) {
+          toast(`已处理 ${num(r.updated)} 项${r.failed ? '，失败 ' + r.failed + ' 项' : ''}`);
+          await renderHistory();
+        } else {
+          toast(r.error || '批量操作失败', false);
+        }
+      } finally { btn.disabled = false; }
+      return;
+    }
+    case 'backup-export': {
+      btn.disabled = true; btn.textContent = '正在导出…';
+      try {
+        const r = await call('export_backup');
+        const info = document.getElementById('backupInfo');
+        if (r.ok) {
+          if (info) info.innerHTML = `已导出 ${num(r.total)} 行 → <span class="mono">${esc(r.path)}</span>`;
+          toast('备份已导出：' + r.path);
+        } else {
+          toast('导出失败：' + (r.error || '未知错误'), false);
+        }
+      } finally { btn.disabled = false; btn.textContent = '导出备份'; }
+      return;
+    }
+    case 'backup-list': {
+      const list = await call('list_backups');
+      const info = document.getElementById('backupInfo');
+      if (info) {
+        info.innerHTML = list.length
+          ? '已有备份：' + list.slice(0, 8).map(b =>
+              `<br>· <span class="mono">${esc(b.name)}</span>（${Math.round(b.size / 1024)} KB · ${esc(b.mtime)}）`).join('')
+          : '还没有备份文件。';
+      }
+      return;
+    }
+    case 'backup-restore-merge':
+    case 'backup-restore-overwrite': {
+      const input = document.getElementById('backupPath');
+      const path = ((input && input.value) || '').trim();
+      if (!path) { toast('请先填写备份 JSON 的完整路径', false); return; }
+      const overwrite = action === 'backup-restore-overwrite';
+      if (overwrite && !confirm('「覆盖」会用备份整库替换当前数据（恢复前仍会自动备份当前库）。继续？')) return;
+      btn.disabled = true; btn.textContent = '正在恢复…';
+      try {
+        const r = await call('import_backup', path, overwrite ? 'overwrite' : 'merge');
+        if (r.ok) {
+          const total = Object.values(r.inserted || {}).reduce((a, b) => a + b, 0);
+          toast(`恢复完成（${overwrite ? '覆盖' : '仅新增'}）：写入 ${num(total)} 行` +
+            (r.auto_backup ? '，已自动备份当前库' : ''));
+          await renderSettings();
+        } else {
+          toast('恢复失败：' + (r.error || '未知错误'), false);
+        }
+      } finally { btn.disabled = false; btn.textContent = overwrite ? '覆盖' : '仅新增'; }
       return;
     }
     case 'rematch': {
@@ -2500,6 +2608,12 @@ document.addEventListener('keydown', (ev) => {
 document.addEventListener('change', (ev) => {
   const el = ev.target;
   if (el.id === 'playerSpeed' || el.id === 'topPlayerSpeed') { setPlayerSpeed(el.value); return; }
+  if (el.id === 'historySelectAll') {
+    document.querySelectorAll('.history-pick').forEach(c => { c.checked = el.checked; });
+    updateHistoryBatchInfo();
+    return;
+  }
+  if (el.classList && el.classList.contains('history-pick')) { updateHistoryBatchInfo(); return; }
   const handlers = {
     fileDir: () => { fileListState.directory_id = Number(el.value) || 0; },
     fileMatch: () => { fileListState.match_state = el.value; },

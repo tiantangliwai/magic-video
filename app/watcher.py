@@ -58,6 +58,23 @@ class Watcher:
                 self.last_error = f"{type(exc).__name__}: {exc}"
             self._stop_event.wait(interval)
 
+    def _resume_ms(self, position_ms: int, duration_ms: int, completed: int) -> int:
+        """按三阈值决定「续播点」：片头太短 / 进度太低 / 已看完时返回 0。
+
+        v0.1.6 起可配置：``ignore_seconds_at_start``（片头忽略秒数）、
+        ``min_resume_percent``（最低进度百分比）、``ignore_percent_at_end``
+        只影响 completed 判定（在 _tick 里算）。写成独立方法是为了
+        ``_open_session`` / ``_close_session`` 兜底 / ``_tick`` 三处共用一套口径，
+        避免「点开几秒就生成续播记录」。
+        """
+        if completed:
+            return 0
+        if position_ms < db.get_int("ignore_seconds_at_start", 30) * 1000:
+            return 0
+        if duration_ms and position_ms / duration_ms * 100 < db.get_int("min_resume_percent", 5):
+            return 0
+        return position_ms
+
     def _register_external(self, media_name: str) -> dict:
         """播放器打开的文件不在扫描库里时，先建一条占位记录，保证历史不丢。"""
         existing = db.row("SELECT * FROM media_files WHERE path = ?", (media_name,))
@@ -80,16 +97,18 @@ class Watcher:
 
     def _open_session(self, file_id: int, status: dict) -> None:
         stamp = db.now()
+        # 会话区间记真实播放位置（from/to/max），续播点则按阈值过滤片头
         session_id = db.execute(
             "INSERT INTO watch_sessions(file_id, started_at, from_ms, to_ms, max_ms) "
             "VALUES (?, ?, ?, ?, ?)",
             (file_id, stamp, status["position_ms"], status["position_ms"], status["position_ms"]),
         )
+        resume = self._resume_ms(status["position_ms"], status["duration_ms"], 0)
         db.execute(
             "INSERT OR IGNORE INTO watch_progress"
             "(file_id, position_ms, duration_ms, percent, completed, play_count, first_played_at, last_played_at, updated_at) "
             "VALUES (?, ?, ?, ?, 0, 0, ?, ?, ?)",
-            (file_id, status["position_ms"], status["duration_ms"], status["percent"], stamp, stamp, stamp),
+            (file_id, resume, status["duration_ms"], status["percent"], stamp, stamp, stamp),
         )
         db.execute(
             "UPDATE watch_progress SET play_count = play_count + 1, first_played_at = COALESCE(first_played_at, ?) "
@@ -101,6 +120,7 @@ class Watcher:
             "session_id": session_id,
             "started_at": stamp,
             "max_ms": status["position_ms"],
+            "duration_ms": status["duration_ms"],
             # 首次轮询必须写一次进度/时长/完成判定，不能因为「位置没变」而跳过
             "last_written_ms": None,
             "last_state": status["state"],
@@ -118,10 +138,15 @@ class Watcher:
         if not to_ms:
             fallback = int(cur.get("max_ms") or 0)
             if fallback > 0:
+                completed_now = int(db.scalar(
+                    "SELECT completed FROM watch_progress WHERE file_id = ?", (cur["file_id"],)) or 0)
+                resume = self._resume_ms(fallback, int(cur.get("duration_ms") or 0), completed_now)
+                # 已看完强制清 0；否则只在位置前进时更新，重看片头不抹掉已有续播点
                 db.execute(
-                    "UPDATE watch_progress SET position_ms = ?, last_played_at = ?, updated_at = ? "
-                    "WHERE file_id = ? AND COALESCE(position_ms,0) < ?",
-                    (fallback, db.now(), db.now(), cur["file_id"], fallback),
+                    "UPDATE watch_progress SET "
+                    "position_ms = CASE WHEN ? = 1 THEN 0 WHEN ? > COALESCE(position_ms,0) THEN ? "
+                    "ELSE position_ms END, last_played_at = ?, updated_at = ? WHERE file_id = ?",
+                    (completed_now, resume, resume, db.now(), db.now(), cur["file_id"]),
                 )
             to_ms = fallback
             cur["last_written_ms"] = fallback
@@ -159,11 +184,21 @@ class Watcher:
                  or abs(pos - cur["last_written_ms"]) >= 1000)
         if moved or status["state"] != cur["last_state"]:
             complete_at = db.get_int("complete_percent", 90)
-            completed = 1 if status["percent"] >= complete_at else 0
+            end_ignore = db.get_int("ignore_percent_at_end", 8)
+            percent = status["percent"] or 0.0
+            # 四阈值判定：看够上限百分比，或只剩片尾 ignore_percent_at_end 以内 → 已看完
+            completed = 1 if (
+                percent >= complete_at or (percent > 0 and 100.0 - percent <= end_ignore)
+            ) else 0
+            resume = self._resume_ms(pos, status["duration_ms"], completed)
             db.execute(
-                "UPDATE watch_progress SET position_ms = ?, duration_ms = ?, percent = ?, "
-                "completed = MAX(completed, ?), last_played_at = ?, updated_at = ? WHERE file_id = ?",
-                (pos, status["duration_ms"], status["percent"], completed, db.now(), db.now(), file_id),
+                "UPDATE watch_progress SET "
+                "position_ms = CASE WHEN ? = 1 THEN 0 WHEN ? > COALESCE(position_ms,0) THEN ? "
+                "ELSE position_ms END, "
+                "duration_ms = ?, percent = ?, completed = MAX(completed, ?), "
+                "last_played_at = ?, updated_at = ? WHERE file_id = ?",
+                (completed, resume, resume, status["duration_ms"], percent, completed,
+                 db.now(), db.now(), file_id),
             )
             db.execute(
                 "UPDATE watch_sessions SET to_ms = ?, max_ms = ? WHERE id = ?",

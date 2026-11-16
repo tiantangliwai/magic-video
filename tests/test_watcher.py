@@ -113,6 +113,52 @@ class WatcherFlowTests(IsolatedDbTestCase):
         self.assertTrue(True)
 
 
+class ThresholdTests(IsolatedDbTestCase):
+    """v0.1.6 完成判定四阈值：片头忽略 / 最低进度 / 片尾忽略。"""
+
+    def setUp(self):
+        super().setUp()
+        self.a = self.media("Show - 01.mkv", title_guess="Show")
+        self.watcher = Watcher()
+
+    def _tick_with(self, value):
+        with mock.patch.object(potplayer, "read_status", return_value=value), \
+             mock.patch.object(potplayer, "resolve_media",
+                               side_effect=lambda name: db.row(
+                                   "SELECT * FROM media_files WHERE filename = ?", (name,))):
+            self.watcher._tick()
+
+    def _progress(self):
+        return db.row("SELECT * FROM watch_progress WHERE file_id = ?", (self.a["id"],))
+
+    def test_head_position_below_threshold_is_not_resumed(self):
+        """默认片头 30 秒内不生成续播点（挡掉「点开几秒就有续播」）。"""
+        self._tick_with(status(position=10_000))
+        self.assertEqual(self._progress()["position_ms"], 0)
+        self.assertEqual(self._progress()["completed"], 0)
+
+    def test_custom_thresholds_can_be_disabled(self):
+        """片头忽略与最低进度都设为 0 时，几秒的进度也照常记录。"""
+        db.set_setting("ignore_seconds_at_start", 0)
+        db.set_setting("min_resume_percent", 0)
+        self._tick_with(status(position=10_000))
+        self.assertEqual(self._progress()["position_ms"], 10_000)
+
+    def test_tail_percent_marks_completed(self):
+        """剩余片尾 ≤ ignore_percent_at_end 也判已看完（complete_percent 调高后独立生效）。"""
+        db.set_setting("complete_percent", 99)
+        self._tick_with(status(position=1_130_000))  # 94.2%，剩余 5.8% ≤ 8
+        progress = self._progress()
+        self.assertEqual(progress["completed"], 1)
+        self.assertEqual(progress["position_ms"], 0)  # 完成时清续播点
+
+    def test_rewatch_head_keeps_existing_resume_point(self):
+        """已看到中途后重看片头，不应把已有续播点抹掉。"""
+        self._tick_with(status(position=600_000))  # 50%
+        self._tick_with(status(position=12_000))   # 回到片头 12 秒
+        self.assertEqual(self._progress()["position_ms"], 600_000)
+
+
 if __name__ == "__main__":
     import unittest
     unittest.main()

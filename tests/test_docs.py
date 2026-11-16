@@ -132,7 +132,8 @@ class VersionConsistencyTests(unittest.TestCase):
         text = (ROOT / "docs" / "ROADMAP_0.1.6.md").read_text(encoding="utf-8")
         for token in ("P0", "P1", "P2", "JSON 完整备份", "三阈值", "数据地基", "外部依赖"):
             self.assertIn(token, text, f"路线图缺少要素：{token}")
-        self.assertIn("规划中", text)
+        # 规划中 / 开发中 都算有效状态（开发推进后文案会变），但不能是已完成版本
+        self.assertTrue("规划中" in text or "开发中" in text, "路线图需标明规划/开发状态")
         # 计划文档不能被误读为当前版本
         self.assertNotIn("__version__ = \"0.1.6\"", text)
 

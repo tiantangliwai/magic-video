@@ -15,9 +15,9 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, blacklist, config, covers, db, embedded_player, everything,
-    file_ops, importer, library_tree, metadata, obsidian, potplayer, runtime, scanner,
-    textmatch, theme_native, watchlist, websearch,
+    __version__, autostart, backup, blacklist, config, covers, db, embedded_player,
+    everything, file_ops, importer, library_tree, metadata, obsidian, potplayer, runtime,
+    scanner, textmatch, theme_native, watchlist, websearch,
 )
 
 
@@ -378,6 +378,51 @@ class Api:
     def reset_progress(self, file_id: int) -> dict:
         """一键重置进度（等价于「标记未看」），用于纠错与重新观看。"""
         return self._set_watch_state(file_id, 0)
+
+    def batch_mark(self, file_ids: list, action: str = "watched") -> dict:
+        """批量标记已看 / 未看 / 重置进度（v0.1.6）。
+
+        复用单条 ``_set_watch_state``，语义完全一致：只改 ``watch_progress``，
+        绝不删 ``watch_sessions`` 历史。逐条容错，单条失败不影响其余。
+        """
+        mapping = {
+            "watched": 1, "mark_watched": 1, "done": 1,
+            "unwatched": 0, "mark_unwatched": 0, "reset": 0, "reset_progress": 0,
+        }
+        key = str(action or "watched").strip().lower()
+        if key not in mapping:
+            return {"ok": False, "error": f"不支持的操作：{action}"}
+        completed = mapping[key]
+        updated = 0
+        failed = 0
+        seen: list[int] = []
+        for raw in (file_ids or []):
+            try:
+                fid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if fid in seen:
+                continue
+            seen.append(fid)
+            result = self._set_watch_state(fid, completed)
+            if result.get("ok"):
+                updated += 1
+            else:
+                failed += 1
+        return {"ok": True, "action": key, "completed": completed,
+                "updated": updated, "failed": failed, "total": len(seen)}
+
+    # ---------- 数据备份 / 恢复（v0.1.6，见 app/backup.py） ----------
+    def export_backup(self, path: str = "") -> dict:
+        """导出 9 张表到 JSON；path 为空时写到 <数据目录>/backups/。"""
+        return backup.export_to_json(path or None)
+
+    def import_backup(self, path: str, mode: str = "merge") -> dict:
+        """从 JSON 恢复；mode=merge 仅新增 / overwrite 整库覆盖，恢复前自动备份。"""
+        return backup.restore_from_json(path, mode)
+
+    def list_backups(self) -> list[dict]:
+        return backup.list_backups()
 
     def get_history(self, limit: int = 100) -> list[dict]:
         """历史记录按「每个作品只显示最新一次会话」去重。
@@ -1242,6 +1287,8 @@ class Api:
     def save_settings(self, data: dict) -> dict:
         allowed = {
             "potplayer_path", "poll_interval_sec", "complete_percent", "recording_enabled",
+            # 完成判定四阈值（v0.1.6）：片头忽略秒数 / 最低续播百分比 / 片尾忽略百分比
+            "min_resume_percent", "ignore_seconds_at_start", "ignore_percent_at_end",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
             "minimize_to_tray", "obsidian_folder", "obsidian_auto_sync",
             "everything_es_path", "everything_http_url", "everything_app_path",

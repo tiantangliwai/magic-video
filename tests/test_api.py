@@ -120,6 +120,46 @@ class ApiTests(IsolatedDbTestCase):
         self.assertFalse(self.api.mark_watched(999999)["ok"])
         self.assertFalse(self.api.reset_progress(999999)["ok"])
 
+    def test_batch_mark_watched_and_reset(self):
+        """批量标记复用单条语义：只改进度表，不删会话。"""
+        records = [self.media(f"Show - 0{i}.mkv") for i in (1, 2, 3)]
+        ids = [r["id"] for r in records]
+        for fid in ids:
+            db.execute("INSERT INTO watch_sessions(file_id, started_at, from_ms, to_ms, max_ms) "
+                       "VALUES (?, ?, 0, 100, 100)", (fid, db.now()))
+        result = self.api.batch_mark(ids, "watched")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["updated"], 3)
+        self.assertEqual(
+            db.scalar("SELECT COUNT(*) FROM watch_progress WHERE completed = 1"), 3)
+        reset = self.api.batch_mark(ids, "reset")
+        self.assertTrue(reset["ok"])
+        self.assertEqual(
+            db.scalar("SELECT COUNT(*) FROM watch_progress WHERE completed = 0"), 3)
+        # 批量纠错同样不能删掉观看会话
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watch_sessions"), 3)
+
+    def test_batch_mark_rejects_bad_action_and_counts_failures(self):
+        record = self.media()
+        self.assertFalse(self.api.batch_mark([record["id"]], "nonsense")["ok"])
+        result = self.api.batch_mark([record["id"], 999999], "watched")
+        self.assertEqual((result["updated"], result["failed"]), (1, 1))
+        # 重复 id 去重，只算一次
+        dedup = self.api.batch_mark([record["id"], record["id"]], "watched")
+        self.assertEqual(dedup["total"], 1)
+
+    def test_backup_export_and_restore_bridge(self):
+        record = self.media()
+        db.execute("INSERT INTO watch_progress(file_id, percent, completed) VALUES (?, ?, ?)",
+                   (record["id"], 42.0, 0))
+        exported = self.api.export_backup()
+        self.assertTrue(exported["ok"])
+        self.assertGreaterEqual(exported["counts"]["media_files"], 1)
+        self.assertGreaterEqual(len(self.api.list_backups()), 1)
+        restored = self.api.import_backup(exported["path"], "merge")
+        self.assertTrue(restored["ok"])
+        self.assertEqual(restored["mode"], "merge")
+
     def test_directories_and_scan_bridge(self):
         root = self.tmp / "lib"
         root.mkdir()
