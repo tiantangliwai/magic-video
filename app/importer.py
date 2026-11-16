@@ -357,9 +357,17 @@ def group_watched(rows: list[dict]) -> list[dict]:
 
 def preview(text: str) -> dict:
     """解析 + 即时自动匹配中文名，结果当场返回给界面（不产生任何待办队列）。"""
+    return preview_records(parse_text(text))
+
+
+def preview_records(records: list[dict]) -> dict:
+    """给**已经解析好的**记录做匹配与预览。
+
+    外部清单导入（MAL XML / Bangumi Takeout JSON）走这里，复用同一套
+    匹配、重复判定与「待确认」逻辑——三条入口共用一个出口，不各写一份。
+    """
     db.init_db()
     metadata.ensure_builtin_loaded()
-    records = parse_text(text)
     match_result = metadata.match_titles([r["title"] for r in records])
     existing = {
         (r["title"].lower(), r["season_no"] or 0, r["episode_from"] or 0, r["episode_to"] or 0)

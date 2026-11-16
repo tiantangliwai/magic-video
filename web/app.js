@@ -1075,7 +1075,23 @@ async function renderImport() {
       <button class="btn" data-action="commit">确认导入</button>
       <button class="btn" data-action="goto" data-view="watched">查看已导入</button>
     </div>
-    <div id="previewBox">${empty('等待输入', '粘贴清单后点击「解析预览并匹配中文名」')}</div></div>`);
+    <div id="previewBox">${empty('等待输入', '粘贴清单后点击「解析预览并匹配中文名」')}</div></div>
+  <div class="card" style="margin-top:14px"><h3>导入清单文件（MAL / Bangumi）</h3>
+    <p class="hint">支持 MyAnimeList 导出的 <span class="mono">animelist.xml</span> 与 Bangumi Takeout 的
+      <span class="mono">.json</span>（数组或「每行一个对象」都行）。解析后先给<b>差异报告</b>：
+      只本地有 / 只清单有 / 进度不同 / 中文名冲突 / 本地已有文件但没记录，确认后才写库。</p>
+    <div class="field"><label>清单文件路径</label>
+      <div style="display:flex;gap:9px">
+        <input class="input" id="listImportPath" placeholder="例如 D:\\Downloads\\animelist.xml">
+        <button class="btn" data-action="choose-import-file">浏览</button>
+      </div></div>
+    <div class="btn-row">
+      <button class="btn btn-primary" data-action="preview-list">解析清单并对比</button>
+      <button class="btn" data-action="commit-list">按差异报告合并</button>
+    </div>
+    <div class="hint">合并规则：进度<b>只增不减</b>（清单里的旧进度一律忽略，绝不降级）·
+      中文名只补空，手改的名字永不被覆盖 · 不会删除任何已有记录。</div>
+  </div>`);
 }
 
 function renderPreview(data) {
@@ -1102,7 +1118,36 @@ function renderPreview(data) {
       <td>${r.episode_from ? esc(`${r.episode_from}–${r.episode_to}`) : '—'}</td>
       <td><span class="badge ${tone}">${esc(label)}</span></td>
     </tr>`;
-    }).join('') : `<tr><td colspan="5">没有解析出有效条目</td></tr>`}</tbody></table></div>${pendingBlock(data)}`;
+    }).join('') : `<tr><td colspan="5">没有解析出有效条目</td></tr>`}</tbody></table></div>${pendingBlock(data)}${diffBlock(data.diff)}`;
+}
+
+function diffBlock(d) {
+  if (!d || !d.summary) return '';
+  const s = d.summary;
+  const table = (head, rows) => `<div class="table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table></div>`;
+  return `<div class="card" style="margin-top:14px"><h3>差异报告</h3>
+    <div class="notice">本地 <b>${num(s.local)}</b> 部 · 清单 <b>${num(s.incoming)}</b> 部 ·
+      只清单有 <b>${num(s.only_imported)}</b> · 只本地有 <b>${num(s.only_local)}</b> ·
+      进度不同 <b>${num(s.progress_gap)}</b> · 中文名冲突 <b>${num(s.title_conflict)}</b> ·
+      本地已有文件 <b>${num(s.file_ready)}</b><br>
+      <span class="hint">「只清单有」会在合并时新增；「只本地有」不动；「进度不同」按只增不减处理。</span></div>
+    ${s.progress_gap ? `<p class="hint">进度差异（合并时只增不减）：</p>
+      ${table('<th>作品</th><th>本地看到</th><th>清单记录</th><th>合并处理</th>',
+        d.progress_gap.slice(0, 30).map(g => `<tr>
+          <td>${esc(g.title)}</td><td>${g.local_to || '—'}</td><td>${g.incoming_to || '—'}</td>
+          <td>${g.direction === 'import_ahead' ? '补到清单进度' : '保持本地（不降级）'}</td></tr>`).join(''))}` : ''}
+    ${s.title_conflict ? `<p class="hint">中文名冲突（保留本地，手改优先）：</p>
+      ${table('<th>原名</th><th>本地中文名</th><th>清单中文名</th>',
+        d.title_conflict.slice(0, 30).map(c => `<tr>
+          <td>${esc(c.title)}</td><td>${esc(c.local_cn)}${c.user_edited ? ' <span class="badge amber">手改</span>' : ''}</td>
+          <td>${esc(c.incoming_cn)}</td></tr>`).join(''))}` : ''}
+    ${s.file_ready ? `<p class="hint">清单里有、本地还没记录，但<b>本地确实有文件</b>
+      （文件命中 + 标题校验双判定通过）：</p>
+      ${table('<th>作品</th><th>命中文件数</th><th>关键词</th>',
+        d.file_ready.slice(0, 30).map(f => `<tr>
+          <td>${esc(f.title)}</td><td>${num(f.files)}</td>
+          <td class="mono">${esc(f.keyword)}</td></tr>`).join(''))}` : ''}
+  </div>`;
 }
 
 function pendingBlock(data) {
@@ -2239,6 +2284,55 @@ async function handleAction(action, btn) {
       } finally {
         btn.disabled = false; btn.textContent = '解析预览并匹配中文名';
       }
+      return;
+    }
+    case 'choose-import-file': {
+      const r = await call('choose_import_file');
+      if (r.ok) {
+        const el = document.getElementById('listImportPath');
+        if (el) el.value = r.path;
+      } else if (r.error && r.error !== '已取消') {
+        toast(r.error, false);
+      }
+      return;
+    }
+    case 'preview-list': {
+      const p = ((document.getElementById('listImportPath') || {}).value || '').trim();
+      if (!p) { toast('请先填写清单文件路径', false); return; }
+      btn.disabled = true; btn.textContent = '正在解析…';
+      try {
+        const file = await call('read_import_file', p);
+        if (!file.ok) { toast(file.error || '读取失败', false); return; }
+        const data = await call('preview_import_file', file.filename, file.content);
+        if (!data.ok) { toast(data.error || '解析失败', false); return; }
+        renderPreview(data);
+        toast(`已解析 ${file.filename}（${data.format_label || data.format}）：${data.total} 条清单记录`, true);
+      } finally {
+        btn.disabled = false; btn.textContent = '解析清单并对比';
+      }
+      return;
+    }
+    case 'commit-list': {
+      if (!lastPreviewRows.length) { toast('请先点「解析清单并对比」', false); return; }
+      // 手改的中文名与「暂不导入」勾选的处理方式与纯文本导入完全一致
+      document.querySelectorAll('.cn-edit').forEach(el => {
+        const i = Number(el.dataset.idx);
+        if (!lastPreviewRows[i]) return;
+        const value = el.value.trim();
+        if (value !== lastPreviewRows[i].title_cn) {
+          lastPreviewRows[i].cn_edited = true;
+          lastPreviewRows[i].title_cn = value || lastPreviewRows[i].title;
+        }
+      });
+      const skippedIdx = new Set(
+        Array.from(document.querySelectorAll('.skip-row:checked')).map(el => Number(el.dataset.idx)));
+      const payload = lastPreviewRows.filter((_, i) => !skippedIdx.has(i));
+      const r = await call('commit_import_list', payload);
+      toast(`合并完成：新增 ${r.inserted} · 补进度 ${r.updated} · 跳过 ${r.skipped}` +
+        (r.pending ? ` · 待确认 ${r.pending}` : '') +
+        (r.learned ? ` · 已记住 ${r.learned} 条中文名` : ''), r.ok);
+      lastPreviewRows = [];
+      document.getElementById('previewBox').innerHTML = empty('合并完成', '到「看过的列表」查看结果');
       return;
     }
     case 'commit': {

@@ -16,8 +16,8 @@ import psutil
 
 from . import (
     __version__, autostart, backup, blacklist, config, covers, db, embedded_player,
-    everything, file_ops, importer, library_tree, metadata, obsidian, potplayer, runtime,
-    scanner, textmatch, theme_native, watchlist, websearch,
+    everything, file_ops, importer, library_tree, listimport, metadata, obsidian,
+    potplayer, runtime, scanner, textmatch, theme_native, watchlist, websearch,
 )
 
 
@@ -1286,6 +1286,34 @@ class Api:
     def commit_import(self, rows: list[dict], skip_unmatched: bool = False) -> dict:
         """确认导入。``skip_unmatched=True`` 时不导入未匹配中文名的行。"""
         return importer.commit(rows or [], skip_unmatched=bool(skip_unmatched))
+
+    # ---- 外部清单导入（P1-2）：MAL XML / Bangumi Takeout JSON ---------------
+    def read_import_file(self, path: str) -> dict:
+        """读取清单文件内容（限制 20MB）。不解析，只把原文交给前端预览。"""
+        return listimport.read_file(path)
+
+    def choose_import_file(self) -> dict:
+        try:
+            import webview
+            if not self._window:
+                return {"ok": False, "error": "窗口尚未就绪，请直接粘贴路径"}
+            result = self._window.create_file_dialog(
+                webview.OPEN_DIALOG, allow_multiple=False,
+                file_types=("清单文件 (*.xml;*.json;*.txt)", "所有文件 (*.*)"),
+            )
+            if result and len(result):
+                return {"ok": True, "path": result[0]}
+            return {"ok": False, "error": "已取消"}
+        except Exception as exc:
+            return {"ok": False, "error": f"对话框不可用，请直接粘贴路径（{exc}）"}
+
+    def preview_import_file(self, filename: str = "", content: str = "") -> dict:
+        """解析 MAL XML / Bangumi JSON 并返回预览 + 匹配结果 + 差异报告。"""
+        return listimport.preview_file(filename or "", content or "")
+
+    def commit_import_list(self, rows: list[dict], skip_unmatched: bool = False) -> dict:
+        """按「只增不减 / 不降级 / 不覆盖手改」合并清单记录。"""
+        return listimport.commit(rows or [], skip_unmatched=bool(skip_unmatched))
 
     def get_settings(self) -> dict:
         settings = db.all_settings()
