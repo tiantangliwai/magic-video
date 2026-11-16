@@ -8,7 +8,8 @@ from unittest import mock
 
 from app import config, db, metadata
 
-_PATCHED_KEYS = ("DATA_DIR", "DB_PATH", "COVER_DIR", "LOG_DIR", "ALIAS_IMPORT_FILE")
+_PATCHED_KEYS = ("DATA_DIR", "DB_PATH", "COVER_DIR", "LOG_DIR", "ALIAS_IMPORT_FILE",
+                 "BUNDLED_COVER_DIR")
 
 
 def reset_module_state() -> None:
@@ -27,10 +28,12 @@ def reset_module_state() -> None:
     metadata._PAUSED_UNTIL = 0.0
     # 新增的进程内缓存（媒体库结果 / 网页搜索 / 黑名单词表）也要清，
     # 否则上一个用例的临时库数据会漏到下一个用例里。
-    from app import api, blacklist, sites, websearch
+    from app import api, blacklist, covers, sites, websearch
     api._MEDIA_CACHE.clear()
     websearch.clear_cache()
     blacklist.invalidate()
+    # 随包封面索引按 index.json 的 mtime 缓存，换目录后必须重读。
+    covers._BUNDLED_CACHE.update(stamp=None, entries=[], files={})
     # 站点解析健康度是进程级计数，不清会让「解析失败」统计跨用例累加。
     sites.reset_health()
 
@@ -46,6 +49,9 @@ class IsolatedDbTestCase(unittest.TestCase):
         config.DATA_DIR = tmp
         config.DB_PATH = tmp / "library.db"
         config.COVER_DIR = tmp / "covers"
+        # 随包公共封面资产默认指到空目录：用例不该因为仓库里有什么图而改变行为。
+        # 需要验证「缺图从资产补」的用例自行把该值指到临时 assets 目录。
+        config.BUNDLED_COVER_DIR = tmp / "assets-covers"
         config.LOG_DIR = tmp / "logs"
         config.ALIAS_IMPORT_FILE = tmp / "alias_import.json"
         reset_module_state()

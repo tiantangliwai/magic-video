@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import hashlib
 import html
+import json
 import re
 import threading
 import time
@@ -598,6 +599,8 @@ def clear_manual_cover(title: str) -> dict:
                 dest.unlink()
         except OSError:
             pass
+        # 记一笔墓碑：否则随包公共封面会立刻把同名图补回来，「清除」形同无效
+        _mark_cleared(manual_marker(title), True)
         return {"ok": True}
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
@@ -605,6 +608,8 @@ def clear_manual_cover(title: str) -> dict:
 
 def save_cover_record(title: str, url: str, source: str, filename: str) -> None:
     """写 subjects 表，供剧集卡片直接读；同标题只保留最新一条。"""
+    # 有新图落盘（手选或重新抓到）就解除「清除」标记，否则下次会因墓碑拒用这张图
+    _mark_cleared(manual_marker(title), False)
     key = _norm_key(title)
     existing = db.row("SELECT id FROM subjects WHERE lower(COALESCE(title_cn,'')) = ? OR "
                       "lower(COALESCE(title_orig,'')) = ? LIMIT 1", (key, key))
@@ -829,14 +834,144 @@ def subject_covers() -> list[tuple[str, str]]:
         return []
 
 
+_BUNDLED_CACHE: dict = {"stamp": None, "entries": [], "files": {}}
+
+
+def bundled_covers() -> list[tuple[str, str]]:
+    """仓库资产 ``assets/covers/index.json`` 里的 (标题/别名, 文件名)。
+
+    这批封面随安装包分发（不是用户抓的），所以：
+
+    - 新装、换机、没联网都直接有封面，不必等一轮抓取；
+    - 其他人改了某部剧的封面提 PR，合并后重新打包就生效。
+
+    文件本身不复制到数据目录，只在真要显示时才由 :func:`_materialize_cover`
+    补一份到 ``COVER_DIR``（避免每次启动白拷 4 MB）。索引坏了就当没有，
+    绝不影响抓取与本地缓存。
+    """
+    index = config.BUNDLED_COVER_DIR / "index.json"
+    try:
+        stat = index.stat()
+        stamp = (int(stat.st_mtime_ns), int(stat.st_size))
+    except OSError:
+        _BUNDLED_CACHE.update(stamp=None, entries=[], files={})
+        return []
+    if _BUNDLED_CACHE["stamp"] == stamp:
+        return list(_BUNDLED_CACHE["entries"])
+    entries: list[tuple[str, str]] = []
+    files: dict[str, set[str]] = {}
+    try:
+        data = json.loads(index.read_text(encoding="utf-8"))
+        for item in data.get("covers") or []:
+            name = str(item.get("file") or "").strip()
+            if not name:
+                continue
+            titles = [str(item.get("title") or "").strip()]
+            titles += [str(a or "").strip() for a in (item.get("aliases") or [])]
+            for title in titles:
+                if title:
+                    entries.append((title, name))
+                    # 文件名 → 作品键：用于判断这张图是否被用户「清除」过
+                    files.setdefault(name, set()).add(_norm_key(cover_key(title)))
+    except Exception:
+        entries, files = [], {}
+    _BUNDLED_CACHE.update(stamp=stamp, entries=entries, files=files)
+    return list(entries)
+
+
+def all_cover_entries() -> list[tuple[str, str]]:
+    """本机已落库封面 + 随包资产；前者优先（用户抓到的比公共封面新）。
+
+    被用户「清除封面」过的作品，其资产条目在这里就被剔掉——否则本机已经有
+    同名图时（之前补过一次），仅靠 ``_materialize_cover`` 拦不住，清除等于无效。
+    """
+    entries = subject_covers()
+    cleared = _cleared_keys()
+    for title, name in bundled_covers():
+        if cleared and cleared & _BUNDLED_CACHE["files"].get(name, set()):
+            continue
+        entries.append((title, name))
+    return entries
+
+
+_CLEARED_KEY = "cover_cleared"
+
+
+def _cleared_keys() -> set[str]:
+    """用户显式「清除封面」过的作品键（``_norm_key(cover_key(title))``）。
+
+    公共封面资产会把同名图补回本机；不记这一笔的话「清除封面」永远清不干净。
+    按**作品键**记而不是按文件名：一个作品可能对应资产里的不同文件名。
+    只存几十个字符串，塞进 settings 的 JSON 即可，不另建表。
+    """
+    try:
+        raw = db.get_setting(_CLEARED_KEY, "") or ""
+    except Exception:
+        return set()
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return set()
+    return {str(x) for x in data} if isinstance(data, list) else set()
+
+
+def _mark_cleared(key: str, cleared: bool) -> None:
+    if not key:
+        return
+    keys = _cleared_keys()
+    if cleared:
+        keys.add(key)
+    else:
+        keys.discard(key)
+    try:
+        db.set_setting(_CLEARED_KEY, json.dumps(sorted(keys), ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _materialize_cover(filename: str) -> bool:
+    """资产里有、本机缓存没有时，复制一份到 ``COVER_DIR``。
+
+    只在真正要读这张图时调用。安装目录可能只读，所以方向永远是
+    资产 → 数据目录，绝不反向写。
+    """
+    if not filename:
+        return False
+    cleared = _cleared_keys()
+    if cleared:
+        if not _BUNDLED_CACHE["files"]:
+            bundled_covers()          # 冷启动时先读一次索引，才知道这张图属于哪个作品
+        if cleared & _BUNDLED_CACHE["files"].get(filename, set()):
+            return False              # 用户点过「清除封面」，不要再从公共资产补回来
+    try:
+        dest = config.COVER_DIR / filename
+        if dest.is_file() and dest.stat().st_size > 512:
+            return True
+        src = config.BUNDLED_COVER_DIR / filename
+        if not src.is_file():
+            return False
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_suffix(dest.suffix + ".part")
+        tmp.write_bytes(src.read_bytes())
+        tmp.replace(dest)
+        return True
+    except OSError:
+        return False
+
+
 def _cover_file_ok(filename: str) -> bool:
     if not filename:
         return False
     path = config.COVER_DIR / filename
     try:
-        return path.is_file() and path.stat().st_size > 512
+        if path.is_file() and path.stat().st_size > 512:
+            return True
     except OSError:
-        return False
+        pass
+    # 本机缓存没有：从随包资产补一份（离线、一次性）
+    return _materialize_cover(filename)
 
 
 def cover_index(entries: list[tuple[str, str]] | None) -> tuple[dict, dict]:
@@ -865,8 +1000,9 @@ def resolve_cover(title: str, entries: list[tuple[str, str]] | None = None) -> s
     抓取时的标题（导入清单 / media_files）与剧集墙卡片标题（树分组 label）可能带了
     不同的季标记或后缀，只按哈希查会漏。顺序：
     原哈希 → 去季标记哈希 → subjects 精确匹配 → subjects 去季精确 → subjects 包含匹配。
+    条目默认是「本机已落库 + 随包资产」（见 :func:`all_cover_entries`）。
     """
-    entries = subject_covers() if entries is None else entries
+    entries = all_cover_entries() if entries is None else entries
     return resolve_cover_many([("", [title])], entries).get("", "")
 
 
@@ -877,7 +1013,7 @@ def resolve_cover_many(pairs: list[tuple[str, list[str]]],
     剧集墙一次要解析近 200 张卡，逐张调用会把 subjects 索引重复构建 200 次；
     这里索引与「文件存在」检查都只做一次。
     """
-    entries = subject_covers() if entries is None else entries
+    entries = all_cover_entries() if entries is None else entries
     exact, base = cover_index(entries)
     exists: dict[str, bool] = {}
 

@@ -93,6 +93,7 @@ def build_exe() -> Path:
         "--workpath", str(BUILD / "pyi-work"),
         "--specpath", str(BUILD / "pyi-spec"),
         "--add-data", f"{ROOT / 'web'}{sep}web",
+        "--add-data", f"{ROOT / 'assets'}{sep}assets",
         "--add-data", f"{ROOT / 'app' / 'data'}{sep}app/data",
         "--add-data", f"{ROOT / 'docs'}{sep}docs",
         "--add-data", f"{ROOT / 'CHANGELOG.md'}{sep}.",

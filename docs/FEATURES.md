@@ -1064,3 +1064,41 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 - `installer/verify_install_flow.py --static`：不需要 WiX 与 PyInstaller 产物，核对「目录 Id 全大写 / WIXUI_INSTALLDIR 一致 / Secure=yes / MajorUpgrade / InstallPath 写入 + RegistrySearch 回读 / ARPINSTALLLOCATION 走 Type 51」；已纳入单测，防止「又装回 C 盘」这类回归拖到发版后才暴露。
 - 真机 7 步清单（干净环境安装 → 带路径升级 → 卸载 → 重装）由脚本 `MANUAL_CHECKLIST` 打印，**必须人工执行一次**，自动化覆盖不到。
+
+---
+
+## 29. 公共封面资产随包分发 + PR 更新（2026-11-16）
+
+### 29-A 为什么要有这一层
+
+封面原来只存在 `<数据目录>/covers/`，属于本机缓存：换机器、新装、离线时全都没有，
+别人也没法贡献。现在把已抓到的封面**导进仓库**，随安装包一起分发。
+
+| # | 验收标准 |
+|---|---|
+| 29-A1 | `assets/covers/` 含图片与 `index.json`（`{file,title,aliases,source,cover_url,sha256,bytes,updated_at}`），`count` 与条目数一致 |
+| 29-A2 | 打包时 `--add-data assets:assets`，安装包内 `_internal/assets/covers/` 可见；新装即有封面，**不需要联网抓一次** |
+| 29-A3 | 运行期只做**单向**复制：本机 `COVER_DIR` 缺这张图时才从资产补一份；本机已有（含手工封面）一律优先，绝不反向写安装目录 |
+| 29-A4 | 资产缺失 / `index.json` 损坏 / 清单里有但图片被删：一律静默降级为「没有封面」，不影响抓取与本地缓存 |
+| 29-A5 | 手工封面（`source='manual'`）**不进公共资产**，否则「清除封面」会被资产复活 |
+| 29-A6 | 导出脚本 `export_covers.py`：默认只导出本机已落库的非手工封面、**不删除**资产里已有文件（别人 PR 进来的不会被本地导出冲掉）；`--refresh-index` 只重算 `sha256`/`bytes` |
+| 29-A7 | **清除封面后不会被资产复活**：清除时按作品键记一条墓碑（`settings.cover_cleared`），解析层直接剔除该作品的资产条目，本机已补过的同名图也不再用；重新设定/重新抓取封面即自动解墓碑 |
+
+### 29-B 协作流程
+
+- **换某部剧的封面**：在 `index.json` 里按作品名找到 `file` → 用新图覆盖同名 jpg →
+  `python export_covers.py --refresh-index` → 提 PR。改动只有「一张图 + 一条哈希」。
+- **新增作品**：图片放 `assets/covers/`，`index.json` 加一条，跑 `--refresh-index` 补齐哈希。
+- 细则写在 `assets/covers/README.md`（尺寸、命名、不要放什么、版权提示）。
+
+### 29-C 实现要点
+
+- `app/config.py::BUNDLED_COVER_DIR = RESOURCE_DIR / "assets" / "covers"`（源码版是项目根，打包版是 `_internal/`）。
+- `app/covers.py` 新增 `bundled_covers()`（按 `index.json` 的 mtime+size 缓存，同时建
+  「文件名 → 作品键」反查表）与 `all_cover_entries()`（本机已落库在前、资产在后，
+  `cover_index` 用 `setdefault` 保证前者优先；已清除的作品在这里就被剔除）。
+- `_cover_file_ok()` 在本机缺图时调 `_materialize_cover()`：读资产 → 写 `.part` → `replace` 原子落盘，
+  `OSError` 一律吞掉（只读安装目录也不能让封面功能崩）。
+- `Api.cover_data_uris()` 改用 `all_cover_entries()`，剧集墙/媒体库/看过的列表共用同一套解析。
+- 单测隔离：`tests/base.py` 把 `BUNDLED_COVER_DIR` 一并纳入临时目录替换，避免仓库里的真实图片
+  影响既有用例；`reset_module_state()` 清 `_BUNDLED_CACHE`。

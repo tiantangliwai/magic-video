@@ -72,6 +72,9 @@ APP_DIR = RESOURCE_DIR
 WEB_DIR = RESOURCE_DIR / "web"
 DB_PATH = DATA_DIR / "library.db"
 COVER_DIR = DATA_DIR / "covers"
+# 随包分发的公共封面资产（仓库 assets/covers/，含 index.json）。
+# 只读来源：仅在 COVER_DIR 缺图时单向复制过去，绝不反向写安装目录。
+BUNDLED_COVER_DIR = RESOURCE_DIR / "assets" / "covers"
 LOG_DIR = DATA_DIR / "logs"
 BUILTIN_ALIAS_FILE = RESOURCE_DIR / "app" / "data" / "aliases_builtin.json"
 ALIAS_IMPORT_FILE = DATA_DIR / "alias_import.json"

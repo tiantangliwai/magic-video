@@ -1804,7 +1804,7 @@ class Api:
         import base64
         import mimetypes
         out: dict[str, str] = {}
-        entries = covers.subject_covers()      # 一次查库，避免每张卡片一次 SQL
+        entries = covers.all_cover_entries()   # 一次查库 + 读随包资产索引，避免每张卡片一次 SQL
         for title in (titles or [])[:400]:
             name = covers.resolve_cover(str(title), entries)
             if not name:

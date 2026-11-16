@@ -1,0 +1,972 @@
+{
+  "schema": 1,
+  "note": "封面资产清单：替换图片后请同步本条的 sha256 / bytes / updated_at，可用 export_covers.py --refresh-index 自动重算",
+  "count": 80,
+  "generated_at": "2026-11-16 23:11:42",
+  "covers": [
+    {
+      "file": "ae28d343db1a34c556ff.jpg",
+      "title": "2.5次元的诱惑",
+      "aliases": [
+        "2.5次元的诱惑"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:47:05",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "b831386ac5151f96f216.jpg",
+      "title": "After Story",
+      "aliases": [
+        "After Story"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:54",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "893480e49d9824fec051.jpg",
+      "title": "CLANNAD",
+      "aliases": [
+        "CLANNAD"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20070020.jpg",
+      "updated_at": "2026-11-15 11:17:08",
+      "sha256": "39f084a69581086acbf21a91026ebb17fd134ca33d7ce2328b7f6ed993ecdeee",
+      "bytes": 25589
+    },
+    {
+      "file": "dc4ab5305a6985741189.jpg",
+      "title": "GATE 奇幻自卫队",
+      "aliases": [
+        "GATE 奇幻自卫队"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20160064.jpg",
+      "updated_at": "2026-11-15 11:31:46",
+      "sha256": "5fe853a95edcf5c91ae60be15127bda7fc079a5658e52272e214cc73cf876635",
+      "bytes": 71137
+    },
+    {
+      "file": "3dd48711dea8baa65701.jpg",
+      "title": "Little Busters",
+      "aliases": [
+        "Little Busters"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20130099.jpg",
+      "updated_at": "2026-11-15 11:35:55",
+      "sha256": "8cb7e3170b01bab01a6723807e0172f4a00a76b864a50f50dd7be3aa4d973f54",
+      "bytes": 51747
+    },
+    {
+      "file": "0126e86c0132c7eac439.jpg",
+      "title": "Nagasarete Airantou 蓝兰岛漂流记",
+      "aliases": [
+        "Nagasarete Airantou 蓝兰岛漂流记"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:47:07",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "d3814fcaf5f0939fce50.jpg",
+      "title": "Re 从零开始的异世界生活",
+      "aliases": [
+        "Re 从零开始的异世界生活"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20160005.jpg",
+      "updated_at": "2026-11-15 17:47:09",
+      "sha256": "d2f7b9ae90e9eedced0202b897b736745abf0e7f60e284f907a29303d7b6d718",
+      "bytes": 81400
+    },
+    {
+      "file": "2b020927d3c6eb407223.jpg",
+      "title": "START",
+      "aliases": [
+        "START"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg2.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260332.jpg",
+      "updated_at": "2026-11-15 11:18:59",
+      "sha256": "e372513375143a76eed33a7766048018741aa210b0cfaeaeb4d3c9039e668761",
+      "bytes": 87688
+    },
+    {
+      "file": "371243c9dec21c3ec96e.jpg",
+      "title": "THE NEW GATE",
+      "aliases": [
+        "THE NEW GATE"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240048.jpg",
+      "updated_at": "2026-11-15 11:17:59",
+      "sha256": "1fc7aba9331919bcf2d3b5368c7f54a779b86c1ceb5e00e29437a681d9742cf2",
+      "bytes": 58607
+    },
+    {
+      "file": "b826ff7df43f0a81bfc8.jpg",
+      "title": "Trouble Darkness 2nd",
+      "aliases": [
+        "Trouble Darkness 2nd"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20120025.jpg",
+      "updated_at": "2026-11-15 17:48:55",
+      "sha256": "48726413166584f8b489512acf537372e1d76d9a46415a86a502b6ceedc1314f",
+      "bytes": 65725
+    },
+    {
+      "file": "9703864cb44660d732da.jpg",
+      "title": "Welcome to the NHK",
+      "aliases": [
+        "Welcome to the NHK"
+      ],
+      "source": "seeduck",
+      "cover_url": "https://sh1.pcie.pppoe.top/static/pics/p179369835669024194.webp",
+      "updated_at": "2026-11-15 17:50:31",
+      "sha256": "6a2672335afa7c63412f02e26af8866497039bdf3d3337e44abedc48c5c651fc",
+      "bytes": 19550
+    },
+    {
+      "file": "76147eddebc69917a9db.jpg",
+      "title": "stars",
+      "aliases": [
+        "stars"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20210164.jpg",
+      "updated_at": "2026-11-15 11:19:35",
+      "sha256": "31f3f002aa056c44ed57fc4bcd950a0cebe8480d2b06e8423acbdeccda42ad7c",
+      "bytes": 71183
+    },
+    {
+      "file": "c2664b6e3a30301beae4.jpg",
+      "title": "【我推的孩子】 第三季",
+      "aliases": [
+        "【我推的孩子】 第三季"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260015.jpg",
+      "updated_at": "2026-11-15 11:21:36",
+      "sha256": "abe30ef7db0890c7affc4b35159db1ea6f86704fa47c5923d6b203dc68ec07d7",
+      "bytes": 85848
+    },
+    {
+      "file": "616d4f9f4d82b599ba8a.jpg",
+      "title": "【我推的孩子】 第二季",
+      "aliases": [
+        "【我推的孩子】 第二季"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260015.jpg",
+      "updated_at": "2026-11-15 11:21:37",
+      "sha256": "abe30ef7db0890c7affc4b35159db1ea6f86704fa47c5923d6b203dc68ec07d7",
+      "bytes": 85848
+    },
+    {
+      "file": "c1d424823a5d6ffd2c39.jpg",
+      "title": "下-众之-爱 lowlife love",
+      "aliases": [
+        "下-众之-爱 lowlife love"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20080019.jpg",
+      "updated_at": "2026-11-15 17:47:14",
+      "sha256": "4c449fd3db906d10944aef139bfda6ef142ee80b9e777eb78a5aeb85adec0f5e",
+      "bytes": 70334
+    },
+    {
+      "file": "411fa7d43f089f33896a.jpg",
+      "title": "会长是女仆大人Kaichou wa Maid sama",
+      "aliases": [
+        "会长是女仆大人Kaichou wa Maid sama"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:47:15",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "f1e308369e12d3baa051.jpg",
+      "title": "关于我转生变成史莱姆这档事 S",
+      "aliases": [
+        "关于我转生变成史莱姆这档事 S"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20180220.jpg",
+      "updated_at": "2026-11-15 15:42:19",
+      "sha256": "812bf5b497c4b1f94efe59a7c32c1acfc2c3e11c0838f898d5fd890901baec23",
+      "bytes": 75453
+    },
+    {
+      "file": "4f4cd02b9625f0ed2ece.jpg",
+      "title": "关于我转生变成史莱姆这档事 S S3",
+      "aliases": [
+        "关于我转生变成史莱姆这档事 S S3"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20180220.jpg",
+      "updated_at": "2026-11-15 11:21:57",
+      "sha256": "812bf5b497c4b1f94efe59a7c32c1acfc2c3e11c0838f898d5fd890901baec23",
+      "bytes": 75453
+    },
+    {
+      "file": "2ea99cf53307cfee8359.jpg",
+      "title": "出包王女",
+      "aliases": [
+        "出包王女"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20100014.jpg",
+      "updated_at": "2026-11-15 11:22:02",
+      "sha256": "0531d8f5bbfb88c3a0257d9fa75ba6bb0ce2a6211e67767fb491b918e017add2",
+      "bytes": 69055
+    },
+    {
+      "file": "702d1595e9005a47424d.jpg",
+      "title": "双星之阴阳师Sousei no Onmyouji",
+      "aliases": [
+        "双星之阴阳师Sousei no Onmyouji"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:47:16",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "55d6c1dacb75132ec87d.jpg",
+      "title": "在异世界获得超强能力的我，在现实世界照样无敌",
+      "aliases": [
+        "在异世界获得超强能力的我，在现实世界照样无敌"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260138.jpg",
+      "updated_at": "2026-11-15 11:22:24",
+      "sha256": "7d21c78d745808eb9e1443c46c8595305f9c3a621119c957600a91d867bf4e59",
+      "bytes": 36138
+    },
+    {
+      "file": "5b57275f2b94868c80e4.jpg",
+      "title": "天元突破 Tengen Toppa Gurren Lagann",
+      "aliases": [
+        "天元突破 Tengen Toppa Gurren Lagann"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20090048.jpg",
+      "updated_at": "2026-11-15 17:47:21",
+      "sha256": "4bc5ed41b2cd082eeb2228dab4e7b0753a2793e678b7611f44edad0476a635ea",
+      "bytes": 58193
+    },
+    {
+      "file": "84fa9fcfc9ab5c0b3b0d.jpg",
+      "title": "完結",
+      "aliases": [
+        "完結"
+      ],
+      "source": "seeduck",
+      "cover_url": "https://sh1.pcie.pppoe.top/static/pics/p178865113299542666.webp",
+      "updated_at": "2026-11-15 11:32:36",
+      "sha256": "7eb423b1d18430800d58f7aa8f5ef4e17770aaf5973687058740d515e7c6c3c7",
+      "bytes": 26258
+    },
+    {
+      "file": "44698763698d1a32236d.jpg",
+      "title": "希德尼娅的骑士",
+      "aliases": [
+        "希德尼娅的骑士"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20150064.jpg",
+      "updated_at": "2026-11-15 11:32:45",
+      "sha256": "a8fa94f6cbcc1179b7fba141ee96fc28431406ff30ce36892af5770d7ff8c7ed",
+      "bytes": 57423
+    },
+    {
+      "file": "c56942a0111365424717.jpg",
+      "title": "帝乃三姐妹原来很好搞定",
+      "aliases": [
+        "帝乃三姐妹原来很好搞定"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:47:24",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "e894d9f242cf7a0e8aad.jpg",
+      "title": "平凡职业造就世界最强",
+      "aliases": [
+        "平凡职业造就世界最强"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg2.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240157.jpg",
+      "updated_at": "2026-11-15 11:23:00",
+      "sha256": "a9a9744f1457e4d4017a54b92487ee4bc3b079ee4397c42d8457d70791bce332",
+      "bytes": 69077
+    },
+    {
+      "file": "bedda8860c60fc2342f1.jpg",
+      "title": "弹珠汽水瓶里的千岁同学",
+      "aliases": [
+        "弹珠汽水瓶里的千岁同学"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260298.jpg",
+      "updated_at": "2026-11-15 15:43:12",
+      "sha256": "2a6916f337a5ee7fa8ea987ccc3478c479cc984626b83ed827d610d8c5fbffb6",
+      "bytes": 84888
+    },
+    {
+      "file": "00eaf1e165d3435c351c.jpg",
+      "title": "归还者的魔法要特别",
+      "aliases": [
+        "归还者的魔法要特别"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260299.jpg",
+      "updated_at": "2026-11-15 15:43:13",
+      "sha256": "78fa4e26afdeaf2f9eebd116f7504ea3b94f2825613721ed4ff480ad468e5487",
+      "bytes": 76883
+    },
+    {
+      "file": "604d3fff7ce64798627c.jpg",
+      "title": "归还者的魔法要特别 第二季",
+      "aliases": [
+        "归还者的魔法要特别 第二季"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260299.jpg",
+      "updated_at": "2026-11-15 11:23:10",
+      "sha256": "78fa4e26afdeaf2f9eebd116f7504ea3b94f2825613721ed4ff480ad468e5487",
+      "bytes": 76883
+    },
+    {
+      "file": "fb20055a583b27d95c92.jpg",
+      "title": "征服",
+      "aliases": [
+        "征服"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20250175.jpg",
+      "updated_at": "2026-11-15 11:23:11",
+      "sha256": "b3a36e21661e23e8a6960e15b11d4d1a6727975b5d9cc4fb20f51a0326a89928",
+      "bytes": 68468
+    },
+    {
+      "file": "2521a18ede23d7c1c182.jpg",
+      "title": "微笑的闪士",
+      "aliases": [
+        "微笑的闪士"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:47:25",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "b919e986db2bbb1526d4.jpg",
+      "title": "怪兽8号",
+      "aliases": [
+        "怪兽8号"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20250163.jpg",
+      "updated_at": "2026-11-15 11:23:16",
+      "sha256": "779dd57a673c90f64e4a6bfcfb83739027360b64bbb761752da700843d4d57ac",
+      "bytes": 84646
+    },
+    {
+      "file": "727e02890c7bdf273f65.jpg",
+      "title": "成为影之实力者",
+      "aliases": [
+        "成为影之实力者"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20230190.jpg",
+      "updated_at": "2026-11-15 11:23:20",
+      "sha256": "5ad0143e029545c2c6cdbed410ce19016796f38bcd6cc8c0531cfb0ef4819ea1",
+      "bytes": 58100
+    },
+    {
+      "file": "06d7c5edb9d4655af51f.jpg",
+      "title": "新世界之门THE NEW GATE",
+      "aliases": [
+        "新世界之门THE NEW GATE"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240048.jpg",
+      "updated_at": "2026-11-15 17:47:26",
+      "sha256": "1fc7aba9331919bcf2d3b5368c7f54a779b86c1ceb5e00e29437a681d9742cf2",
+      "bytes": 58607
+    },
+    {
+      "file": "00606fae15d6ee097289.jpg",
+      "title": "新妹魔王的契约者",
+      "aliases": [
+        "新妹魔王的契约者"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20150073.jpg",
+      "updated_at": "2026-11-15 11:33:01",
+      "sha256": "90cbfa8e484945c3bc4966daf2f886cac1c00452b1f8c5867a8aac282e6048f9",
+      "bytes": 63275
+    },
+    {
+      "file": "749c72153a12a798047f.jpg",
+      "title": "新妹魔王的契约者 2nd 无修",
+      "aliases": [
+        "新妹魔王的契约者 2nd 无修"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20150073.jpg",
+      "updated_at": "2026-11-15 15:48:21",
+      "sha256": "90cbfa8e484945c3bc4966daf2f886cac1c00452b1f8c5867a8aac282e6048f9",
+      "bytes": 63275
+    },
+    {
+      "file": "1a9b3151b91a7576f1b3.jpg",
+      "title": "新妹魔王的契约者 DEPARTURES 无修",
+      "aliases": [
+        "新妹魔王的契约者 DEPARTURES 无修"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20150073.jpg",
+      "updated_at": "2026-11-15 15:48:23",
+      "sha256": "90cbfa8e484945c3bc4966daf2f886cac1c00452b1f8c5867a8aac282e6048f9",
+      "bytes": 63275
+    },
+    {
+      "file": "30aec9701f55e1eb20f6.jpg",
+      "title": "新妹魔王的契约者 无修",
+      "aliases": [
+        "新妹魔王的契约者 无修"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20150073.jpg",
+      "updated_at": "2026-11-15 15:48:24",
+      "sha256": "90cbfa8e484945c3bc4966daf2f886cac1c00452b1f8c5867a8aac282e6048f9",
+      "bytes": 63275
+    },
+    {
+      "file": "88841869d712a42cb940.jpg",
+      "title": "更衣人偶坠入爱河",
+      "aliases": [
+        "更衣人偶坠入爱河",
+        "その着せ替え人形は恋をする"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20250168.jpg",
+      "updated_at": "2026-11-15 11:17:37",
+      "sha256": "6991060d017e8ae8835ecd0b5a960033f4d348807defb6f3431b430061e49b19",
+      "bytes": 71899
+    },
+    {
+      "file": "fa7ed2e29095f4f14d6d.jpg",
+      "title": "月光下的异世界之旅",
+      "aliases": [
+        "月光下的异世界之旅"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20230266.jpg",
+      "updated_at": "2026-11-15 11:23:54",
+      "sha256": "c762f8b1ce8a98b6f7f76b8fcce7138334765ccf87e57f7800ccfe3796c8cd53",
+      "bytes": 65887
+    },
+    {
+      "file": "75ce02cd3fdde539ed61.jpg",
+      "title": "某科学的超电磁炮 S",
+      "aliases": [
+        "某科学的超电磁炮 S"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20130044.jpg",
+      "updated_at": "2026-11-15 15:43:50",
+      "sha256": "b187fac2995abefba2a9d4a7367802c674129fee587b5f9686da20a089e0232d",
+      "bytes": 80866
+    },
+    {
+      "file": "702540571ba3245753de.jpg",
+      "title": "某科学的超电磁炮 T",
+      "aliases": [
+        "某科学的超电磁炮 T"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20190069.jpg",
+      "updated_at": "2026-11-15 15:43:51",
+      "sha256": "dc2adab285b9d4944026c48008f3c9d278690d74a2c56940571002d95acd1105",
+      "bytes": 66235
+    },
+    {
+      "file": "8d7ba89b6623526bd87e.jpg",
+      "title": "灵笼",
+      "aliases": [
+        "灵笼"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20250265.jpg",
+      "updated_at": "2026-11-15 11:24:23",
+      "sha256": "75eef210c82c37dad88bea41ecbc6ed4b1abb9c2e5df04c9a98fe1023b92e868",
+      "bytes": 32631
+    },
+    {
+      "file": "ff665915321a4531e6e4.jpg",
+      "title": "灼眼的夏娜",
+      "aliases": [
+        "灼眼的夏娜"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20110056.jpg",
+      "updated_at": "2026-11-15 11:24:25",
+      "sha256": "ac21f36d05521bd631b596b82d5b151e5d3b63320dde24197cffaa400353a35f",
+      "bytes": 62180
+    },
+    {
+      "file": "429fd86867a9e17eddd2.jpg",
+      "title": "燃烧",
+      "aliases": [
+        "燃烧"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240015.jpg",
+      "updated_at": "2026-11-15 11:33:25",
+      "sha256": "2500392f478b8c4f05eaa7f8811bce83c0c3f6994250b7f71aed870f8bb79065",
+      "bytes": 62141
+    },
+    {
+      "file": "f55f46b2ed9057156853.jpg",
+      "title": "物语系列 第六季 花物语",
+      "aliases": [
+        "物语系列 第六季 花物语"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240111.jpg",
+      "updated_at": "2026-11-15 17:50:01",
+      "sha256": "716e40b8033bedb82a687f0db9c32987e1b7458fe888abb44a17ad6a581c91ac",
+      "bytes": 53818
+    },
+    {
+      "file": "40a45ef8dab2b1bac6da.jpg",
+      "title": "物语系列 第十一季 历物语",
+      "aliases": [
+        "物语系列 第十一季 历物语"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240111.jpg",
+      "updated_at": "2026-11-15 17:50:02",
+      "sha256": "716e40b8033bedb82a687f0db9c32987e1b7458fe888abb44a17ad6a581c91ac",
+      "bytes": 53818
+    },
+    {
+      "file": "631ca1560f984ef054a7.jpg",
+      "title": "物语系列 第十三季 续·终物语",
+      "aliases": [
+        "物语系列 第十三季 续·终物语"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240111.jpg",
+      "updated_at": "2026-11-15 17:50:04",
+      "sha256": "716e40b8033bedb82a687f0db9c32987e1b7458fe888abb44a17ad6a581c91ac",
+      "bytes": 53818
+    },
+    {
+      "file": "3dd4ff5bb39e32484147.jpg",
+      "title": "物语系列 第十二季 终物语",
+      "aliases": [
+        "物语系列 第十二季 终物语"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240111.jpg",
+      "updated_at": "2026-11-15 17:50:05",
+      "sha256": "716e40b8033bedb82a687f0db9c32987e1b7458fe888abb44a17ad6a581c91ac",
+      "bytes": 53818
+    },
+    {
+      "file": "6c95d034cd7b769deb4b.jpg",
+      "title": "物语系列 第十季 凭物语",
+      "aliases": [
+        "物语系列 第十季 凭物语"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240111.jpg",
+      "updated_at": "2026-11-15 17:50:07",
+      "sha256": "716e40b8033bedb82a687f0db9c32987e1b7458fe888abb44a17ad6a581c91ac",
+      "bytes": 53818
+    },
+    {
+      "file": "cde45b7bd2e2ac540a5b.jpg",
+      "title": "物语系列 第四季 猫物语",
+      "aliases": [
+        "物语系列 第四季 猫物语"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20240111.jpg",
+      "updated_at": "2026-11-15 17:50:08",
+      "sha256": "716e40b8033bedb82a687f0db9c32987e1b7458fe888abb44a17ad6a581c91ac",
+      "bytes": 53818
+    },
+    {
+      "file": "71011ca108d4eed9d77b.jpg",
+      "title": "犬屋敷",
+      "aliases": [
+        "犬屋敷"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:32",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "fd926754cbf49e59a04e.jpg",
+      "title": "现实主义勇者的王国再建记",
+      "aliases": [
+        "现实主义勇者的王国再建记"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20220049.jpg",
+      "updated_at": "2026-11-15 11:34:16",
+      "sha256": "5b5fcdc0bbdacdd520988409e6887116c0b589376f7df127b857af146a5991a1",
+      "bytes": 42270
+    },
+    {
+      "file": "89d5be625cab62da3d3e.jpg",
+      "title": "甲铁城的卡巴内利",
+      "aliases": [
+        "甲铁城的卡巴内利"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20190123.jpg",
+      "updated_at": "2026-11-15 11:34:17",
+      "sha256": "4ced156febe24ed02ba6be6ecef6d070b4208e22e1b7ea4c1f6fdbd86536dccb",
+      "bytes": 71886
+    },
+    {
+      "file": "b3b2c935e10cb81d89e7.jpg",
+      "title": "白色相簿",
+      "aliases": [
+        "白色相簿"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg1.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20090011.jpg",
+      "updated_at": "2026-11-15 11:17:08",
+      "sha256": "349b21ca202ba17c13a8f40d708e6e179de43eadbb349fb8113cec5df32ae4ef",
+      "bytes": 53929
+    },
+    {
+      "file": "9d105dc41dd99859cf1b.jpg",
+      "title": "石纪元",
+      "aliases": [
+        "石纪元"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260088.jpg",
+      "updated_at": "2026-11-15 11:34:28",
+      "sha256": "764786cd8c546d776f7d8aae430f0682ac26bfe6ca8fe864b85e9839c272988f",
+      "bytes": 39251
+    },
+    {
+      "file": "fd8b5c97ee36d2fe655f.jpg",
+      "title": "神明庭院",
+      "aliases": [
+        "神明庭院"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:34",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "e205ede7f7c5d6c2206a.jpg",
+      "title": "紫罗兰永恒花园",
+      "aliases": [
+        "紫罗兰永恒花园",
+        "ヴァイオレット・エヴァーガーデン"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg2.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20190002.jpg",
+      "updated_at": "2026-11-15 11:17:41",
+      "sha256": "e7db394d4b7b99ead8ed686bf3069e10fb7dd47c5eec0c12e4da1eee99e148b4",
+      "bytes": 60052
+    },
+    {
+      "file": "a3af6d65bd4f3afd676b.jpg",
+      "title": "红线",
+      "aliases": [
+        "红线",
+        "REDLINE"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:36",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "897d000ae82a382295d7.jpg",
+      "title": "终末的后宫",
+      "aliases": [
+        "终末的后宫"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:38",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "a9250834cf8eb3d28728.jpg",
+      "title": "终结的炽天使",
+      "aliases": [
+        "终结的炽天使"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20150070.jpg",
+      "updated_at": "2026-11-15 11:25:21",
+      "sha256": "4b508ea6cf7b4d686e8c887bdc469ff59a790473e39802a0228bcb46b9e36d8b",
+      "bytes": 69710
+    },
+    {
+      "file": "25c9552c833992de70a1.jpg",
+      "title": "绝对双刃",
+      "aliases": [
+        "绝对双刃"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:39",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "72c00a47ae37246c3475.jpg",
+      "title": "缘之空",
+      "aliases": [
+        "缘之空"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:39",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "bdad879d8486c469a724.jpg",
+      "title": "葬送的芙莉莲",
+      "aliases": [
+        "葬送的芙莉莲",
+        "葬送のフリーレン"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260029.jpg",
+      "updated_at": "2026-11-15 11:17:08",
+      "sha256": "d5cc123007862919890abe1cb96db5d2bc4b67a12da0c5dc771c86911b5f0929",
+      "bytes": 76908
+    },
+    {
+      "file": "63ac715fb0388400d152.jpg",
+      "title": "赤龙战役",
+      "aliases": [
+        "赤龙战役"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:41",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "cd289b4c60baeb8caf63.jpg",
+      "title": "超时空辉夜姬",
+      "aliases": [
+        "超时空辉夜姬"
+      ],
+      "source": "seeduck",
+      "cover_url": "https://sh1.pcie.pppoe.top/static/pics/p1769792627566716786.jpg",
+      "updated_at": "2026-11-15 17:48:43",
+      "sha256": "e465ff47f08ba98e1a72417155e8b8e120af470a056ecac4aebcd29516337712",
+      "bytes": 28488
+    },
+    {
+      "file": "c7b8abd8eb02b5339a01.jpg",
+      "title": "超超超超超喜欢你的100个女朋友",
+      "aliases": [
+        "超超超超超喜欢你的100个女朋友"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg2.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260182.jpg",
+      "updated_at": "2026-11-15 11:35:17",
+      "sha256": "f4fcf1813c2f20d94a45cdb602a4f431403d6fd1991167282761a4c544dcf580",
+      "bytes": 64926
+    },
+    {
+      "file": "c19ae47790f3b6560ae1.jpg",
+      "title": "迷你动画",
+      "aliases": [
+        "迷你动画"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20210259.jpg",
+      "updated_at": "2026-11-15 11:35:18",
+      "sha256": "300d957fa574f6ade8c77e95080cbc1b9a51b68e27c5bdc9feb99750eebecac0",
+      "bytes": 36811
+    },
+    {
+      "file": "b5740c31b346df5da54a.jpg",
+      "title": "野良神",
+      "aliases": [
+        "野良神"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg2.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20150027.jpg",
+      "updated_at": "2026-11-15 11:35:24",
+      "sha256": "5f2e57557cc8e8f29caf719930f9004cfa62f206da681703be24c81df6816b85",
+      "bytes": 58669
+    },
+    {
+      "file": "0283efcdcb3307402e57.jpg",
+      "title": "间谍过家家",
+      "aliases": [
+        "间谍过家家"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg2.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20250227.jpg",
+      "updated_at": "2026-11-15 11:17:08",
+      "sha256": "49abd65bbf7f7e40c7055093ed2e3fd75f2f602f2c5fcf955c213e3135eb03f7",
+      "bytes": 1024
+    },
+    {
+      "file": "8192fa2b270c3a8cd255.jpg",
+      "title": "间谍过家家 代号白",
+      "aliases": [
+        "间谍过家家 代号白"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:45",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "63fdacd99c40264639c4.jpg",
+      "title": "陷阱",
+      "aliases": [
+        "陷阱"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg0.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20000275.jpg",
+      "updated_at": "2026-11-15 11:25:58",
+      "sha256": "c813dad63537df959e3c04af8c49ce8acb395500fe795f8739bfa5eb98d83c36",
+      "bytes": 62042
+    },
+    {
+      "file": "171f19fd99382dad2c4b.jpg",
+      "title": "零之使魔",
+      "aliases": [
+        "零之使魔"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20080003.jpg",
+      "updated_at": "2026-11-15 15:45:20",
+      "sha256": "b88eb7a19439dbfc2f063e05c4d1f706fa94d997544e88e5cd95347bb5c4991d",
+      "bytes": 63864
+    },
+    {
+      "file": "3ad874d5a68556680a14.jpg",
+      "title": "零之使魔 F",
+      "aliases": [
+        "零之使魔 F"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20080003.jpg",
+      "updated_at": "2026-11-15 17:48:46",
+      "sha256": "b88eb7a19439dbfc2f063e05c4d1f706fa94d997544e88e5cd95347bb5c4991d",
+      "bytes": 63864
+    },
+    {
+      "file": "c43839c9e966c5f16057.jpg",
+      "title": "魔法禁书目录",
+      "aliases": [
+        "魔法禁书目录"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20180198.jpg",
+      "updated_at": "2026-11-15 15:45:40",
+      "sha256": "be4603e37af74b4a4af6cb8390b081b7dba4a49c256c8fbbc9c6fada2ea95f4f",
+      "bytes": 77047
+    },
+    {
+      "file": "3d3c1ff0ffd28f69ebbf.jpg",
+      "title": "魔法禁书目录 II",
+      "aliases": [
+        "魔法禁书目录 II"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg2.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20090022.jpg",
+      "updated_at": "2026-11-15 17:48:51",
+      "sha256": "6fee4bd63ae57af115ece05247e5293a00c05c35e900f625e781a431a7727959",
+      "bytes": 62049
+    },
+    {
+      "file": "b9f9adc0772052dde5eb.jpg",
+      "title": "魔法禁书目录 剧场版：恩底弥翁的奇迹",
+      "aliases": [
+        "魔法禁书目录 剧场版：恩底弥翁的奇迹"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:53",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "d7437b3d20519a00057c.jpg",
+      "title": "魔王",
+      "aliases": [
+        "魔王"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg4.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20260324.jpg",
+      "updated_at": "2026-11-15 15:45:46",
+      "sha256": "a51dbc76d5e68c5e97ed9d4472275e3aecce9cf1ee9eb6af2d34408dd90bfece",
+      "bytes": 90288
+    },
+    {
+      "file": "9fa2664233048fa12c5c.jpg",
+      "title": "魔都精兵的奴隶 S",
+      "aliases": [
+        "魔都精兵的奴隶 S"
+      ],
+      "source": "agedm",
+      "cover_url": "https://p1.bdxiguaimg.com/origin/137860000e3053288f11f",
+      "updated_at": "2026-11-15 17:48:53",
+      "sha256": "b7eff99073113d459da11baff1f2fe85452683371d6941018ba8455ac78363bd",
+      "bytes": 5887
+    },
+    {
+      "file": "a33ed15d0e4412514177.jpg",
+      "title": "黑岩射手",
+      "aliases": [
+        "黑岩射手"
+      ],
+      "source": "agedm",
+      "cover_url": "https://gimg3.baidu.com/gimg/app=2001&n=0&g=0n&fmt=jpeg&src=https%3A%2F%2Fcdn.aqdstatic.com%3A966%2Fage%2Fcovers%2F20220058.jpg",
+      "updated_at": "2026-11-15 15:45:50",
+      "sha256": "780cca9ec3e97d6df4a72eaee05215bfeb954d20356d39137b6d1a6f920c1bd9",
+      "bytes": 31397
+    }
+  ]
+}

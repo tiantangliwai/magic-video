@@ -442,6 +442,7 @@ python run_tests.py
 | 功能规格、优化建议、自测报告 | `docs/*.md` | ✅ |
 | 应用代码 / 前端 / 单元测试 | `app/`、`web/`、`tests/`、`*.py` | ✅ |
 | 离线词典（随程序自带） | `app/data/aliases_builtin.json` | ✅ |
+| 公共封面资产（随程序自带，可被 PR 更新） | `assets/covers/`（图片 + `index.json`） | ✅ |
 | 运行数据库 / 封面 / 日志 / 测试结果快照 / 同步历史 | `data/` | ❌ 已忽略 |
 | 项目工作日志与长期笔记 | `.workbuddy/memory/` | ❌ 已忽略 |
 | Obsidian 同步笔记 | vault 内 `Magic Video/`（仓库之外） | ❌ 不入库、不受 git 管理 |
