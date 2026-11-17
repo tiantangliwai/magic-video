@@ -1,7 +1,7 @@
 # AGENTS.md · 给 AI Agent 的项目协作约定
 
 > 本文件是 **AI Agent 在本仓库工作时的第一优先级约定**。与直觉冲突时，以本文件为准。
-> 当前版本：**v0.1.6**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
+> 当前版本：**v0.1.7**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
 > 适用环境：Windows 10/11、Python 3.13、项目根目录 `D:\project\magic video`
 
 > 🚨 **测试铁律（用户 2026-11-15 二次纠正「怎么又开始全量跑单元测试了」，违反即算做错）**
@@ -185,7 +185,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 - 提交信息与回复里要如实区分「本地已提交」和「已推送到远端」，不能把未推送说成已推送。
 - 有未推送的本地提交时，只在回复里列出 commit 号提醒用户，**不要擅自代推**。
 
-**版本号只在发版时变**：两次发版之间的多个需求共用同一个 `__version__`（当前 `0.1.6`），`tests/test_docs.py` 的版本一致性守护不会因日常提交而失败。不要为「记录进度」提前改版本或提前打 tag；已有 `v0.1.0`~`v0.1.6` 保持不动，不回溯、不删除。
+**版本号只在发版时变**：两次发版之间的多个需求共用同一个 `__version__`（当前 `0.1.7`），`tests/test_docs.py` 的版本一致性守护不会因日常提交而失败。不要为「记录进度」提前改版本或提前打 tag；已有 `v0.1.0`~`v0.1.7` 保持不动，不回溯、不删除。
 
 ### 3.1 规则
 
@@ -400,7 +400,7 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 | 封面源 | **两个搜索 URL 实测均 200 可用**：AGE动漫 `www.agedm.io/search?query=`（`data-original` 是百度代理，`src` 是共用占位图，必须排除）与 Seeduck `seeduck.cc/s/<kw>/`（`<h2>` 短标题 + `img src` 真封面）。旧结论「搜索被 CF 拦、只能用首页池」已作废。本机 Python 需 `verify=False` |
 | 数据目录 | `./start` / 安装版 / 守护 / 开机自启 = `D:\magicvideo`（D 盘，真实库，2026-11-15 由 `%APPDATA%\Magic Video` 迁移，旧目录保留）；`data/dev` 是 `dev.bat` 的安全副本，别把封面/记录只写进副本 |
 | 网络 | 本机直连 `api.bgm.tv` / TMDB / Jikan **超时**；GitHub / pypi 可达 |
-| git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.6` |
+| git / GitHub | `origin = git@github.com:tiantangliwai/magic-video.git`（私有）；SSH 密钥已认证，无 gh CLI / PAT；tag 为 `v0.1.0`~`v0.1.6`（已推送）+ `v0.1.7`（**仅本地**，2026-11-17 只打包未推送） |
 | 打包工具链 | `.venv`（PyInstaller 6.22 / pywebview 6.2 / pythonnet 3.2）、WiX 3.14.1 在 `build/tools/wix/tools`（NuGet 镜像下载）；GitHub Release 直连 SSL 握手失败，改用 NuGet 镜像。**打包前必须先把 `build/pyi-dist/Magic Video` 改成 `Magic Video.prev`**：`COLLECT` 会先删旧目录，该操作被安全删除策略拦下（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`）导致构建失败 |
 | MSI 安装上下文 | 本机即使 `InstallScope="perUser"` 也会以提权方式执行（日志 `MsiRunningElevated=1`、`Privileged=1`），ARP 注册落在 `HKLM\Software\WOW6432Node\...\Uninstall`。因此：① 向导里的公共属性必须 `Secure="yes"` 才会传到执行序列；② 新旧包作用域一致，`MajorUpgrade` 能正常发现并卸载旧版 |
 | Obsidian | `%APPDATA%\obsidian\obsidian.json` 注册 2 个 vault；主库 `C:\Users\Administrator\Documents\Obsidian Vault`，另一个是装修项目专用库（不写） |

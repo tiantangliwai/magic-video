@@ -5,6 +5,36 @@
 
 ---
 
+## [0.1.7] - 2026-11-17
+
+**主题：把 0.1.6 发版后暴露的 4 个「明明改了但用不上」的问题一次性固化进安装包。**
+
+本版无新功能面，只收 4 个修复（含 1 个新能力：封面随包分发）。用例数 **863 → 900**。
+
+### Added
+
+- **剧集墙封面随包分发**：新增 `assets/covers/`（80 张封面 + `index.json`，含 `file/title/aliases/source/cover_url/sha256/bytes/updated_at`）并打入 ZIP / MSI，新装、离线即有封面。解析顺序为**本机缓存优先 → 随包资产补齐**，资产到 `COVER_DIR` 只做单向原子复制，绝不反向写安装目录。配套 `export_covers.py` 导出资产（跳过 `source='manual'`、不删已有资产、`--refresh-index` 重算哈希）与 `assets/covers/README.md` 贡献指南，允许他人提 PR 换图、本地也可用「设为封面 / 强制重抓」换成新图。
+- **清除封面记墓碑**：新增 `settings.cover_cleared`（按作品键），解决「手动清除后又被随包资产复活」；同名本机图也一并剔除。
+
+### Fixed
+
+- **追剧列表词序不同的同一译名匹配不上**：`textmatch.loose_title_hit()` + `watchlist._loose_match()`——常规匹配全落空后走词序容错（纯中文、≥4 汉字、首末二字组命中、字符覆盖 ≥0.9、二字组覆盖 ≥0.6），命中时 `search_keyword` 换成目录里的中文片段。清单「会长大人是女仆」现在能关联磁盘目录「会长是女仆大人」并直接点播。第一版仅比字符集合导致 762 条清单误配 36 条（`nana` 撞 267 个文件），已用硬门槛挡住：**宁漏不错**。
+- **从播放记录同步多插一行「无季标记 + 第 1 季」重复行**：`importer._season_key()` 把 `NULL/0` 折算为 `1`，聚合键与查重 SQL 改为 `COALESCE(NULLIF(season_no,0),1)`（入库仍写原值），`_merge_playback_duplicates()` 同用折算键。真实库清理掉 1 条重复行。
+- **看过的列表改名后历史记录 / 剧集墙仍是旧名**：`Api._sync_media_titles()` 用**改名前的** `title_cn/title` 与媒体行 `display_title` 精确相等定位、季号折算后必须相等、命中 >300 条放弃，写回 `match_by='user'` 防重刮覆盖。`match_by` 语义同时修正为「用户主动改名且新中文名非空 → 一律 `user`」。
+- **发布组串被当成中文名写库**：`textmatch.looks_like_release()` 前置拦截 `KKTV AAC2 0 -BlackTV`、`1080p HEVC`、`[组名]` 这类串，不再污染词典与 `title_cn`。
+
+### Tests
+
+- 用例数 **863 → 900**（全量 900/900，118.7 秒）。新增 `tests/test_covers_bundle.py`（15 例：资产解析、单向复制、墓碑、索引哈希校验）、`tests/test_rename_sync.py`（9 例：同季同步、跨季隔离、发布组串拦截、`match_by` 语义）。
+- `tests/base.py` 的 `_PATCHED_KEYS` 补 `BUNDLED_COVER_DIR`，缓存重置同步加 `files` 键。
+
+### Docs
+
+- `docs/FEATURES.md` 新增 §29（封面随包分发）与 §30（改名传播，30-A1~A7）；`docs/IMPLEMENTATION_NOTES.md` 新增 §12（同步季号折算）与 §13（改名传播与脏名防护，含 13.7 未处理脏数据清单）；`AGENTS.md` 需求基线扩到 **56 条**。
+- ZIP 与 MSI 随版本重新构建。
+
+---
+
 ## [0.1.6] - 2026-11-16
 
 **主题：补数据地基与体验层——从「能追番」变成「记录不丢、可备份、可迁移」。**
