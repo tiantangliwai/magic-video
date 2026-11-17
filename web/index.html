@@ -112,6 +112,15 @@
   </main>
 </div>
 <div class="toast" id="toast"></div>
+<div id="btAlert" style="display:none;position:absolute;right:26px;bottom:78px;max-width:400px;z-index:100;
+  background:var(--surface-2,#252a36);color:var(--text,#fff);border:1px solid var(--border,#3a4150);
+  border-radius:10px;padding:13px 15px;box-shadow:0 8px 28px rgba(0,0,0,.35);font-size:12px;line-height:1.6">
+  <div id="btAlertMsg"></div>
+  <div style="margin-top:9px;display:flex;gap:8px">
+    <button class="btn btn-primary btn-sm" data-action="bt-open-settings">打开蓝牙设置</button>
+    <button class="btn btn-sm" data-action="bt-dismiss">知道了</button>
+  </div>
+</div>
 <script src="app.js?v=0.1.7"></script>
 </body>
 </html>

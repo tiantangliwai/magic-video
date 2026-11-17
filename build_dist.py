@@ -101,6 +101,10 @@ def build_exe() -> Path:
         "--collect-all", "webview",
         "--collect-all", "clr_loader",
         "--collect-all", "pystray",
+        # 蓝牙音箱保障（app/bluetooth.py）：pycaw 封装 CoreAudio COM，comtypes 运行时
+        # 动态生成类型库缓存，两者都要整包收集，否则打包版探测会降级为 error。
+        "--collect-all", "pycaw",
+        "--collect-all", "comtypes",
         "--hidden-import", "clr",
         "--hidden-import", "psutil",
         "--hidden-import", "requests",

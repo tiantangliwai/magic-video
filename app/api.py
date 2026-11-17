@@ -17,7 +17,7 @@ from pathlib import Path
 import psutil
 
 from . import (
-    __version__, autostart, backup, blacklist, config, covers, db, embedded_player,
+    __version__, autostart, backup, blacklist, bluetooth, config, covers, db, embedded_player,
     everything, file_ops, importer, library_tree, listimport, metadata, obsidian,
     potplayer, runtime, scanner, textmatch, theme_native, watchlist, websearch,
 )
@@ -1879,7 +1879,8 @@ class Api:
 
     def save_settings(self, data: dict) -> dict:
         allowed = {
-            "potplayer_path", "poll_interval_sec", "complete_percent", "recording_enabled",
+            "potplayer_path", "poll_interval_sec", "bluetooth_speaker_name",
+            "complete_percent", "recording_enabled",
             # 完成判定四阈值（v0.1.6）：片头忽略秒数 / 最低续播百分比 / 片尾忽略百分比
             "min_resume_percent", "ignore_seconds_at_start", "ignore_percent_at_end",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",
@@ -2263,6 +2264,21 @@ class Api:
         title = record["title_cn"] or record["title_guess"] or record["filename"]
         return path, position, title
 
+    @staticmethod
+    def _with_bluetooth(result: dict) -> dict:
+        """播放成功时挂接蓝牙音箱保障结果，供前端决定是否提示。
+
+        只在 ``ok`` 时探测：文件不存在 / PotPlayer 启动失败时不弹蓝牙提示。
+        probe() 内部对未配置 / 无 pycaw / COM 异常一律静默，绝不影响播放结果。
+        """
+        if result.get("ok"):
+            result["bluetooth"] = bluetooth.probe()
+        return result
+
+    def open_bluetooth_settings(self) -> dict:
+        """前端「一键连接」按钮：打开 Windows 蓝牙设置页。"""
+        return bluetooth.open_bluetooth_settings()
+
     def play_file(self, file_id: int, from_start: bool = False) -> dict:
         try:
             path, position, _title = self._play_target(file_id, from_start)
@@ -2271,7 +2287,7 @@ class Api:
         result = potplayer.play(path, position)
         if result.get("ok"):
             result["position_ms"] = position
-        return result
+        return self._with_bluetooth(result)
 
     def play_external(self, path: str) -> dict:
         """播放一个不在扫描库里的本地文件（Everything 全盘检索结果用）。"""
@@ -2280,7 +2296,7 @@ class Api:
             return {"ok": False, "error": "文件不存在或已被移动"}
         if p.suffix.lower() not in config.VIDEO_EXTS:
             return {"ok": False, "error": "不是受支持的视频文件"}
-        return potplayer.play(str(p), 0)
+        return self._with_bluetooth(potplayer.play(str(p), 0))
 
     # ---------- 播放控制（保留 PotPlayer：WM_COMMAND 指令 + 命令行换片） ----------
     PLAYER_ACTIONS = ("play_pause", "play", "pause", "stop", "fullscreen")
@@ -2382,7 +2398,7 @@ class Api:
         result = embedded_player.play(path, position, rect)
         if result.get("ok"):
             result["title"] = title
-        return result
+        return self._with_bluetooth(result)
 
     def play_embedded_path(self, path: str, rect: dict | None = None) -> dict:
         """全盘快搜结果（不在扫描库）也走软件内播放。"""
@@ -2394,7 +2410,7 @@ class Api:
         result = embedded_player.play(str(p), 0, rect)
         if result.get("ok"):
             result["title"] = p.name
-        return result
+        return self._with_bluetooth(result)
 
     def embed_sync(self, rect: dict | None = None) -> dict:
         return embedded_player.sync(embedded_player.rect_from_css(rect))

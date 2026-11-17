@@ -4,3 +4,5 @@ pystray>=0.19
 Pillow>=10.0
 requests>=2.31
 psutil>=5.9
+comtypes>=1.4.8
+pycaw>=2024.4.17

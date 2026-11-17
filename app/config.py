@@ -91,6 +91,9 @@ IGNORE_NAME_PATTERNS = ("sample", "trailer", "特典", "SP", "NCOP", "NCED", "Me
 DEFAULTS = {
     "potplayer_path": str(POTPLAYER_DEFAULT),
     "poll_interval_sec": 3,
+    # 播放前蓝牙音箱保障（2026-11-17）：填目标音箱名（子串匹配，大小写不敏感），
+    # 起播时若它 ACTIVE 但非默认则切回默认；链路断则提示去系统蓝牙设置。空=禁用。
+    "bluetooth_speaker_name": "",
     # 完成判定四阈值（v0.1.6 可配置）：位置比例 ≥ complete_percent 或剩余比例
     # ≤ ignore_percent_at_end 判已看完并清续播点；位置比例 < min_resume_percent
     # 或播放时长 < ignore_seconds_at_start 秒时不生成续播点。

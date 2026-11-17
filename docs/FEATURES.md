@@ -1268,3 +1268,36 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `tests/test_everything.py`：新增 GBK bytes 解码、UTF-8 兼容、通道正常 0 命中不报降级、通道真失败仍降级 4 例。
 
 **实测**：`search('从零')` → `source=everything-es`、中文路径完整；`search('不存在的词')` → `channel_ok=True`、`degraded=False`、提示「通道正常但没找到匹配」。
+
+---
+
+## 35. 播放前蓝牙音箱保障（2026-11-17）
+
+### 35-A 场景与能力边界
+
+用户用蓝牙音箱看视频，音箱常断联。先厘清一个 Windows 的硬约束（本机只读实测确认）：
+
+| 断联本质 | 系统信号 | 软件能否自动救 |
+|---|---|---|
+| 默认输出被切走（链路还在） | 音箱端点 `Active`，但默认指向别处 | ✅ 能，切默认设备约 5ms |
+| 蓝牙链路真断（休眠/超距/关机） | 端点 `Unplugged` / `NotPresent` | ❌ 不能。Windows **无公开稳定的 A2DP 重连 API**，只能提示用户手动连 |
+
+因此本功能做「自适应」：**能切则切，断链则提示**，绝不假装已连上。核心引擎闭源无法编译进软件的结论不变（同 §22 全盘快搜）。
+
+### 35-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 35-B1 | 设置页「播放器与记录」新增「蓝牙音箱名称」输入（子串匹配、不区分大小写、留空=禁用） |
+| 35-B2 | 点播放起播前探测：目标音箱 `Active` 但非默认 → 自动切为默认；已经是默认 → 无操作；切换成功 toast「已切回…」 |
+| 35-B3 | 目标音箱 `Unplugged/NotPresent` → 弹提示条「当前未连接，请在系统蓝牙设置里连接」+「打开蓝牙设置」按钮（一键 `ms-settings:bluetooth`）+「知道了」 |
+| 35-B4 | 找不到同名设备 → 提示检查设置里的设备名；未配置 / COM 不可用 / 任何异常 → 静默，**绝不影响 PotPlayer 起播** |
+| 35-B5 | 四个起播入口（媒体库、全盘快搜、软件内嵌入×2）统一挂接；播放失败时不弹蓝牙提示 |
+| 35-B6 | 依赖 comtypes + pycaw（纯 Python，随包分发）；测试全程 mock CoreAudio，不碰真实音频设备 |
+
+### 35-C 实现位置
+
+- `app/bluetooth.py`（新）：`probe()` 状态机（disabled/switched/active/link_down/not_found/error）+ `open_bluetooth_settings()`；pycaw 懒加载、COM 调用集中、异常全吞；
+- `app/api.py`：`_with_bluetooth()` 挂接四个播放方法 + `open_bluetooth_settings()` 接口；`bluetooth_speaker_name` 入设置白名单；
+- `web/app.js` / `web/index.html`：设置输入 + `handleBluetoothTip()` 提示条 + 两个 action 分支；
+- `requirements.txt` + `build_dist.py`：新增依赖与 `--collect-all pycaw/comtypes`（否则打包版探测降级为 error）。

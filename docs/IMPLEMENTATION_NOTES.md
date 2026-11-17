@@ -532,3 +532,35 @@ localStorage 不跨启动持久。主题真源只能是 SQLite 的 `settings.the
 
 升级后**必须重启守护进程**，否则新看的片仍不会写 `watched_ms`，只能靠区间估算兜底。
 前端已有「后台进程管理」页可启停守护。
+
+---
+
+## 17. 播放前蓝牙音箱保障（2026-11-17）
+
+### 17.1 为什么不做「自动重连链路」
+
+本机只读实测（pycaw 枚举 47 个渲染/捕获端点）：Aura Studio 5 音箱在诊断期间从
+`Active` 变为 `Unplugged`——真实复现了用户说的断联。查证结论：
+
+- Windows CoreAudio 只公开 `GetDefaultAudioEndpoint`（读），设置默认靠未文档化的
+  `IPolicyConfig`（pycaw 已封装并带 `IPolicyConfigVista` 回退）；切换本身约 5ms、不需管理员。
+- 但「A2DP 链路重建」没有公开 API：WinRT `Windows.Devices.Bluetooth` 面向 BLE/GATT/配对，
+  对经典音频端点无 Connect/Reconnect；UI 自动化点系统托盘极脆弱；`pnputil /restart-device`
+  需管理员且不可控。链路断开时端点进入 `UNPLUGGED`，CoreAudio 里连可切换目标都不存在。
+- 故产品口径定为「切默认 + 断链提示」，如实告诉用户哪些能自动、哪些不能。
+
+### 17.2 挂接点选择
+
+所有起播方式（媒体库 / 继续观看 / 上下集 / 全盘快搜 / 内嵌降级）最终都收敛到
+`app/potplayer.py:play()` 的 `subprocess.Popen`。但直接插在那里会把「探测结果」埋在底层、
+前端拿不到。最终选在 **Api 的四个播放方法**：加 `_with_bluetooth(result)`，仅 `ok` 时
+挂 `result["bluetooth"]`，前端 `playSmart` 两条路径统一 `handleBluetoothTip(r.bluetooth)`。
+一处 helper 四处调用，前端零新增 API 往返。
+
+### 17.3 测试与依赖
+
+`tests/test_bluetooth.py` 通过 mock `bluetooth._audio()` 注入假设备，覆盖 8 个状态分支 +
+API 挂接 + 设置白名单 + 前端契约，全程不碰真实 COM / 真实库（继承 `IsolatedDbTestCase`）。
+依赖 pycaw/comtypes 已写入 `requirements.txt`；`build_dist.py` 加 `--collect-all pycaw/comtypes`
+（comtypes 运行时动态生成类型库缓存，漏收会在打包版降级为 error）。
+增量 517/517 全绿。

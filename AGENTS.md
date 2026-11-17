@@ -91,6 +91,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 60 | **任何单元测试不得改动真实数据库** `D:\magicvideo\library.db`：碰库的用例必须继承 `IsolatedDbTestCase`（临时库）；`tests/db_guard.py` 全局 patch `sqlite3.connect` 强拦真实库连接，`tests/__init__.py` 与两个运行器入口都装守卫；`tests/test_db_isolation.py` 静态扫描确保无漏网。禁止绕过守卫直连真库验证 | 用户要求（2026-11-17「所有的单元测试不能改动真实数据库中的内容」） |
 | 61 | **剧集墙「按季」按钮保留**：点它没反应是 `handleAction` 把形参 `btn` 误写成未声明的 `el`（严格模式抛错被吞），共 6 处同类笔误（save-episode/export-csv/stats-range/calendar-shift/poster-mode/rate-work），一律从 `btn.dataset` 取值，禁止用 `el`；剧集墙移除「刷新」（后端按数据指纹+20s TTL 自动缓存，20s 内无效且不刷封面）与「去后台进程管理封面」（纯跳左侧已有页）两个按钮，通用 `goto` case 保留 | 用户反馈（2026-11-17「按季按钮没反应…去掉；去后台进程管理封面也没意义去掉；刷新按钮有什么意义」），用户拍板修按季、删另两个 |
 | 62 | **全盘快搜两个 bug 已修，架构不变**：Everything 核心引擎闭源无法编译进本软件（§22 结论不变，不做随包捆绑/自建索引）；① es.exe 在中文 Windows 输出 **GBK**，`search_es` 禁用 utf-8 解码，`_decode_output` utf-8 strict 优先/GBK 回退，否则中文路径乱码点不开；② 通道「执行成功但 0 命中」≠「通道不可用」，用 `es_error`/`http_error` 是否为空判定并新增 `channel_ok`，只有全通道真失败才 `degraded=True` 报「通道暂时不可用」 | 用户反馈（2026-11-17「全盘检索通道暂时不可用…不能完整集成进软件吗？」），用户拍板先修两 bug |
+| 63 | **播放前蓝牙音箱保障（自适应）**：设置页填音箱名（子串匹配、留空禁用），起播前 `app/bluetooth.py::probe()`——仅 `Active` 但非默认时用 pycaw 切默认（~5ms，纯用户态）；**链路真断（Unplugged/NotPresent）Windows 无公开 A2DP 重连 API，禁止假装连上**，只弹提示条 +「打开蓝牙设置」按钮（`ms-settings:bluetooth`）。未配置/COM 不可用/异常一律静默、绝不影响起播。挂接在 Api 四个播放方法的 `_with_bluetooth()`，仅 ok 时挂 `result['bluetooth']`；依赖 comtypes+pycaw 已入 requirements 与 `--collect-all build_dist`，测试 mock `_audio` 不碰真设备 | 用户反馈（2026-11-17「蓝牙音箱断联，能否点播放时自动连接」），用户拍板自适应+断链提示 |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。

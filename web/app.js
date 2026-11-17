@@ -102,6 +102,35 @@ function toast(message, ok) {
   el._timer = setTimeout(() => el.classList.remove('show'), 3200);
 }
 
+// 播放前蓝牙音箱保障：消费后端返回的 bluetooth 结果。
+// disabled/active/error 静默；switched 轻提示；link_down 显示带「打开蓝牙设置」按钮的提示条。
+function handleBluetoothTip(bt) {
+  if (!bt || !bt.status) return;
+  const s = bt.status;
+  if (s === 'disabled' || s === 'active' || s === 'error') return;
+  if (s === 'switched') { toast(bt.message || '已切回蓝牙音箱'); return; }
+  const box = document.getElementById('btAlert');
+  if (!box) return;
+  const msg = document.getElementById('btAlertMsg');
+  if (msg) msg.textContent = bt.message || '蓝牙音箱可能已断开';
+  box.style.display = 'block';
+  clearTimeout(box._timer);
+  // link_down / not_found 给按钮；提示条不自动消失（避免用户来不及点），交给「知道了」关闭。
+}
+
+function dismissBluetoothAlert() {
+  const box = document.getElementById('btAlert');
+  if (box) box.style.display = 'none';
+}
+
+async function openBluetoothSettings() {
+  try {
+    const r = await call('open_bluetooth_settings');
+    if (!r.ok) toast(r.error || '打开蓝牙设置失败', false);
+    dismissBluetoothAlert();
+  } catch (e) { toast('打开蓝牙设置失败', false); }
+}
+
 function setContent(html) { document.getElementById('content').innerHTML = html; }
 
 // 批量取封面 data URI：只请求缓存里没有的标题，返回 {title: dataURI}。
@@ -387,6 +416,7 @@ async function playSmart(kind, value, fromStart) {
     const r = byPath
       ? await call('play_external', value)
       : await call('play_file', Number(value), fromStart);
+    handleBluetoothTip(r.bluetooth);
     if (r.ok) { currentPlaying = started; syncPlayerBar(true); }
     toast(r.ok ? (r.position_ms ? `从 ${fmtMs(r.position_ms)} 继续播放` : '已开始播放')
       : (r.error || '播放失败'), r.ok);
@@ -399,6 +429,7 @@ async function playSmart(kind, value, fromStart) {
   const r = byPath
     ? await call('play_embedded_path', value, rect)
     : await call('play_embedded', Number(value), fromStart, rect);
+  handleBluetoothTip(r.bluetooth);
   if (!r.ok) {
     await stopEmbedded(true);
     toast(r.error || '播放失败', false);
@@ -1276,6 +1307,9 @@ async function renderSettings() {
       <div class="field"><label>PotPlayer 可执行文件路径</label>
         <input class="input" id="set-potplayer_path" value="${esc(s.potplayer_path)}">
         <div class="tip">${s.potplayer_exists ? '已找到该文件' : '⚠ 文件不存在，请修正路径'}</div></div>
+      <div class="field"><label>蓝牙音箱名称（可选）</label>
+        <input class="input" id="set-bluetooth_speaker_name" value="${esc(s.bluetooth_speaker_name || '')}" placeholder="例如 Aura Studio 5">
+        <div class="tip">填系统里显示的音箱名（写一部分即可，不区分大小写），留空表示不启用。<b>点播放时</b>：音箱已连上但被切到别的输出 → 自动切回它；音箱真的断开了 → 弹提示并给「打开蓝牙设置」按钮。蓝牙链路断联时 Windows 无法由软件可靠自动重连，需手动连一次。</div></div>
       ${switchHtml('embed_player', isOn(s.embed_player), '在软件内播放 PotPlayer',
         '播放器窗口直接嵌入本软件；嵌入失败会自动切回独立窗口，播放和历史记录都不中断')}
       <div class="field"><label>播放状态轮询间隔（秒）</label>
@@ -2252,6 +2286,8 @@ function watchDaemonBoot() {
 async function handleAction(action, btn) {
   const id = btn.dataset.id;
   switch (action) {
+    case 'bt-open-settings': await openBluetoothSettings(); return;
+    case 'bt-dismiss': dismissBluetoothAlert(); return;
     case 'goto':
       if (playerStageActive) await stopEmbedded(true);
       switchView(btn.dataset.view, { keyword: btn.dataset.keyword });
@@ -2591,7 +2627,7 @@ async function handleAction(action, btn) {
       return;
     }
     case 'save-settings': {
-      const keys = ['potplayer_path', 'poll_interval_sec', 'complete_percent',
+      const keys = ['potplayer_path', 'poll_interval_sec', 'bluetooth_speaker_name', 'complete_percent',
         'min_resume_percent', 'ignore_seconds_at_start', 'ignore_percent_at_end', 'http_proxy',
         'metadata_source', 'bangumi_base', 'window_width', 'window_height',
         'title_lang_pref',
