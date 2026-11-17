@@ -1783,8 +1783,6 @@ async function renderPosters() {
       <input class="input" id="posterSearch" placeholder="搜索作品名…" value="${esc(posterState.keyword)}" autocomplete="off">
       <button class="btn btn-sm ${posterState.mode === 'work' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="work">按作品</button>
       <button class="btn btn-sm ${posterState.mode === 'season' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="season">按季</button>
-      <button class="btn btn-sm" data-action="poster-refresh">刷新</button>
-      <button class="btn btn-sm" data-action="goto" data-view="processes">去后台进程管理封面</button>
     </div>
     <div id="continueRow"></div>
     <div id="posterGrid" class="poster-grid">${empty('正在加载剧集墙', '读取媒体库分组…')}</div>
@@ -2675,7 +2673,7 @@ async function handleAction(action, btn) {
       break;
     }
     case 'save-episode': {
-      const id = el.dataset.id;
+      const id = btn.dataset.id;
       const se = document.getElementById('ep-se-' + id);
       const ep = document.getElementById('ep-epi-' + id);
       const r = await call('set_episode', Number(id),
@@ -2686,7 +2684,7 @@ async function handleAction(action, btn) {
       return;
     }
     case 'export-csv': {
-      const kind = el.dataset.kind || 'history';
+      const kind = btn.dataset.kind || 'history';
       btn.disabled = true;
       try {
         const r = await call('export_table', kind);
@@ -2785,7 +2783,7 @@ async function handleAction(action, btn) {
     }
     case 'open-data': await call('open_data_folder'); return;
     case 'stats-range': {
-      const days = Number(el.dataset.days) || 30;
+      const days = Number(btn.dataset.days) || 30;
       statsState.days = days;
       document.querySelectorAll('[data-action="stats-range"]').forEach(b => {
         b.classList.toggle('btn-primary', Number(b.dataset.days) === days);
@@ -2797,7 +2795,7 @@ async function handleAction(action, btn) {
     }
     case 'stats-refresh': await loadStats(); toast('统计已刷新'); return;
     case 'calendar-shift': {
-      const step = Number(el.dataset.step) || 1;
+      const step = Number(btn.dataset.step) || 1;
       const [y, m] = String(statsState.calendar && statsState.calendar.month || '')
         .split('-').map(Number);
       if (!y || !m) return;
@@ -2807,9 +2805,8 @@ async function handleAction(action, btn) {
       renderCalendarBody();
       return;
     }
-    case 'poster-refresh': await loadPosterWall(); toast('剧集墙已刷新'); return;
     case 'poster-mode': {
-      const mode = el.dataset.mode === 'season' ? 'season' : 'work';
+      const mode = btn.dataset.mode === 'season' ? 'season' : 'work';
       if (posterState.mode === mode) return;
       posterState.mode = mode;
       document.querySelectorAll('[data-action="poster-mode"]').forEach(b => {
@@ -2819,12 +2816,12 @@ async function handleAction(action, btn) {
       return;
     }
     case 'rate-work': {
-      const key = el.dataset.node || '';
-      const name = el.dataset.name || '';
-      const current = el.dataset.rating || '';
+      const key = btn.dataset.node || '';
+      const name = btn.dataset.name || '';
+      const current = btn.dataset.rating || '';
       const rating = prompt(`给「${name}」打分（0~10，留空表示不打分）：`, current);
       if (rating === null) return;
-      const tags = prompt('标签（用逗号分隔，例如：神作, 已追完）：', el.dataset.tags || '');
+      const tags = prompt('标签（用逗号分隔，例如：神作, 已追完）：', btn.dataset.tags || '');
       if (tags === null) return;
       const r = await call('save_work_meta', key, rating.trim(), tags);
       if (!r.ok) { toast(r.error || '保存失败', false); return; }

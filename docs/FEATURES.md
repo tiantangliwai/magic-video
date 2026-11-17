@@ -1205,3 +1205,30 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 - `app/main.py::startup_url()`：把 settings 里的 theme 拼进 `file://.../index.html?theme=dark`；
 - `web/index.html` head 内同步脚本：读 `URLSearchParams(location.search).get('theme')`，在样式表前设 `data-theme`；
 - `web/app.js`：`currentTheme` 初值从 `document.documentElement` 读取。
+
+---
+
+## 33. 剧集墙工具栏修正：按季恢复、冗余按钮移除（2026-11-17）
+
+### 33-A 现象与根因
+
+用户反馈「剧集墙点『按季』没反应」。诊断发现不是绑定缺失，而是 `handleAction` 分支里
+把形参 `btn` 误写成未声明的 `el`；严格模式下抛 `ReferenceError` 被全局 click 的 try/catch
+吞掉，只闪一下 toast，`posterState.mode` 从未改变。同类笔误共 6 处（另 5 处：
+`save-episode` / `export-csv` / `stats-range` / `calendar-shift` / `rate-work`），都会让对应按钮假死。
+
+### 33-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 33-B1 | 「按季」按钮保留且点击生效：在「按作品 / 按季」间切换、按钮高亮跟随、卡片按对应口径重绘 |
+| 33-B2 | 上述 6 个 case 一律从 `btn.dataset` 取值，`handleAction` 作用域内不得再出现未声明的 `el.dataset` |
+| 33-B3 | 剧集墙移除「刷新」按钮及其 `poster-refresh` 分支：后端按数据指纹 + 20s TTL 自动缓存，该按钮 20s 内命中缓存等于无效，且不刷封面、不写库、不扫盘 |
+| 33-B4 | 剧集墙移除「去后台进程管理封面」按钮：它只是跳到左侧已有的「后台进程」页，无封面动作；通用 `goto` case 保留（媒体库「查看分集」等仍用） |
+| 33-B5 | 移除按钮不 losses 数据更新能力：扫描目录、切视图 / 翻页、任何写库操作、重启软件仍会刷新数据；封面更新仍走后台进程页抓取 |
+
+### 33-C 实现位置
+
+- `web/app.js`：6 处 `el.dataset` → `btn.dataset`；`renderPosters()` 删两个按钮；删 `case 'poster-refresh'`；
+- `tests/test_watchlist.py`：`test_cover_controls_moved_out_of_poster_wall` 改断言两个按钮不存在，
+  新增 `test_poster_mode_button_exists_and_uses_btn` 与 `test_handle_action_cases_use_btn_not_undefined_el`。

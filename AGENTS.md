@@ -89,6 +89,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 58 | **启动时首屏就是持久化的主题，不能先白后黑**：主题存 SQLite、private_mode 下 localStorage 不持久；由 `app/main.py::startup_url()` 把 theme 注入 URL 参数，`index.html` head 里的同步脚本在 CSS 加载前设 `data-theme`；JS 侧 `currentTheme` 初值跟随 DOM，禁止硬编码 light 后等异步 IPC 再切 | 用户反馈（2026-11-17「重新打开 magic video 时表头还是白色的，需要切换一下之后才会变成黑色的」） |
 | 59 | 「看片统计」改名**「观影报告」**；`watch_sessions.watched_ms` 是 v0.1.6 才加的列、迁移只 `ADD COLUMN DEFAULT 0` 不回填，**不能把有真实播放区间的旧会话统计成 0**：读取时用区间保守估算并标「估」，不写库、不冒充精确口径；升级后必须重启守护，否则新会话仍不写该字段 | 用户反馈（2026-11-17「11-15 我看了一天的动漫统计的结果还是 0，另外看片统计这个名字有点不好」） |
 | 60 | **任何单元测试不得改动真实数据库** `D:\magicvideo\library.db`：碰库的用例必须继承 `IsolatedDbTestCase`（临时库）；`tests/db_guard.py` 全局 patch `sqlite3.connect` 强拦真实库连接，`tests/__init__.py` 与两个运行器入口都装守卫；`tests/test_db_isolation.py` 静态扫描确保无漏网。禁止绕过守卫直连真库验证 | 用户要求（2026-11-17「所有的单元测试不能改动真实数据库中的内容」） |
+| 61 | **剧集墙「按季」按钮保留**：点它没反应是 `handleAction` 把形参 `btn` 误写成未声明的 `el`（严格模式抛错被吞），共 6 处同类笔误（save-episode/export-csv/stats-range/calendar-shift/poster-mode/rate-work），一律从 `btn.dataset` 取值，禁止用 `el`；剧集墙移除「刷新」（后端按数据指纹+20s TTL 自动缓存，20s 内无效且不刷封面）与「去后台进程管理封面」（纯跳左侧已有页）两个按钮，通用 `goto` case 保留 | 用户反馈（2026-11-17「按季按钮没反应…去掉；去后台进程管理封面也没意义去掉；刷新按钮有什么意义」），用户拍板修按季、删另两个 |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。

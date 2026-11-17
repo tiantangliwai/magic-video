@@ -449,7 +449,26 @@ class FrontendContractTests(unittest.TestCase):
         self.assertNotIn('data-action="cover-fetch"', block)
         self.assertNotIn('data-action="cover-cancel"', block)
         self.assertNotIn('id="coverProgress"', block)
-        self.assertIn('data-view="processes"', block)
+        # 后台进程入口只在左侧导航，剧集墙不再放跳转/刷新按钮（点了没实际作用）。
+        self.assertNotIn('data-view="processes"', block)
+        self.assertNotIn('data-action="poster-refresh"', block)
+        self.assertNotIn("case 'poster-refresh'", self.js)
+
+    def test_poster_mode_button_exists_and_uses_btn(self):
+        """「按季」按钮修复后必须保留：后端 season 分组能力完整，只是曾被 el 笔误弄假死。"""
+        block = self.js.split("async function renderPosters()", 1)[1].split(
+            "// 全盘快搜是左侧独立入口", 1)[0]
+        self.assertIn('data-action="poster-mode" data-mode="season"', block)
+        self.assertIn("case 'poster-mode'", self.js)
+
+    def test_handle_action_cases_use_btn_not_undefined_el(self):
+        """handleAction 形参是 btn；这 6 个 case 曾误用未声明的 el，严格模式下抛错致按钮假死。"""
+        body = self.js.split("async function handleAction(action, btn) {", 1)[1]
+        for case in ("save-episode", "export-csv", "stats-range",
+                     "calendar-shift", "poster-mode", "rate-work"):
+            block = body.split(f"case '{case}':", 1)[1].split("case '", 1)[0]
+            self.assertNotIn("el.dataset", block, f"{case} 仍在用未声明的 el")
+            self.assertIn("btn.dataset", block, f"{case} 没有从 btn 取 dataset")
 
     def test_process_page_has_start_stop_and_progress(self):
         for token in ("async function renderProcesses()", "call('process_status')",
