@@ -36,6 +36,33 @@ ES_TIMEOUT = 6
 HTTP_TIMEOUT = (1.5, 3.0)
 
 
+def _decode_output(raw) -> str:
+    """把 es.exe 的原始输出解码成文本，修掉中文路径 GBK 乱码。
+
+    es.exe 按**系统 ANSI 代码页**输出（中文 Windows = GBK/cp936），而 Python 3.13
+    默认 UTF-8 模式、``locale.getpreferredencoding()`` 返回 ``utf-8``：旧代码用
+    ``encoding="utf-8", errors="replace"`` 解码 GBK 中文，坏字节被替换成 ``?``，
+    全盘搜到的中文动画路径全变乱码、点开就失败。
+
+    这里 strict 尝试 utf-8（兼容纯 ASCII / 已是 UTF-8 的输出），失败回退 GBK。
+    单测里 mock 的 stdout 常直接给 str，原样返回即可。
+    """
+    if isinstance(raw, str):
+        return raw
+    if not raw:
+        return ""
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError:
+        pass
+    for enc in ("gbk", "cp936"):
+        try:
+            return raw.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return raw.decode("utf-8", errors="replace")
+
+
 def es_exe() -> Path:
     """es.exe 路径。设置里存空串时回退默认路径，而不是变成 Path('.') 导致永远找不到。"""
     configured = str(db.get_setting("everything_es_path", "") or "").strip()
@@ -152,11 +179,12 @@ def search_es(query: str, limit: int, library: dict) -> tuple[list[dict], str]:
     try:
         proc = subprocess.run(
             args, capture_output=True, timeout=ES_TIMEOUT,
-            text=True, encoding="utf-8", errors="replace",
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        if proc.returncode != 0 and not proc.stdout:
-            stderr = (proc.stderr or "").strip()
+        # 不指定 text/encoding：拿到原始 bytes 后按 GBK 解码（见 _decode_output）。
+        stdout = _decode_output(proc.stdout)
+        if proc.returncode != 0 and not stdout:
+            stderr = _decode_output(proc.stderr).strip()
             # Error 8：Everything 以 -svc（会话 0 服务）运行，用户会话没有 IPC 窗口，
             # 这是会话隔离，不是没装 es.exe。给出可操作的下一步。
             if "Error 8" in stderr or "IPC not found" in stderr:
@@ -164,7 +192,7 @@ def search_es(query: str, limit: int, library: dict) -> tuple[list[dict], str]:
                             "请在 Everything 选项里启用 HTTP 服务并填入地址，或改用普通模式启动 Everything")
             return [], f"es.exe 退出码 {proc.returncode}" + (f"：{stderr[:120]}" if stderr else "")
         rows = []
-        for line in (proc.stdout or "").splitlines():
+        for line in stdout.splitlines():
             candidate = line.strip()
             if not candidate or not candidate.lower().endswith(VIDEO_EXTS):
                 continue
@@ -240,26 +268,40 @@ def search(query: str, limit: int = 200) -> dict:
     rows, es_error = search_es(q, limit, library)
     if rows:
         return {"ok": True, "rows": rows, "source": "everything-es", "hint": "来自 Everything 命令行",
-                "capabilities": capabilities()}
+                "capabilities": capabilities(), "degraded": False, "channel_ok": True}
 
     rows, http_error = search_http(q, limit, library)
     if rows:
         return {"ok": True, "rows": rows, "source": "everything-http", "hint": "来自 Everything HTTP 服务",
-                "capabilities": capabilities()}
+                "capabilities": capabilities(), "degraded": False, "channel_ok": True}
 
     rows, _ = search_library(q, limit, library)
-    # 区分「没装 es.exe」与「装了但连不上 IPC」，避免误导性的一刀切文案
+    # 关键：通道「执行成功但 0 命中」≠「通道不可用」。
+    # search_es / search_http 的 error 为空串才代表通道真的跑通了（哪怕没匹配到视频文件）；
+    # 旧代码只看有没有 rows，把「关键词在文件名里搜不到」误报成「通道暂时不可用」。
+    es_ok = not es_error          # es.exe 存在且执行成功（0 命中也算成功）
+    http_ok = not http_error      # HTTP 已配置且请求成功（0 命中也算成功）
+    channel_ok = es_ok or http_ok
     es_ready = es_exe().is_file()
-    if es_ready or http_base():
+    if channel_ok:
+        # 至少一条全盘通道是好的，只是这个关键词没在整机文件名里命中。
+        # 结果仍来自媒体库（source=library），但绝不能说通道挂了。
+        hint = "全盘检索未找到匹配的视频文件（Everything 通道正常），以下是本程序媒体库的结果"
+        degraded = False
+    elif es_ready or http_base():
+        # 配了通道但本次调用真失败（超时 / IPC 连不上 / HTTP 错误）。
         hint = "全盘检索通道暂时不可用，已自动降级为「本程序媒体库检索」"
+        detail = es_error or http_error
+        if detail:
+            hint += f"（{detail}）"
+        degraded = True
     else:
+        # 根本没配任何全盘通道。
         hint = "Everything 未启用命令行/HTTP，已自动降级为「本程序媒体库检索」"
-    if es_error and "不存在" not in es_error:
-        hint += f"（{es_error}）"
-    elif http_error and "未配置" not in http_error:
-        hint += f"（{http_error}）"
+        degraded = True
     return {
         "ok": True, "rows": rows, "source": "library", "hint": hint,
         "capabilities": capabilities(),
-        "degraded": True,
+        "degraded": degraded,
+        "channel_ok": channel_ok,
     }

@@ -707,7 +707,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | GitHub 有源码吗 | **核心搜索引擎闭源**，无官方源码仓库；`voidtools/ES` 是 MIT 的 es.exe 命令行客户端，`everything_sdk3` 是 IPC 客户端，都只是连到运行中的 Everything 实例 |
 | 能否编译进本软件 | **不能**；Lite 版还会禁用 IPC/ES/HTTP，必须完整版。真正开源可嵌入的替代（FastFind.NET 等）需自研内核 + 提权，本轮不做 |
 | 随包捆绑合法吗 | es.exe / Everything.exe 为 MIT 风格许可，可随第三方分发并保留版权声明；属打包/授权层改动，需单独确认 |
-| 当前降级提示 | **正常设计**，不是 bug |
+| 当前降级提示 | §22 时认为是正常设计；2026-11-17 实测发现两处实现 bug（假降级 + GBK 乱码），已在 §34 修复 |
 
 落地（用户选 A+B 一次到位）：
 - 修 `es_exe()`：设置项空串回退 `DEFAULT_ES_PATH`，不再变成 `Path('.')`；
@@ -1232,3 +1232,39 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 - `web/app.js`：6 处 `el.dataset` → `btn.dataset`；`renderPosters()` 删两个按钮；删 `case 'poster-refresh'`；
 - `tests/test_watchlist.py`：`test_cover_controls_moved_out_of_poster_wall` 改断言两个按钮不存在，
   新增 `test_poster_mode_button_exists_and_uses_btn` 与 `test_handle_action_cases_use_btn_not_undefined_el`。
+
+---
+
+## 34. 全盘快搜：修「假降级」与中文路径 GBK 乱码（2026-11-17）
+
+> 注：§22 记录的「Everything 核心引擎闭源、无法编译进本软件」结论仍然成立；本节只修
+> 现有 es.exe / HTTP 通道的两个实现 bug，不改变"依赖外部 Everything 实例"的架构。
+
+### 34-A 现象与根因
+
+用户看到「来源：library · 全盘检索通道暂时不可用，已自动降级」。实测（只读）本机
+es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真实文件**，通道根本没挂。
+
+- **假降级**：`search()` 用「通道有没有返回行」判断可用性——关键词在**物理文件名**
+  里没命中（es 只搜文件名，不搜数据库中文译名）就被误判成「通道不可用」。
+- **中文乱码**：`search_es()` 用 `encoding="utf-8", errors="replace"` 解码 es.exe 输出；
+  但中文 Windows 的 es.exe 按 **GBK** 输出，坏字节被替换成 `?`，全盘搜到的中文动画路径全坏、点开失败。
+
+### 34-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 34-B1 | es.exe 按 GBK 输出中文路径时正确解码（`_decode_output`：utf-8 strict 优先、GBK 回退），纯 ASCII / UTF-8 输出也不受影响 |
+| 34-B2 | 全盘通道**执行成功但 0 命中**时：`channel_ok=True`、`degraded=False`，提示「全盘检索未找到匹配的视频文件（Everything 通道正常），以下是本程序媒体库的结果」，不得再说「通道暂时不可用」 |
+| 34-B3 | 全盘通道**真失败**（es 超时 / Error 8 / HTTP 错误、且无备用通道）时：仍 `degraded=True` 并给出失败原因，行为不变 |
+| 34-B4 | 命中时 `source=everything-es` / `everything-http`，0 命中落到 library 时结果仍来自媒体库，仅提示文案区分原因 |
+| 34-B5 | 不改变"依赖外部 Everything 实例"的架构，不改系统服务配置、不随包捆绑（沿用 §22 结论） |
+
+### 34-C 实现位置
+
+- `app/everything.py::_decode_output()`：统一解码，修 GBK 乱码；
+- `app/everything.py::search_es()`：不再指定 `text/encoding`，拿原始 bytes 走 `_decode_output`；
+- `app/everything.py::search()`：以 `es_error`/`http_error` 是否为空判断通道执行是否成功，新增 `channel_ok` 字段，区分「没命中」与「通道挂了」；
+- `tests/test_everything.py`：新增 GBK bytes 解码、UTF-8 兼容、通道正常 0 命中不报降级、通道真失败仍降级 4 例。
+
+**实测**：`search('从零')` → `source=everything-es`、中文路径完整；`search('不存在的词')` → `channel_ok=True`、`degraded=False`、提示「通道正常但没找到匹配」。
