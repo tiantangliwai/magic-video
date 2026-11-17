@@ -465,3 +465,30 @@ NULL，属老扫描结果，`[13]` 这种方括号集数在新口径里是 low �
 - **点击行为**：伪条目的 `data-action="play"` 走 `playSmart('id', id, false)`，因 `position_ms=0` 自然从头播，
   不需要新增 action 分支。
 - **测试**：`tests/test_continue_followup.py` 9 例（含跨季、回收站、dismiss、在看优先、全看完消失、前端契约）。
+
+---
+
+## 15. 启动首屏主题同步预设（2026-11-17）
+
+### 15.1 为什么不能用 localStorage
+
+`app/main.py:42` 的 `webview.start(private_mode=True)` 让 WebView2 每次用临时 profile，
+localStorage 不跨启动持久。主题真源只能是 SQLite 的 `settings.theme`，
+而 pywebview 的 JS→Python 调用是 Promise，无法在 `<head>` 里同步 await。
+因此把值通过 URL 参数带进去，是唯一能让 CSS 首帧就正确的同步通道。
+
+### 15.2 三段改动
+
+1. `startup_url(settings)` 返回 `(config.WEB_DIR / "index.html").as_uri() + "?theme=" + 值`；
+   值做 `strip().lower()` 且只认 `light`/`dark`，其余回退 `light`，与 `Api._theme()` 一致。
+2. `index.html` head 里、`rel="stylesheet"` 之前插入同步 IIFE：
+   读 `location.search` 的 theme，非法值回退 light，`document.documentElement.setAttribute('data-theme', t)`。
+   `<html data-theme="light">` 保留作为无参数时的兜底。
+3. `app.js` 的 `currentTheme` 初值改为读 `document.documentElement.getAttribute('data-theme')`，
+   让主题按钮首屏就显示正确图标；`applyTheme(info.theme)` 仍保留，异步回来时值一致不会闪。
+
+### 15.3 测试
+
+`tests/test_theme.py` 新增三条：`index.html` 中 `setAttribute('data-theme'` 必须早于 `rel="stylesheet"`；
+`app.js` 不得再硬编码 `let currentTheme = 'light';`；`startup_url()` 对 dark / light / 缺值 / 非法值的输出。
+`node --check web/app.js` 同步覆盖脚本语法。

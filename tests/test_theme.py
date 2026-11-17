@@ -8,6 +8,7 @@ from tests.base import IsolatedDbTestCase
 
 from app import db
 from app.api import Api
+from app.main import startup_url
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -84,6 +85,24 @@ class ThemeFrontendContractTests(unittest.TestCase):
         self.assertIn("setAttribute('data-theme'", js)
         self.assertIn("call('set_theme', next)", js)
         self.assertIn("applyTheme(info.theme)", js)
+        # 首帧主题不能是硬编码 light，否则按钮图标会跟 CSS 首屏不一致
+        self.assertNotIn("let currentTheme = 'light';", js)
+        self.assertIn("currentTheme = document.documentElement.getAttribute('data-theme')", js)
+
+    def test_index_presets_theme_before_stylesheet(self):
+        """首屏必须在 CSS 加载前同步定下 data-theme，避免暗色用户先看到白表头。"""
+        html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
+        self.assertIn("URLSearchParams(location.search).get('theme')", html)
+        preset = html.index("setAttribute('data-theme'")
+        stylesheet = html.index('rel="stylesheet"')
+        self.assertLess(preset, stylesheet, "主题预设必须早于样式表加载")
+
+    def test_startup_url_injects_persisted_theme(self):
+        self.assertTrue(startup_url({"theme": "dark"}).endswith("?theme=dark"))
+        self.assertTrue(startup_url({"theme": "light"}).endswith("?theme=light"))
+        # 缺值与非法值都回退 light，和 Api._theme() 口径一致
+        self.assertTrue(startup_url({}).endswith("?theme=light"))
+        self.assertTrue(startup_url({"theme": "bogus"}).endswith("?theme=light"))
 
 
 if __name__ == "__main__":

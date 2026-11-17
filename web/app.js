@@ -4,7 +4,7 @@ let currentView = 'home';
 let lastPreviewRows = [];
 let inited = false;
 let searchTimer = null;
-let currentTheme = 'light';
+let currentTheme = document.documentElement.getAttribute('data-theme') === 'dark' ? 'dark' : 'light';
 let embeddedMode = true;            // 软件内播放开关（设置存 SQLite）；失败自动降级外部播放
 let playerStageActive = false;      // 播放舞台是否已展开
 let currentPlaying = { fileId: null, path: null, title: '' };  // 上一集/下一集据此定位

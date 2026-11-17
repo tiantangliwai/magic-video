@@ -7,6 +7,18 @@ from . import config, db, embedded_player, single_instance
 from .api import Api
 
 
+def startup_url(settings: dict | None = None) -> str:
+    """首屏 URL：把持久化的主题作为参数带上，让 CSS 第一次解析时就是正确主题。
+
+    主题存在 SQLite 而非 localStorage（private_mode 不持久），JS 侧要等
+    pywebviewready 后异步 IPC 才能读到；若首屏写死 light，暗色用户会先看到白表头、
+    切一下主题才变黑。这里在 Python 侧同步注入，配合 index.html head 里的同步脚本。
+    """
+    raw = str((settings or {}).get("theme", config.DEFAULTS["theme"]) or "light").strip().lower()
+    theme = raw if raw in ("light", "dark") else "light"
+    return (config.WEB_DIR / "index.html").as_uri() + f"?theme={theme}"
+
+
 def create_window(debug: bool = False) -> None:
     # 任务栏/快捷方式重复点击时，只把已有窗口置前并退出，绝不再开第二个窗口。
     # 第二个进程一旦也去初始化 WebView2，会与已有实例抢资源并显著拖慢启动。
@@ -19,7 +31,7 @@ def create_window(debug: bool = False) -> None:
 
     window = webview.create_window(
         "Magic Video",
-        str(config.WEB_DIR / "index.html"),
+        startup_url(settings),
         js_api=api,
         width=int(settings.get("window_width", 1180)),
         height=int(settings.get("window_height", 780)),

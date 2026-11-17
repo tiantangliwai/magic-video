@@ -1173,3 +1173,30 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 - `app/api.py::_completed_followups()`：取数侧补集，复用 `player_adjacent` 的排序口径；
 - `app/api.py::_adjacent_in_tree()`：从 `player_adjacent` 抽出的辅助函数，补集一次构建剧集树、多部作品共用；
 - `web/app.js::progressItem()` / `renderContinueRow()`：角标与「播放下一集」文案，点击仍走既有 `data-action="play"` → `playSmart('id', id, false)`。
+
+---
+
+## 32. 启动首屏主题：不再「先白后黑」
+
+### 32-A 现象与原因
+
+暗色已正确持久化在 SQLite，表头的 `--surface-2` 在暗色下也有 `#272c37`，但重新打开软件时
+表头先是白的，手动切一下主题才变黑。原因是 `<html data-theme="light">` 首屏写死，
+`applyTheme(info.theme)` 要等 `await call('get_app_info')` 这一趟异步 IPC 才执行；
+`private_mode=True` 下 localStorage 又不能用来同步预设。
+
+### 32-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 32-B1 | 上次选的是暗色时，**从第一帧起**就是暗色：表头、侧栏、标题栏一致，不需要手动切换 |
+| 32-B2 | 主题参数由 Python 侧从 settings 同步注入 URL，非法值 / 缺值回退 light，与 `Api._theme()` 口径一致 |
+| 32-B3 | `index.html` 的同步预设脚本必须位于 `style.css` 之前，CSS 首次解析时 `data-theme` 已就位 |
+| 32-B4 | JS 侧 `currentTheme` 初值跟随 DOM 的 `data-theme`，主题按钮图标 / 文字首屏就正确，不出现「CSS 暗、按钮显示浅色」 |
+| 32-B5 | 用户切换主题照旧即时生效并写回 SQLite，行为不变 |
+
+### 32-C 实现位置
+
+- `app/main.py::startup_url()`：把 settings 里的 theme 拼进 `file://.../index.html?theme=dark`；
+- `web/index.html` head 内同步脚本：读 `URLSearchParams(location.search).get('theme')`，在样式表前设 `data-theme`；
+- `web/app.js`：`currentTheme` 初值从 `document.documentElement` 读取。

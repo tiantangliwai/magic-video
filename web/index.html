@@ -4,6 +4,15 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Magic Video</title>
+<script>
+  // 首屏同步预设主题：主题存在 SQLite，JS 要等 IPC 才能读到；
+  // 若等异步结果再切，暗色用户会先看到白表头。CSS 加载前先把 data-theme 定下来。
+  (function () {
+    var t = new URLSearchParams(location.search).get('theme');
+    if (t !== 'dark' && t !== 'light') t = 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
