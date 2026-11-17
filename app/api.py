@@ -355,6 +355,7 @@ class Api:
         return status
 
     def get_continue_watching(self, limit: int = 50) -> list[dict]:
+        size = max(1, int(limit or 50))
         rows = db.rows(
             "SELECT p.*, f.filename, f.path, f.title_guess, f.deleted_at, "
             f"{_display_title_expr()} AS display_title, "
@@ -362,9 +363,13 @@ class Api:
             "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
             "WHERE p.completed = 0 AND p.position_ms > 0 AND p.dismissed_at IS NULL "
             "ORDER BY p.last_played_at DESC LIMIT ?",
-            (int(limit),),
+            (size,),
         )
-        return blacklist.filter_rows(rows, keys=("display_title", "filename", "title_guess"))
+        rows = blacklist.filter_rows(rows, keys=("display_title", "filename", "title_guess"))
+        seen = {str(r.get("display_title") or r.get("filename") or "").strip() for r in rows}
+        rows.extend(self._completed_followups(size, seen))
+        rows.sort(key=lambda r: str(r.get("last_played_at") or ""), reverse=True)
+        return rows[:size]
 
     def get_completed(self, limit: int = 50) -> list[dict]:
         """已看完的条目，供「继续观看」页做纠错（标记未看 / 重看）。"""
@@ -377,6 +382,71 @@ class Api:
             (int(limit),),
         )
         return blacklist.filter_rows(rows, keys=("display_title", "filename", "title_guess"))
+
+    def _completed_followups(self, limit: int, seen: set[str] | None = None) -> list[dict]:
+        """已看完但有下一集：以「下一集」形态补进继续观看。
+
+        完成判定与 watch_progress 的 completed/position_ms 一律不动（历史是不可变事实日志，
+        完成率也依赖 completed）。这里只在取数侧补一条指向下一集的卡片，让
+        「看完第 1 集 → 继续观看里直接点第 2 集」闭环。边界：
+        - 全剧看完（player_adjacent 报最后一集）自然消失；跨季沿用既有整部作品排序；
+        - 下一集已移入回收站、完成项被 dismiss、命中黑名单 → 不补；
+        - 每部作品只按**最新一条**完成记录决策一次，失败不回退到更早的集。
+        """
+        try:
+            size = max(1, min(int(limit or 50), 60))
+        except (TypeError, ValueError):
+            size = 50
+        rows = blacklist.filter_rows(
+            db.rows(
+                "SELECT p.file_id, p.last_played_at, f.title_guess, f.filename, "
+                f"{_display_title_expr()} AS display_title, "
+                "f.season_no, f.episode_no "
+                "FROM watch_progress p JOIN media_files f ON f.id = p.file_id "
+                "WHERE p.completed = 1 AND p.dismissed_at IS NULL "
+                "AND COALESCE(f.deleted_at, '') = '' "
+                "ORDER BY p.last_played_at DESC LIMIT ?",
+                (max(size * 2, 20),),
+            ),
+            keys=("display_title", "filename", "title_guess"),
+        )
+        if not rows:
+            return []
+        tree = self.get_media_tree({"mode": "series"})
+        locked = set(seen or ())
+        pairs: list[tuple[dict, dict, str]] = []
+        for src in rows:
+            title = str(src.get("display_title") or src.get("filename") or "").strip()
+            if not title or title in locked:
+                continue
+            locked.add(title)
+            hit = self._adjacent_in_tree(tree, int(src["file_id"]), "next")
+            if not hit.get("ok"):
+                continue
+            target = db.row(
+                "SELECT id, filename, path, title_guess, season_no, episode_no, deleted_at "
+                "FROM media_files WHERE id = ?", (hit["file_id"],),
+            )
+            if not target or target["deleted_at"]:
+                continue
+            pairs.append((src, target, title))
+        if not pairs:
+            return []
+        entries = [
+            {
+                "file_id": target["id"], "filename": target["filename"],
+                "path": target["path"], "title_guess": target["title_guess"],
+                "deleted_at": None, "display_title": title,
+                "season_no": target["season_no"], "episode_no": target["episode_no"],
+                "position_ms": 0, "duration_ms": 0, "percent": 0, "completed": 0,
+                "last_played_at": src["last_played_at"],
+                "after_completed": True, "from_file_id": int(src["file_id"]),
+                "from_episode": src["episode_no"],
+            }
+            for src, target, title in pairs
+        ]
+        entries = blacklist.filter_rows(entries, keys=("display_title", "filename", "title_guess"))
+        return entries[:size]
 
     def dismiss_continue_watching(self, file_id: int, restore: bool = False) -> dict:
         """「继续观看」人工移除 / 恢复：**软删除，只 UPDATE 标记**。
@@ -1600,6 +1670,23 @@ class Api:
             })
             if len(items) >= size:
                 break
+        # 看完一集但还有下一集：用下一集补位，点开直接从头播（不碰完成判定）。
+        if len(items) < size:
+            for extra in self._completed_followups(size, seen):
+                items.append({
+                    "work_title": extra["display_title"],
+                    "file_id": extra["file_id"],
+                    "filename": extra["filename"],
+                    "season_no": extra["season_no"],
+                    "episode_no": extra["episode_no"],
+                    "percent": 0,
+                    "position_ms": 0,
+                    "last_played_at": extra["last_played_at"],
+                    "after_completed": True,
+                    "from_episode": extra["from_episode"],
+                })
+                if len(items) >= size:
+                    break
         return {"ok": True, "items": items}
 
     def get_versions(self, file_id: int) -> dict:
@@ -2194,8 +2281,14 @@ class Api:
             fid = int(file_id)
         except (TypeError, ValueError):
             return {"ok": False, "error": "文件 id 无效"}
+        return self._adjacent_in_tree(self.get_media_tree({"mode": "series"}), fid, direction)
+
+    def _adjacent_in_tree(self, tree: dict, fid: int, direction: str = "next") -> dict:
+        """在已构建好的剧集树里求相邻集，供 player_adjacent 与继续观看补集共用。
+
+        补集一次要处理多部作品，共用同一棵树可避免反复重建分组。
+        """
         step = -1 if str(direction) == "prev" else 1
-        tree = self.get_media_tree({"mode": "series"})
         for group in tree.get("groups", []):
             files: list[dict] = []
 

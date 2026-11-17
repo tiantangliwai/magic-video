@@ -1145,3 +1145,31 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 `name_alias`。若旧值本身是发布组串，就会记成
 `更衣人偶坠入爱河 → My DressUp Darling KKTV AAC2 0 -BlackTV` 这种**反向映射**，
 之后每部作品补中文名都可能被它污染。现在这类值一律按空处理。
+
+---
+
+## 31. 看完一集后「继续观看」直接接下一集
+
+### 31-A 场景
+
+历史记录最新一条显示「某作品第 1 集已看完」，但继续观看列表空了——因为守护看完时会把
+`watch_progress.completed=1`、`position_ms=0`（清续播点），而继续观看的两个接口都硬过滤
+`completed=0 AND position_ms>0`。历史读的是 `watch_sessions`，不关心完成状态，所以仍在。
+
+### 31-B 行为
+
+| # | 验收标准 |
+|---|---|
+| 31-B1 | 看完第 1 集且存在第 2 集时，首页「继续观看」、导航「继续观看」页、剧集墙顶部继续观看行**三处**都显示这张作品卡，指向第 2 集 |
+| 31-B2 | 卡片标 `接第 N 集 → 第 M 集` + 「下一集」角标，主按钮文案「播放下一集」，点击**从头**播放第 2 集 |
+| 31-B3 | 全剧看完（没有下一集）时自然从继续观看消失；不靠放宽 `completed` 判定来实现 |
+| 31-B4 | 跨季沿用 `player_adjacent` 的整部作品排序：第 1 季末集的下一集是第 2 季第 1 集 |
+| 31-B5 | 下一集已移入回收站、完成项被「移除」、命中黑名单 → 不显示；同一部剧已有在看条目时优先在看条目，不重复出卡 |
+| 31-B6 | 第 1、2 集都看完时只按**最新**完成记录求下一集，不回退到更早的集 |
+| 31-B7 | `watch_progress.completed` / `position_ms` / 完成率 / 历史记录 / 四阈值**一律不动**；「已看完」清单照旧保留该集 |
+
+### 31-C 实现位置
+
+- `app/api.py::_completed_followups()`：取数侧补集，复用 `player_adjacent` 的排序口径；
+- `app/api.py::_adjacent_in_tree()`：从 `player_adjacent` 抽出的辅助函数，补集一次构建剧集树、多部作品共用；
+- `web/app.js::progressItem()` / `renderContinueRow()`：角标与「播放下一集」文案，点击仍走既有 `data-action="play"` → `playSmart('id', id, false)`。

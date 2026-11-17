@@ -471,7 +471,10 @@ function toggleStageZoom() {
 
 function progressItem(r, actions) {
   const name = r.display_title || r.title_guess || r.filename || '未知文件';
-  const ep = r.episode_no ? ` · 第 ${r.episode_no} 集` : '';
+  const follow = !!r.after_completed;
+  const ep = follow
+    ? ` · 接第 ${num(r.from_episode)} 集 → 第 ${num(r.episode_no)} 集`
+    : (r.episode_no ? ` · 第 ${r.episode_no} 集` : '');
   const season = r.season_no ? ` · 第 ${r.season_no} 季` : '';
   const pct = Math.min(100, Math.max(0, num(r.percent)));
   const pos = fmtMs(r.position_ms), dur = fmtMs(r.duration_ms);
@@ -480,13 +483,13 @@ function progressItem(r, actions) {
     <div class="thumb">▶</div>
     <div class="body">
       <div class="name">${esc(name)}${esc(ep)}${esc(season)}
-        ${done ? '<span class="badge green">已看完</span>' : '<span class="badge blue">在看</span>'}</div>
+        ${follow ? '<span class="badge amber">下一集</span>' : (done ? '<span class="badge green">已看完</span>' : '<span class="badge blue">在看</span>')}</div>
       <div class="meta">${esc(r.filename || '')}</div>
       <div class="bar ${done ? 'done' : ''}"><span style="width:${pct}%"></span></div>
       <div class="meta">${pos} / ${dur} · ${pct.toFixed(0)}% · 最近 ${shortDate(r.last_played_at)}</div>
     </div>
     <div class="right">${actions === false ? '' : `<div class="btn-row">
-      <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.file_id}">继续观看</button>
+      <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.file_id}">${follow ? '播放下一集' : '继续观看'}</button>
       <button class="btn btn-sm" data-action="play-start" data-id="${r.file_id}">从头播放</button>
       <button class="btn btn-sm" data-action="mark-watched" data-id="${r.file_id}">标记已看</button>
       <button class="btn btn-sm" data-action="dismiss-continue" data-id="${r.file_id}"
@@ -533,6 +536,7 @@ async function renderContinue() {
   ]);
   setContent(`<div class="card"><h3>继续观看</h3>
     <p class="hint">点击「继续观看」会用 PotPlayer 从上次的位置打开，播放过程按设置页的间隔自动记录。
+      某一集看完后，这里会换成<b>下一集</b>入口（点一下直接从头播），全剧看完才会消失。
       不想再看某条可点「移除」：只是从本列表隐藏（软删除），进度、断点与观看会话全部保留，再次播放会自动回来。</p>
     <div class="list">${list.length ? list.map(r => progressItem(r)).join('') : empty('暂无进行中的播放', '先扫描目录并播放一集试试')}</div></div>
     <div class="card"><h3>已看完（可纠错 / 可清理本地文件）</h3>
@@ -1586,15 +1590,18 @@ function renderContinueRow() {
       <h3 style="font-size:14px">继续观看</h3>
       <span class="badge blue">${items.length} 部</span></div>
     <div class="continue-row">${items.map(it => {
-      const ep = it.episode_no ? `第 ${num(it.episode_no)} 集` : esc(it.filename || '');
+      const follow = !!it.after_completed;
+      const ep = follow
+        ? `接第 ${num(it.from_episode)} 集 → 第 ${num(it.episode_no)} 集`
+        : (it.episode_no ? `第 ${num(it.episode_no)} 集` : esc(it.filename || ''));
       const season = it.season_no ? `S${num(it.season_no)} · ` : '';
       const pct = Math.max(0, Math.min(100, num(it.percent)));
       return `<button class="continue-card" data-action="play" data-id="${num(it.file_id)}"
-          title="继续观看 ${esc(it.work_title)} ${esc(ep)}">
+          title="${follow ? '播放下一集' : '继续观看'} ${esc(it.work_title)} ${esc(ep)}">
         <div class="continue-art">${esc((it.work_title || '?').slice(0, 2))}</div>
         <div class="continue-body">
           <div class="continue-title">${esc(it.work_title)}</div>
-          <div class="continue-meta">${season}${ep}</div>
+          <div class="continue-meta">${season}${ep}${follow ? ' · 下一集' : ''}</div>
           <div class="bar" style="margin-top:6px"><span style="width:${pct}%"></span></div>
         </div></button>`;
     }).join('')}</div>`;

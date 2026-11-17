@@ -434,3 +434,34 @@ NULL，属老扫描结果，`[13]` 这种方括号集数在新口径里是 low �
 
 这几条会让人误以为作品真叫「魔王2」。清理需要先确认用户想要的正确名字，
 `lookup_local('魔王2099')` 目前返回「魔王2」，是词典优先级导致的。
+
+---
+
+## 14. 继续观看的「下一集补集」（2026-11-17）
+
+### 14.1 为什么不动 watcher
+
+`watcher._resume_ms()` 在 `completed=1` 时返回 0，`_tick()` 写库用
+`position_ms = CASE WHEN ? = 1 THEN 0 ...`、`completed = MAX(completed, ?)`。
+这是完成率（`get_watch_stats`）、「已看完」清单（`get_completed`）、整部清理入口
+（`library_tree._finalize`）共同依赖的语义。一旦放宽，单测 `test_tail_percent_marks_completed`
+和完成率统计会连锁错乱。所以修在**取数侧**，不动写侧。
+
+### 14.2 补集算法
+
+1. `get_continue_watching` / `get_continue_row` 先按原口径取未完成条目，收集 `display_title` 到 `seen`；
+2. `_completed_followups(limit, seen)` 查 `completed=1 AND dismissed_at IS NULL` 且源未软删的最新记录，按标题去重；
+3. 一次 `get_media_tree({"mode":"series"})` 构建剧集树（带缓存），逐条 `_adjacent_in_tree(..., "next")`；
+4. 目标必须存在且 `deleted_at` 为空，再经黑名单二次过滤；
+5. 生成 `after_completed=True` / `from_episode=N` 的伪条目，`file_id` 指向下一集、`position_ms=0`；
+6. 与未完成条目合并按 `last_played_at` 排序，截断到 limit。
+
+### 14.3 关键边界
+
+- **失败即锁定**：同一作品按最新完成记录决策一次，`player_adjacent` 报"最后一集"时不回退到更早的集，
+  否则第 3 集看完后会把已看完的第 2 集又翻出来。
+- **多版本**：`_adjacent_in_tree` 沿用 `library_tree._file_order`，与媒体库/播放器「下一集」按钮同一排序；
+  同一集多份文件不会造成重复卡片（`seen` 按作品标题锁）。
+- **点击行为**：伪条目的 `data-action="play"` 走 `playSmart('id', id, false)`，因 `position_ms=0` 自然从头播，
+  不需要新增 action 分支。
+- **测试**：`tests/test_continue_followup.py` 9 例（含跨季、回收站、dismiss、在看优先、全看完消失、前端契约）。
