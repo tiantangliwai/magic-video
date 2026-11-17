@@ -59,6 +59,38 @@ def clean_title(text: str) -> str:
     return s.strip()
 
 
+# 发布组 / 压制参数的特征词。命中的字符串是「从文件名抠出来的技术串」，
+# 不是作品名，不能当中文名存库、更不能进学习词典。
+_RELEASE_RE = re.compile(
+    r"(?:\b(?:2160p|1080p|720p|480p|360p)\b"
+    r"|\b(?:WEB[-\s.]?(?:DL|Rip)|Blu[-\s.]?Ray|BDRip|HDRip|DVDRip|HDTV)\b"
+    r"|\b(?:HEVC|AVC|x26[45]|H\.?26[45]|10bit|8bit|Hi10P)\b"
+    r"|\b(?:AAC|FLAC|AC3|EAC3|DTS|OPUS|MP3)\d?(?:[.\s]?\d)?\b"
+    r"|\b(?:Ma10p|Chs|Cht|Jpn|Eng)\b"
+    r"|\[[^\[\]]{2,40}\]"
+    r"|\b[A-Z][A-Za-z0-9]*TV\b|\bKKTV\b|\bCR-WebRip\b)", re.IGNORECASE,
+)
+
+
+def looks_like_release(text: str) -> bool:
+    """``text`` 是不是「发布组 / 压制参数」串，而不是真正的作品名。
+
+    典型样本：``My DressUp Darling KKTV AAC2 0 -BlackTV``。这类串是扫描时从
+    文件名抠出来的 ``title_guess``，被「改名」流程误当成中文名回写后，会顺着
+    学习词典反向污染其它文件。判定口径刻意保守：只要出现分辨率、编码、音轨、
+    方括号组名等任一项就算——真正的作品名几乎不会带这些。
+    """
+    s = str(text or "")
+    if not s:
+        return False
+    if _RELEASE_RE.search(s):
+        return True
+    # 「名 空格 名 空格 名」且全是英文数字、还带数字：更像文件名拆出来的残片
+    words = [w for w in re.split(r"[\s._-]+", s) if w]
+    digits = sum(1 for w in words if w.isdigit())
+    return len(words) >= 5 and digits >= 1 and not _CJK_RE.search(s)
+
+
 def _strip_tail(text: str) -> str:
     """先反复剥季 / 部标记，再剥尾部集号；顺序反了会把「s4」吃掉一个 4。"""
     previous = None

@@ -686,12 +686,76 @@ class Api:
         except OSError as exc:
             return {"ok": False, "error": str(exc)}
 
+    @staticmethod
+    def _sync_media_titles(row: dict, new_name: str) -> int:
+        """把「看过的列表」里的改名回写给媒体库，让历史记录 / 剧集墙跟着变。
+
+        历史记录的标题读的是 ``media_files``（``title_cn`` > ``title_guess``），
+        而 ``update_watched`` 只改 ``watched_list``；两张表没有外键，改名不传播
+        时就会出现「看过的列表已经是新名字、历史记录还是老名字」。
+
+        定位方式按可靠性排序，**任一命中即停**，不做多路并集：
+
+        1. 用改名前的 ``title_cn`` / ``title`` 与媒体行的 ``display_title`` 精确
+           相等（同步生成的 watched 行，其标题本来就取自这个表达式）；
+        2. 同上但忽略季号（仅当该行没有季号时）。
+
+        季号必须对得上才改：一部剧的第 1 季和第 2 季常常共用同一个中文名，
+        不按季过滤会把另一季的文件名一起改掉。命中行数超过上限直接放弃，
+        宁可不同步也不能一次改掉半个库。
+        """
+        name = str(new_name or "").strip()
+        if not name:
+            return 0
+        olds: list[str] = []
+        for key in ("title_cn", "title"):
+            value = str(row.get(key) or "").strip()
+            if value and value.lower() not in {x.lower() for x in olds}:
+                olds.append(value)
+        if not olds:
+            return 0
+
+        def _season_key(value) -> int:
+            try:
+                return int(value or 0) or 1      # 无季标记统一算第 1 季
+            except (TypeError, ValueError):
+                return 1
+
+        want_season = _season_key(row.get("season_no"))
+        media = watchlist._media_haystacks()
+        hit: list[int] = []
+        for old in olds:
+            hit = []
+            for m in media:
+                if str(m.get("display_title") or "").strip().lower() != old.lower():
+                    continue
+                if _season_key(m.get("season_no")) != want_season:
+                    continue
+                hit.append(int(m["id"]))
+            if hit:
+                break
+        if not hit or len(hit) > 300:
+            return 0
+        marks = ",".join("?" * len(hit))
+        # match_by='user' 是「人工结果」标记：后续刮削（含强制重刮）据此跳过，
+        # 否则下一次自动补中文名就会把用户改的名字覆盖回去。
+        with db.session(immediate=True) as conn:
+            cur = conn.execute(
+                f"UPDATE media_files SET title_cn = ?, match_by = 'user' "
+                f"WHERE id IN ({marks})",
+                (name[:120], *hit),
+            )
+            return max(0, cur.rowcount)
+
     def update_watched(self, item_id: int, title: str | None = None,
                       title_cn: str | None = None) -> dict:
         """行内改名。None = 不改该字段；中文名传空串表示清空。
 
         用户手改的中文名按 ``source='user'`` 记住，下次导入同名作品自动命中；
         ``raw_text`` 是导入原文，始终保留不改。
+
+        改完会尝试把新名字**同步到媒体库**（见 ``_sync_media_titles``），
+        这样历史记录与剧集墙不会停留在旧名字上。
         """
         try:
             rid = int(item_id)
@@ -703,23 +767,43 @@ class Api:
         new_title = row["title"] if title is None else str(title).strip()
         if not new_title:
             return {"ok": False, "error": "作品名不能为空"}
+        changed = title is not None or title_cn is not None
         if title_cn is None:
             new_cn = row["title_cn"]
-            match_by = row["match_by"]
         else:
             new_cn = str(title_cn).strip() or None
-            match_by = "user" if new_cn and new_cn != new_title else (
-                "none" if not new_cn else "native")
+        # 旧版前端在改名时把旧的中文名原样回传；若那个值是发布组 / 压制参数串
+        # （``My DressUp Darling KKTV AAC2 0 -BlackTV``），它会顺着学习词典把
+        # 其它文件的中文名一起污染。这里统一当空处理，既不写库也不记词典。
+        if changed and new_cn and textmatch.looks_like_release(new_cn):
+            new_cn = None
+        if not changed:
+            match_by = row["match_by"]          # 两个字段都没动，原样保留
+        elif new_cn:
+            # 用户主动改名一律记成人工结果（即使中文名与作品名相同）：
+            # ``apply_to_watched`` 的自动补名条件包含 ``title_cn = title``，
+            # 不标 user 的话下一次「外文补中文」就会把用户改的名字覆盖回去。
+            match_by = "user"
+        else:
+            match_by = "none"
         db.execute(
             "UPDATE watched_list SET title = ?, title_cn = ?, match_by = ? WHERE id = ?",
             (new_title, new_cn, match_by, rid),
         )
         learned = False
-        if new_cn and new_cn != new_title and (title is not None or title_cn is not None):
+        if new_cn and new_cn != new_title:
             metadata.remember(new_title, new_cn, source="user")
             learned = True
+        display_new = new_cn or new_title
+        display_old = str(row.get("title_cn") or row.get("title") or "").strip()
+        media_updated = 0
+        if display_new != display_old:
+            try:
+                media_updated = self._sync_media_titles(row, display_new)
+            except Exception:                    # 同步失败不能连累改名本身
+                media_updated = 0
         return {
-            "ok": True, "learned": learned,
+            "ok": True, "learned": learned, "media_updated": media_updated,
             "row": db.row("SELECT * FROM watched_list WHERE id = ?", (rid,)),
         }
 

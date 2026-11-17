@@ -362,3 +362,75 @@ def _season_key(value) -> int:
 NULL，属老扫描结果，`[13]` 这种方括号集数在新口径里是 low 置信度）与
 `My.DressUp.Darling.S02E01..E12`（已正常解析）。前者一旦有播放记录，会以「无集号」
 进入同步、生成区间为 NULL 的整部行。本次未改，重扫后可落进「待确认集数」。
+
+---
+
+## 13. 改名传播与发布组脏名防护（2026-11-17 追加）
+
+### 13.1 现象
+
+「看过的列表」里把 `My DressUp Darling KKTV AAC2 0 -BlackTV` 改成
+「更衣人偶坠入爱河 第二季」后，历史记录仍显示原名。
+
+### 13.2 三处数据源，只改了一处
+
+| 位置 | 标题来源 | 改名是否生效 |
+|---|---|---|
+| 看过的列表 | `watched_list.title` / `title_cn` | 是（`UPDATE watched_list`） |
+| 历史记录 | `media_files.title_cn` > `title_guess` | **否** |
+| 剧集墙 / 媒体库 | 同上（树分组 label） | **否** |
+
+两张表无外键，`update_watched` 从来只写 `watched_list`，所以历史记录停在旧名字上。
+
+### 13.3 传播实现 `Api._sync_media_titles(row, new_name)`
+
+- 定位键用**改名前的** `title_cn` / `title`，不是新名字：同步生成的 watched 行标题
+  取自 `COALESCE(title_cn, title_guess)`，旧值必然与媒体行一致；新名字（「第二季」
+  这类）在媒体库里不存在，用它去找是 0 条。
+- 季号用与 `importer._season_key` 相同的折算（NULL/0 → 1），**必须相等才改**。
+  第 1 季与第 2 季常共用同一中文名，不按季过滤会把另一季的文件名一起改掉。
+- 命中数 > 300 直接放弃：宁可不同步，也不能一次改掉半个库。
+- 写回 `match_by='user'`：`metadata.apply_to_media(force=True)` 的 where 里带
+  `COALESCE(match_by,'') <> 'user'`，这样强制重刮也不会覆盖用户改名。
+- 整个调用包在 `try/except` 里，同步失败不能连累改名本身。
+
+### 13.4 `match_by` 语义修正
+
+原来 `title_cn == title` 时落 `native`。但 `apply_to_watched` 的自动补名条件是
+`title_cn IS NULL OR title_cn = '' OR title_cn = title`——正好命中这种行，
+用户改的名字活不过一次「外文补中文」。现改为：**只要用户主动改名且新中文名非空，
+一律标 `user`**（`chat` 结论：宁可多标人工结果，也不能让改名被静默回滚）。
+
+### 13.5 发布组脏名防护 `textmatch.looks_like_release()`
+
+命中任一项即判为「文件名残片，不是作品名」：分辨率（`1080p`）、来源
+（`WEB-DL` / `BluRay` / `BDRip`）、编码（`HEVC` / `x264` / `10bit`）、音轨
+（`AAC2.0` / `FLAC` / `OPUS`）、方括号组名（`[Nekomoe kissaten&LoliHouse]`）、
+`KKTV` / `BlackTV` / `CR-WebRip`。
+兜底：≥5 个空格分隔的词、含纯数字、且全无汉字 → 也判脏。
+
+作用点只有一个：`update_watched` 在写库与记词典之前过一遍。脏值按空处理，
+于是既不写 `title_cn`、也不进 `name_alias`。
+
+### 13.6 真实库修复记录（2026-11-16 夜）
+
+备份：`D:/magicvideo/library.db.backup-20261116-fix`（1 929 216 字节）。
+
+| 动作 | 结果 |
+|---|---|
+| 删 `name_alias` id=2（`更衣人偶坠入爱河 → My DressUp Darling KKTV AAC2 0 -BlackTV`，`source='user'`） | 反向映射清除 |
+| `update_watched(157, '更衣人偶坠入爱河 第二季', '更衣人偶坠入爱河 第二季')` | `media_updated=12`（149–160） |
+| 校验第 1 季 137–148 | 仍为「更衣人偶坠入爱河」，未被误改 |
+| 历史记录 id=26 | 由发布组串变为「更衣人偶坠入爱河 第二季」 |
+
+### 13.7 未处理的同类脏数据（等用户决定）
+
+同一 bug 还留下了 5 条「半截中文名」，共 3 处：
+
+- `name_alias` id 272–276：`魔王2099 → 魔王2`、`香格里拉边境 S1-2 → 香格里拉边境 S`、
+  `关于我转生变成史莱姆这档事 S1- S3 → ...S S3`、`K  s1\s2 → K`、`k - 剧场版 → 剧场版`
+- `watched_list` 对应 5 行的 `title_cn` 是同一批截断值
+- `subjects` id 38 / 63：`... S S3`、`... S`
+
+这几条会让人误以为作品真叫「魔王2」。清理需要先确认用户想要的正确名字，
+`lookup_local('魔王2099')` 目前返回「魔王2」，是词典优先级导致的。
