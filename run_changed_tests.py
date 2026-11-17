@@ -28,6 +28,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+from tests import db_guard  # noqa: E402
+
+# 与 run_tests.py 一致：增量入口同样强制装好数据库隔离守卫（幂等）。
+db_guard.install()
+
 # ---------------------------------------------------------------- 影响面表
 # 变更路径 -> 额外要跑的测试模块（除了同名的 tests/test_<stem>.py 之外）。
 # 只登记真实的跨模块依赖，别把整库都塞进来，否则就失去「增量」的意义。

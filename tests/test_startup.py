@@ -12,6 +12,8 @@ from unittest import mock
 from app import config, potplayer, single_instance
 from app.api import Api
 
+from .base import IsolatedDbTestCase
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -62,8 +64,11 @@ class SingleInstanceTests(unittest.TestCase):
             self.assertTrue(single_instance.guard())
 
 
-class JsApiReflectionTests(unittest.TestCase):
-    """pywebview 会 dir() 深度反射 js_api；公开持有 Window 会拖垮启动并抛 COM 异常。"""
+class JsApiReflectionTests(IsolatedDbTestCase):
+    """pywebview 会 dir() 深度反射 js_api；公开持有 Window 会拖垮启动并抛 COM 异常。
+
+    会实例化 Api()（构造里 db.init_db()），必须继承隔离基类，否则写真实库。
+    """
 
     def test_api_exposes_no_window_attribute(self):
         api = Api()

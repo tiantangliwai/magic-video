@@ -18,6 +18,11 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from app import __version__, config  # noqa: E402
+from tests import db_guard  # noqa: E402
+
+# 在任何用例之前装好数据库隔离守卫（幂等）：即使有人用 discover -s tests
+# 绕过包导入，也不会让忘了继承 IsolatedDbTestCase 的用例碰到真实库。
+db_guard.install()
 
 
 def _count_modules(suite) -> dict:

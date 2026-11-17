@@ -88,6 +88,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 57 | **看完一集后继续观看要能直接点下一集**：已完成但仍存在下一集的作品，在首页「继续观看」、导航「继续观看」页、剧集墙顶部继续观看行三处都显示下一集卡片，点击从头播；全剧看完才消失。只在取数侧补集，**绝不改 watcher 完成判定 / `completed` / `position_ms` / 历史记录** | 用户反馈（2026-11-17「历史记录的最新一条是我看一个动漫第一集看完了，但是继续观看列表里就没信息了，我需要…点击后看第二集」） |
 | 58 | **启动时首屏就是持久化的主题，不能先白后黑**：主题存 SQLite、private_mode 下 localStorage 不持久；由 `app/main.py::startup_url()` 把 theme 注入 URL 参数，`index.html` head 里的同步脚本在 CSS 加载前设 `data-theme`；JS 侧 `currentTheme` 初值跟随 DOM，禁止硬编码 light 后等异步 IPC 再切 | 用户反馈（2026-11-17「重新打开 magic video 时表头还是白色的，需要切换一下之后才会变成黑色的」） |
 | 59 | 「看片统计」改名**「观影报告」**；`watch_sessions.watched_ms` 是 v0.1.6 才加的列、迁移只 `ADD COLUMN DEFAULT 0` 不回填，**不能把有真实播放区间的旧会话统计成 0**：读取时用区间保守估算并标「估」，不写库、不冒充精确口径；升级后必须重启守护，否则新会话仍不写该字段 | 用户反馈（2026-11-17「11-15 我看了一天的动漫统计的结果还是 0，另外看片统计这个名字有点不好」） |
+| 60 | **任何单元测试不得改动真实数据库** `D:\magicvideo\library.db`：碰库的用例必须继承 `IsolatedDbTestCase`（临时库）；`tests/db_guard.py` 全局 patch `sqlite3.connect` 强拦真实库连接，`tests/__init__.py` 与两个运行器入口都装守卫；`tests/test_db_isolation.py` 静态扫描确保无漏网。禁止绕过守卫直连真库验证 | 用户要求（2026-11-17「所有的单元测试不能改动真实数据库中的内容」） |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。
@@ -155,6 +156,8 @@ run.py ──> app/main.py ──> webview 窗口 ──> web/index.html + app.j
 
 **默认动作（每次日常迭代都走这一条）**：`python run_changed_tests.py`。
 它按 git 变更自动挑出受影响模块；精确控制用 `--module tests.test_x` / `--only` / `--list`，已提交想回看用 `--base HEAD~1`。改了 Python / JS 再补 `compileall` / `node --check`。只改前端语法 / 纯文案时，跑 `node --check` 即可，连 Python 增量都不必全跑。
+
+**数据库隔离铁律（用户 2026-11-17 要求）**：单元测试**绝不能改动真实数据库** `D:\magicvideo\library.db`。所有用例默认应继承 `tests/base.py::IsolatedDbTestCase`（临时库）。`tests/db_guard.py` 在运行期全局 patch `sqlite3.connect`，任何指向真实库的连接立即抛错；守卫在 `tests/__init__.py` 及两个运行器入口安装。`tests/test_db_isolation.py` 静态扫描全部 `test_*.py`，凡碰 `db.*` / `Api()` / `Tray()` / `sqlite3.connect` 的类必须（传递地）继承隔离基类。新增测试类若需写库，**必须继承 `IsolatedDbTestCase`**，不要用裸 `unittest.TestCase` 去 `Api()`；取证真实库只能用 `mode=ro` 只读连接且写在测试脚本之外，不得进单测。
 
 **允许跑全量 `python run_tests.py` 的封闭白名单（仅此三条，不得扩充）**：
 

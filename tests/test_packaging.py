@@ -12,6 +12,8 @@ from unittest import mock
 
 from app import __version__, autostart, config, obsidian, runtime
 
+from .base import IsolatedDbTestCase
+
 FROZEN_EXE = r"C:\Program Files\Magic Video\Magic Video.exe"
 
 
@@ -114,7 +116,9 @@ class RuntimeCommandTests(unittest.TestCase):
         self.assertEqual(runtime.command_line(["a b.exe", "--daemon"]), '"a b.exe" "--daemon"')
 
 
-class FrozenIntegrationTests(unittest.TestCase):
+class FrozenIntegrationTests(IsolatedDbTestCase):
+    """本类会实例化 Api()/Tray()（构造里 db.init_db()），必须继承隔离基类，否则写真实库。"""
+
     def test_autostart_command_in_frozen_mode(self):
         with mock.patch.object(runtime, "is_frozen", return_value=True), \
                 mock.patch.object(runtime.sys, "executable", FROZEN_EXE):
