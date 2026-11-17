@@ -52,6 +52,31 @@ _MEDIA_CACHE_TTL = 20.0
 _MEDIA_CACHE: dict[tuple, tuple[float, dict]] = {}
 
 
+def _session_ms_and_estimate(row: dict) -> tuple[int, bool]:
+    """取会话时长；watched_ms 缺失的旧会话用播放区间做保守估算。
+
+    ``watch_sessions.watched_ms`` 是 v0.1.6 才加的列，迁移只 ADD COLUMN DEFAULT 0，
+    此前所有会话都是 0。统计只认它会把「看了一整天」显示成 0。这里在**读取时**
+    估算，不写库、不改 schema，也不把估算混进 watched_ms 的精确口径：
+    - 只有 ``watched_ms == 0`` 且区间 >= 1 分钟才估（短会话视为合法的 0）；
+    - 拖进度条把 max_ms 抬高、最后停在靠前位置时，保守只算到 to_ms；
+    - 单条上限 12 小时，避免异常数据把统计拉爆。
+    """
+    exact = int(row.get("watched_ms") or 0)
+    if exact > 0:
+        return exact, False
+    frm = max(0, int(row.get("from_ms") or 0))
+    to = max(0, int(row.get("to_ms") or 0))
+    mx = max(0, int(row.get("max_ms") or 0))
+    span = mx - frm
+    if span < 60_000:
+        return 0, False
+    # 拖动异常：最远位置远高于最后位置，说明跳着看过，只保守算到最后停下的位置
+    if to >= frm and (mx - to) > span * 0.5:
+        span = to - frm
+    return min(max(0, span), 12 * 3600 * 1000), True
+
+
 def _display_title_expr() -> str:
     """列表展示用标题表达式，按 ``title_lang_pref`` 决定中文名与原名谁优先。
 
@@ -1539,12 +1564,15 @@ class Api:
 
     # ---- 统计 / 日历 / 标签 / 多版本（P2-1 ~ P2-4） ------------------------
     def get_watch_stats(self, days: int = 30) -> dict:
-        """看片时长统计。
+        """观影报告：时长、完成率与每日趋势。
 
         **统计口径**（写进 FEATURES，改之前先想清楚）：
 
-        - 只用 ``watch_sessions.watched_ms``：只累加「连续播放」的位置增量，
+        - 优先用 ``watch_sessions.watched_ms``：只累加「连续播放」的位置增量，
           快进 / 拖进度条 / 回拖都不计入（P0-5 的口径）。
+        - 该列是 v0.1.6 才加的，旧会话迁移后默认是 0。对 ``watched_ms=0`` 且
+          确有播放区间的会话，读取时按区间做**保守估算**并标 ``estimated``，
+          不写库、不冒充精确时长（详见 :func:`_session_ms_and_estimate`）。
         - 按会话的**开始日期**归日；跨零点的长会话整段算在开始那天。
         - 同一集看两遍算两次（真实发生过的观看），不做去重。
         - 黑名单里的作品不计入。
@@ -1556,7 +1584,8 @@ class Api:
         since = (datetime.now() - timedelta(days=span - 1)).strftime("%Y-%m-%d %H:%M:%S")
         rows = blacklist.filter_rows(
             db.rows(
-                "SELECT s.started_at, COALESCE(s.watched_ms, 0) AS watched_ms, s.file_id, "
+                "SELECT s.started_at, COALESCE(s.watched_ms, 0) AS watched_ms, "
+                "s.from_ms, s.to_ms, s.max_ms, s.file_id, "
                 f"{_display_title_expr()} AS title, f.season_no, f.episode_no "
                 "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
                 "WHERE COALESCE(s.started_at, '') >= ?",
@@ -1568,19 +1597,25 @@ class Api:
         daily: dict[str, dict] = {}
         works: dict[str, dict] = {}
         total_ms = 0
+        estimated_sessions = 0
         for row in rows:
             day = str(row.get("started_at") or "")[:10]
-            ms = int(row.get("watched_ms") or 0)
+            ms, estimated = _session_ms_and_estimate(row)
+            if estimated:
+                estimated_sessions += 1
             total_ms += ms
             if day:
-                bucket = daily.setdefault(day, {"date": day, "minutes": 0.0, "sessions": 0})
+                bucket = daily.setdefault(day, {"date": day, "minutes": 0.0, "sessions": 0,
+                                                "estimated": 0})
                 bucket["minutes"] += ms / 60000
                 bucket["sessions"] += 1
+                bucket["estimated"] += int(estimated)
             title = str(row.get("title") or "").strip() or "（未关联文件）"
             work = works.setdefault(title, {"title": title, "minutes": 0.0, "sessions": 0,
-                                            "files": set(), "last_at": ""})
+                                            "files": set(), "last_at": "", "estimated": 0})
             work["minutes"] += ms / 60000
             work["sessions"] += 1
+            work["estimated"] += int(estimated)
             if row.get("file_id"):
                 work["files"].add(int(row["file_id"]))
             started = str(row.get("started_at") or "")
@@ -1593,7 +1628,8 @@ class Api:
             bucket = daily.get(day)
             series.append({"date": day,
                            "minutes": round(bucket["minutes"], 1) if bucket else 0.0,
-                           "sessions": bucket["sessions"] if bucket else 0})
+                           "sessions": bucket["sessions"] if bucket else 0,
+                           "estimated": bucket["estimated"] if bucket else 0})
 
         by_work = sorted(works.values(), key=lambda w: w["minutes"], reverse=True)[:20]
         for work in by_work:
@@ -1610,6 +1646,7 @@ class Api:
             "avg_minutes_per_active_day": round(
                 (total_ms / 60000) / active_days, 1) if active_days else 0.0,
             "works": len(works),
+            "estimated_sessions": estimated_sessions,
         }
         progress = db.row(
             "SELECT COUNT(*) AS total, "
@@ -1630,7 +1667,8 @@ class Api:
                 "completed": done_files,
                 "rate": round(done_files / total_files * 100, 1) if total_files else 0.0,
             },
-            "note": "时长只计连续播放，快进与拖进度条不计入；同一集重看会累计。",
+            "note": "优先按连续播放计（快进与拖进度条不计）；时长统计上线前的旧会话按播放区间保守估算，"
+                    "标「估」与精确时长区分。同一集重看会累计。",
         }
 
     def get_continue_row(self, limit: int = 12) -> dict:
@@ -1727,6 +1765,7 @@ class Api:
         rows = blacklist.filter_rows(
             db.rows(
                 "SELECT s.started_at, COALESCE(s.watched_ms, 0) AS watched_ms, "
+                "s.from_ms, s.to_ms, s.max_ms, "
                 f"{_display_title_expr()} AS title "
                 "FROM watch_sessions s LEFT JOIN media_files f ON f.id = s.file_id "
                 "WHERE COALESCE(s.started_at, '') LIKE ?",
@@ -1736,13 +1775,19 @@ class Api:
         )
         days: dict[str, dict] = {}
         titles: dict[str, Counter] = {}
+        estimated_sessions = 0
         for row in rows:
             day = str(row.get("started_at") or "")[8:10]
             if not day:
                 continue
-            bucket = days.setdefault(day, {"day": day, "minutes": 0.0, "sessions": 0})
-            bucket["minutes"] += int(row.get("watched_ms") or 0) / 60000
+            ms, estimated = _session_ms_and_estimate(row)
+            if estimated:
+                estimated_sessions += 1
+            bucket = days.setdefault(day, {"day": day, "minutes": 0.0, "sessions": 0,
+                                           "estimated": 0})
+            bucket["minutes"] += ms / 60000
             bucket["sessions"] += 1
+            bucket["estimated"] += int(estimated)
             titles.setdefault(day, Counter())[str(row.get("title") or "")] += 1
         out = []
         for day, bucket in sorted(days.items()):
@@ -1750,9 +1795,11 @@ class Api:
             out.append({"day": day, "date": prefix + day,
                         "minutes": round(bucket["minutes"], 1),
                         "sessions": bucket["sessions"],
+                        "estimated": bucket["estimated"],
                         "top_title": top.most_common(1)[0][0] if top else ""})
         return {"ok": True, "month": text, "days": out,
-                "total_minutes": round(sum(d["minutes"] for d in out), 1)}
+                "total_minutes": round(sum(d["minutes"] for d in out), 1),
+                "estimated_sessions": estimated_sessions}
 
     def get_work_meta(self, work_keys: list | None = None) -> dict:
         """批量取作品标注（评分 / 标签），前端卡片一次取齐。"""

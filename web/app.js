@@ -44,7 +44,7 @@ const VIEW_META = {
   continue: ['继续观看', '从上次中断的位置接着看'],
   history: ['历史记录', '每次观看的时间与进度'],
   library: ['媒体库', '扫描到的本地视频文件'],
-  stats: ['看片统计', '有效观看时长、完成率与观看日历'],
+  stats: ['观影报告', '有效观看时长、完成率与观看日历'],
   posters: ['剧集墙', '按作品展示封面、季数与续播'],
   quicksearch: ['全盘快搜', '整台电脑的视频文件，一搜即播'],
   websearch: ['网页搜索', '同时搜 AGE动漫 与 Seeduck，结果标明来源'],
@@ -1661,7 +1661,7 @@ async function loadPosterWall() {
   }
 }
 
-// ---------- 看片统计（P2-1）+ 观看日历（P2-4） ----------
+// ---------- 观影报告（P2-1）+ 观看日历（P2-4） ----------
 let statsState = { days: 30, month: '', data: null, calendar: null };
 
 function statsBars(daily) {
@@ -1669,10 +1669,11 @@ function statsBars(daily) {
   const max = Math.max(1, ...daily.map(d => num(d.minutes)));
   return `<div class="stat-bars">${daily.map(d => {
     const h = Math.max(2, Math.round((num(d.minutes) / max) * 100));
-    const title = `${d.date} · ${d.minutes} 分钟 · ${d.sessions} 次`;
+    const est = num(d.estimated);
+    const title = `${d.date} · ${d.minutes} 分钟 · ${d.sessions} 次${est ? ' · 含 ' + est + ' 次估算' : ''}`;
     return `<div class="stat-bar" title="${esc(title)}">
       <div class="stat-bar-fill" style="height:${h}%"></div>
-      <span class="stat-bar-label">${Number(d.date.slice(8))}</span></div>`;
+      <span class="stat-bar-label">${Number(d.date.slice(8))}${est ? '<em style="font-size:9px;font-style:normal;opacity:.7">估</em>' : ''}</span></div>`;
   }).join('')}</div>`;
 }
 
@@ -1693,8 +1694,8 @@ function calendarHtml(cal) {
     const hit = byDay[day];
     const level = hit ? Math.min(4, Math.ceil((num(hit.minutes) / maxMin) * 4)) : 0;
     cells.push(`<div class="cal-cell${level ? ' lv' + level : ''}"
-      title="${hit ? `${hit.date} · ${hit.minutes} 分钟 · ${esc(hit.top_title || '')}` : `${cal.month}-${String(day).padStart(2, '0')} 无记录`}">
-      <span>${day}</span>${hit ? `<b>${Math.round(num(hit.minutes))}</b>` : ''}</div>`);
+      title="${hit ? `${hit.date} · ${hit.minutes} 分钟 · ${esc(hit.top_title || '')}${num(hit.estimated) ? ' · 含估算' : ''}` : `${cal.month}-${String(day).padStart(2, '0')} 无记录`}">
+      <span>${day}</span>${hit ? `<b>${num(hit.estimated) ? '~' : ''}${Math.round(num(hit.minutes))}</b>` : ''}</div>`);
   }
   const heads = ['一', '二', '三', '四', '五', '六', '日']
     .map(h => `<div class="cal-head">${h}</div>`).join('');
@@ -1707,10 +1708,11 @@ function renderStatsBody() {
   const comp = data.completion || {};
   const bar = document.getElementById('statsBody');
   if (!bar) return;
+  const est = num(totals.estimated_sessions);
   bar.innerHTML = `
     <div class="stats">
       <div class="stat"><span>有效时长</span><b>${num(totals.minutes)} 分钟</b>
-        <small>${num(totals.hours)} 小时</small></div>
+        <small>${num(totals.hours)} 小时${est ? ' · 含 ' + est + ' 次估算' : ''}</small></div>
       <div class="stat"><span>有看片的天数</span><b>${num(totals.active_days)} 天</b>
         <small>近 ${num(totals.span_days)} 天</small></div>
       <div class="stat"><span>日均（按有看的天）</span><b>${num(totals.avg_minutes_per_active_day)} 分钟</b>
@@ -1725,7 +1727,7 @@ function renderStatsBody() {
       <div class="thumb">${i + 1}</div>
       <div class="body"><div class="name">${esc(w.title)}</div>
         <div class="meta">${num(w.files)} 个文件 · ${num(w.sessions)} 次会话 · 最近 ${esc(shortDate(w.last_at) || '—')}</div></div>
-      <div class="right"><b>${num(w.minutes)}</b> 分钟</div></div>`).join('')}</div>`
+      <div class="right"><b>${num(w.minutes)}</b> 分钟${num(w.estimated) ? ' <span class="badge amber">估</span>' : ''}</div></div>`).join('')}</div>`
       : empty('还没有足够的数据', '看几集之后这里会按作品汇总')}
     <p class="hint" style="margin-top:10px">${esc(data.note || '')}</p>`;
 }
@@ -1738,7 +1740,7 @@ function renderCalendarBody() {
       <button class="btn btn-sm" data-action="calendar-shift" data-step="-1">上一月</button>
       <b>${esc(cal.month || '')}</b>
       <button class="btn btn-sm" data-action="calendar-shift" data-step="1">下一月</button>
-      <span class="hint" style="margin:0">本月共 ${num(cal.total_minutes)} 分钟</span>
+      <span class="hint" style="margin:0">本月共 ${num(cal.total_minutes)} 分钟${num(cal.estimated_sessions) ? '（含 ' + num(cal.estimated_sessions) + ' 次估算）' : ''}</span>
     </div>
     <div class="cal-grid">${calendarHtml(cal)}</div>`;
 }
@@ -1756,7 +1758,7 @@ async function loadStats() {
 }
 
 async function renderStats() {
-  setContent(`<div class="card"><div class="section-head"><h3>看片统计</h3>
+  setContent(`<div class="card"><div class="section-head"><h3>观影报告</h3>
       <span class="badge blue" id="statsRange">近 ${num(statsState.days)} 天</span></div>
     <div class="watched-toolbar">
       ${[7, 30, 90].map(d => `<button class="btn btn-sm ${statsState.days === d ? 'btn-primary' : ''}"

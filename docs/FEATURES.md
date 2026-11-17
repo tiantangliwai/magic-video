@@ -990,15 +990,20 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 
 ## 28. v0.1.6 P2 体验层（P2-1 ~ P2-6）+ 两项工程加固
 
-### A. 看片统计（P2-1，左侧「看片统计」）
+### A. 观影报告（P2-1，左侧「观影报告」）
 
 - **统计口径（改之前先想清楚，代码与页面都写着同一句）**：
-  - 只累加 `watch_sessions.watched_ms`，即「连续播放的位置增量」；**快进、拖进度条、回拖都不计入**。
+  - 优先累加 `watch_sessions.watched_ms`，即「连续播放的位置增量」；**快进、拖进度条、回拖都不计入**。
+  - **旧会话兼容**：`watched_ms` 是 v0.1.6 才加的列，迁移时只 `ADD COLUMN DEFAULT 0`、不回填；
+    对 `watched_ms=0` 且确有播放区间的会话，**读取时**按 `max_ms-from_ms` 做保守估算
+    （拖进度条把 max 抬高、最后停在靠前位置时只算到 `to_ms`，单条上限 12 小时），
+    并在 `daily` / `by_work` / 日历的每一天标 `estimated` 次数，界面显「估」角标。
+    **估算不写库、不改 schema**，绝不冒充 `watched_ms` 的精确口径。
   - 按会话的**开始日期**归日；跨零点的长会话整段算在开始那天。
   - 同一集看两遍算两次（真实发生过的观看）；连播按集切会话。
   - 黑名单里的作品不计入。
 - 页面：近 7 / 30 / 90 天切换；有效时长（分钟 + 小时）、有看片的天数、日均、完成率四个指标；每日柱状图（纯 CSS，不引图表库）；「看得最多的作品」Top 20；底部直接展示口径说明。
-- 接口：`get_watch_stats(days=30)`，返回 `daily / by_work / totals / completion / note`。
+- 接口：`get_watch_stats(days=30)`，返回 `daily / by_work / totals / completion / note`，`totals.estimated_sessions` 给出估算会话数；`get_watch_calendar(month)` 同口径并带 `estimated_sessions`。
 
 ### B. 观看日历（P2-4）
 
@@ -1009,7 +1014,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 ### C. 按季海报墙 + 继续观看置顶（P2-2）
 
 - 剧集墙工具条新增「按作品 / 按季」切换：按季模式下每一季单独一张卡（`season_cards`），`work_key` 与作品一致，评分/标签共用。
-- 顶部常驻「继续观看」横向滚动行：`get_continue_row(limit=12)` 按作品去重只留最新一条，点一下直接续播；已看完、人工移除、本地文件已删的不出现。
+- 顶部常驻「继续观看」横向滚动行：`get_continue_row(limit=12)` 按作品去重只留最新一条；已看完但仍有下一集的作品，以**下一集**卡片补位（标「接第 N 集 → 第 M 集」，点击从头播）；人工移除、本地文件已删、全剧看完的不出现。
 
 ### D. 多版本文件合并（P2-3）
 

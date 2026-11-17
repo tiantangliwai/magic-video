@@ -492,3 +492,43 @@ localStorage 不跨启动持久。主题真源只能是 SQLite 的 `settings.the
 `tests/test_theme.py` 新增三条：`index.html` 中 `setAttribute('data-theme'` 必须早于 `rel="stylesheet"`；
 `app.js` 不得再硬编码 `let currentTheme = 'light';`；`startup_url()` 对 dark / light / 缺值 / 非法值的输出。
 `node --check web/app.js` 同步覆盖脚本语法。
+
+---
+
+## 16. 观影报告：旧会话时长估算与改名（2026-11-17）
+
+### 16.1 真实库取证
+
+`D:/magicvideo/library.db`（只读 `mode=ro` 连接）里 26 条会话的 `watched_ms` **全是 0**。
+11-15 有 24 条会话、`SUM(max_ms-from_ms)=22,526,412ms≈6.26 小时`，但统计显示 0。
+
+原因：`watch_sessions.watched_ms` 由 v0.1.6（commit `02dbccc`）引入，`_migrate()` 只
+`ALTER TABLE ADD COLUMN ... DEFAULT 0`，不回填；11-15 的会话写于字段出现之前。
+11-16/11-17 的会话也是 0——守护进程没重启，内存里还是旧 `watcher.py`，不写这个字段。
+备份库佐证：11-15 的备份里 `watch_sessions` 列止于 `source`，没有 `watched_ms`。
+
+### 16.2 读取时估算，不写库
+
+`api.py::_session_ms_and_estimate(row)` 返回 `(毫秒, 是否估算)`：
+
+1. `watched_ms > 0` → 精确值，`estimated=False`；
+2. `watched_ms == 0` 且 `max_ms-from_ms >= 60 秒` → 估算：
+   `to_ms` 明显落后 `max_ms`（差值 > 区间一半）时只算到 `to_ms`，否则用 `max_ms-from_ms`；
+3. 单条上限 12 小时；不足 1 分钟的短会话视为合法的 0，不估。
+
+`get_watch_stats` / `get_watch_calendar` 共用该函数，查询补 `from_ms/to_ms/max_ms`，
+返回 `estimated` 计数（按天、按作品、按会话总数），前端在柱状图 tooltip、作品榜、日历格、
+「有效时长」小字里标「估」或 `~`。**数据库零写入**，精确口径仍由 `watched_ms` 独占。
+
+真实库复算：11-15 → 339.3 分钟（24 次会话中 20 次估算）、11-16 → 23 分钟、
+11-17 → 11.1 分钟，合计 6.22 小时；与原始区间 6.26 小时的差额来自刻意保守处理的拖动与短会话。
+
+### 16.3 改名
+
+「看片统计」→「观影报告」：`web/app.js` 的 `VIEW_META` 与页面标题、`web/index.html` 侧栏按钮、
+`docs/FEATURES.md` §28-A。`ni-stats` 图标 class 与 `stats` 视图 key 保持不变，避免契约连锁。
+
+### 16.4 重要提醒
+
+升级后**必须重启守护进程**，否则新看的片仍不会写 `watched_ms`，只能靠区间估算兜底。
+前端已有「后台进程管理」页可启停守护。
