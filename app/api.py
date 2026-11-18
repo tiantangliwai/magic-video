@@ -90,12 +90,13 @@ def _display_title_expr() -> str:
     """列表展示用标题表达式，按 ``title_lang_pref`` 决定中文名与原名谁优先。
 
     ``cn``（默认）：优先中文名，没有则用原名；``orig``：优先原名（日文/英文），
-    没有则回退中文名。两种都不会改变数据库里存的值，纯展示偏好。
+    没有则回退中文名。用户手改的 ``custom_title`` 始终最高优先——它和搜索、
+    展示同源，改名后平铺列表 / 历史 / 搜索结果都显示同一个新名字。
     """
     pref = str(db.get_setting("title_lang_pref", "cn") or "cn").lower()
     if pref in ("orig", "original", "en", "jp", "ja"):
-        return "COALESCE(f.title_guess, f.title_cn)"
-    return "COALESCE(f.title_cn, f.title_guess)"
+        return "COALESCE(f.custom_title, f.title_guess, f.title_cn)"
+    return "COALESCE(f.custom_title, f.title_cn, f.title_guess)"
 
 # 多版本（P2-3）：同一 (作品, 季, 集) 存在多份文件时，平铺列表给一个版本下拉。
 # 索引按数据指纹缓存，不在每次翻页时重扫全表。
@@ -1067,12 +1068,12 @@ class Api:
             "p.position_ms, p.percent, p.completed, p.last_played_at "
             "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
             "WHERE (f.filename LIKE ? OR COALESCE(f.title_guess,'') LIKE ? "
-            "OR COALESCE(f.title_cn,'') LIKE ?)"
+            "OR COALESCE(f.title_cn,'') LIKE ? OR COALESCE(f.custom_title,'') LIKE ?)"
         )
         if ban_sql:
             sql += " AND " + ban_sql
         sql += " ORDER BY f.id DESC LIMIT ?"
-        return db.rows(sql, (like, like, like, *ban_params, int(limit)))
+        return db.rows(sql, (like, like, like, like, *ban_params, int(limit)))
 
     @staticmethod
     def _media_filters(options: dict | None) -> tuple[str, list]:
@@ -1094,10 +1095,11 @@ class Api:
             conditions.append(
                 "(f.filename LIKE ? ESCAPE '\\' OR COALESCE(f.title_guess,'') LIKE ? ESCAPE '\\' "
                 "OR COALESCE(f.title_cn,'') LIKE ? ESCAPE '\\' "
+                "OR COALESCE(f.custom_title,'') LIKE ? ESCAPE '\\' "
                 "OR COALESCE(f.title_raw,'') LIKE ? ESCAPE '\\' "
                 "OR COALESCE(f.path,'') LIKE ? ESCAPE '\\')"
             )
-            params.extend([like] * 5)
+            params.extend([like] * 6)
         if directory_id > 0:
             conditions.append("f.dir_id = ?")
             params.append(directory_id)
@@ -1272,7 +1274,7 @@ class Api:
             kept.append(group)
         return kept
 
-    # ---- 作品改名：只改展示名，绝不碰媒体文件 / 播放记录 -------------------
+    # ---- 作品改名：展示名 + 入库搜索名，绝不碰播放记录 / 磁盘文件 -----------
     @staticmethod
     def _work_labels() -> dict:
         """读用户手改的作品名映射；内容损坏时静默降级为空，不影响浏览。"""
@@ -1288,8 +1290,15 @@ class Api:
     def rename_work(self, group_id: str, new_label: str, reset: bool = False) -> dict:
         """给一个作品分组改名（或清空恢复自动名称）。
 
-        ``group_id`` 必须是树里返回的 ``series::...`` 节点 id；改名只写一份
-        settings 映射，不 UPDATE media_files，也不影响封面缓存与搜索词兜底。
+        ``group_id`` 必须是树里返回的 ``series::...`` 节点 id。改名做两件事：
+
+        1. 写 ``work_labels_json`` —— 树 / 剧集墙的分组 label 用；
+        2. 把新名字写进组内所有 media_files 行的 ``custom_title`` —— 搜索框与
+           平铺列表 / 历史读它，于是「改名后输入新名能搜到」成立。
+
+        刻意**不碰** ``title_cn``：分组键、封面键、追剧匹配、自动刮削仍走原名，
+        一处改名不会牵动这四个系统。``custom_title`` 只在按 gid 反查到的本组
+        文件上写，reset 时清空即恢复自动名称。播放记录与磁盘文件一律不动。
         """
         gid = str(group_id or "").strip()
         if not gid.startswith("series::"):
@@ -1303,7 +1312,25 @@ class Api:
         else:
             labels[gid] = label
         db.set_setting(_WORK_LABELS_KEY, json.dumps(labels, ensure_ascii=False))
-        return {"ok": True, "group_id": gid, "label": label, "labels": labels}
+
+        # 反查必须在写 work_labels 之前？不必：分组键不含 custom_title 也不含
+        # work_labels，gid 稳定。写库失败不能连累改名本身，故整段吞异常。
+        synced = 0
+        try:
+            file_ids = self._series_member_ids(gid)
+            if file_ids:
+                marks = ",".join("?" * len(file_ids))
+                value = None if (reset or not label) else label
+                with db.session(immediate=True) as conn:
+                    cur = conn.execute(
+                        f"UPDATE media_files SET custom_title = ? WHERE id IN ({marks})",
+                        (value, *file_ids),
+                    )
+                    synced = max(0, cur.rowcount)
+        except Exception:
+            synced = 0
+        return {"ok": True, "group_id": gid, "label": label,
+                "labels": labels, "synced": synced}
 
     # ---- 人工清理：历史记录 / 已看完剧集的本地文件 -------------------------
     @staticmethod
@@ -1346,6 +1373,43 @@ class Api:
             if group.get("id") == group_id:
                 return group
         return None
+
+    @classmethod
+    def _series_member_ids(cls, group_id: str) -> list[int]:
+        """反查一个作品分组下的全部媒体文件 id（供改名写库用）。
+
+        分组键由 title_cn / 文件夹 / guess 计算，``custom_title`` 不参与，所以
+        写完新名后同一个 gid 仍指向同一批文件。树在展示层把同 (季,集) 的多个
+        版本合并了：主条目留在 ``files``，其余版本挂在 ``versions[].file_id``，
+        这里两处都收，避免只改到一个版本。命中超过上限直接放弃（宁可不同步，
+        也不能一次改掉半个库）。
+        """
+        group = cls._find_series_group(group_id)
+        if not group:
+            return []
+        ids: list[int] = []
+        seen: set[int] = set()
+
+        def walk(node: dict) -> None:
+            for item in node.get("files") or []:
+                fid = item.get("id")
+                if fid is not None:
+                    fid = int(fid)
+                    if fid not in seen:
+                        seen.add(fid)
+                        ids.append(fid)
+                for ver in item.get("versions") or []:
+                    vid = ver.get("file_id")
+                    if vid is not None:
+                        vid = int(vid)
+                        if vid not in seen:
+                            seen.add(vid)
+                            ids.append(vid)
+            for child in node.get("children") or []:
+                walk(child)
+
+        walk(group)
+        return ids if len(ids) <= 300 else []
 
     @staticmethod
     def _delete_candidate(fid: int) -> dict:

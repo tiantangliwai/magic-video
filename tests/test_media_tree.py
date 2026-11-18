@@ -275,21 +275,56 @@ class MediaTreeTests(IsolatedDbTestCase):
         self.assertEqual(card["search_keyword"], "爱的躯壳")
 
     def test_rename_work_persists_and_can_be_reset(self):
-        """改名只改展示标签：树 / 剧集墙同步，media_files 与播放记录分毫不动。"""
+        """改名：树 / 剧集墙 label 同步，新名写进 custom_title 供搜索命中；
+        title_cn 与播放记录分毫不动；reset 清空新名恢复自动名称。"""
         dir_id = self._dir()
         self._file("Show - 01.mkv", title_guess="Show", title_cn="原剧名", dir_id=dir_id)
         before = self.api.get_media_tree({})
         gid = before["groups"][0]["id"]
         self.assertEqual(before["groups"][0]["label"], "原剧名")
-        self.assertTrue(self.api.rename_work(gid, "我改的名字")["ok"])
+        result = self.api.rename_work(gid, "我改的名字")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["synced"], 1)
         after = self.api.get_media_tree({})
         self.assertEqual(after["groups"][0]["label"], "我改的名字")
         self.assertEqual(after["groups"][0]["id"], gid)
+        # 原名不动，新名单独入库
         self.assertEqual(db.scalar("SELECT title_cn FROM media_files"), "原剧名")
+        self.assertEqual(db.scalar("SELECT custom_title FROM media_files"), "我改的名字")
         self.assertEqual(self.api.get_poster_wall({})["cards"][0]["title"], "我改的名字")
         self.assertTrue(self.api.rename_work(gid, "", reset=True)["ok"])
         self.assertEqual(self.api.get_media_tree({})["groups"][0]["label"], "原剧名")
+        self.assertIsNone(db.scalar("SELECT custom_title FROM media_files"))
         self.assertFalse(self.api.rename_work("not-a-group", "x")["ok"])
+
+    def test_renamed_custom_title_is_searchable(self):
+        """用户改名后，输入新名字能在媒体库搜到；原名仍可搜（title_cn 没动）。"""
+        dir_id = self._dir()
+        self._file("Show - 01.mkv", title_guess="Show", title_cn="原剧名", dir_id=dir_id)
+        gid = self.api.get_media_tree({})["groups"][0]["id"]
+        self.api.rename_work(gid, "新名字搜得到")
+        page = self.api.get_media_files_page({"keyword": "新名字搜得到"})
+        self.assertEqual(page["total"], 1)
+        self.assertEqual(page["rows"][0]["custom_title"], "新名字搜得到")
+        # 展示也统一用新名
+        self.assertEqual(page["rows"][0]["display_title"], "新名字搜得到")
+        # 原名依然能被搜到，且展示优先新名
+        self.assertEqual(self.api.get_media_files_page({"keyword": "原剧名"})["total"], 1)
+        # 旧版平铺接口同样命中
+        self.assertEqual(len(self.api.get_media_files("新名字搜得到")), 1)
+
+    def test_rename_writes_all_seasons_and_versions(self):
+        """多季 / 多版本文件：改名要写进整组所有行，不能只改到一个版本。"""
+        self._seed_series()
+        gid = self._group(self.api.get_media_tree({}), "葬送的芙莉莲")["id"]
+        result = self.api.rename_work(gid, "芙莉莲改名")
+        self.assertEqual(result["synced"], 4)  # 3 集 + 剧场版，同组全部
+        rows = db.rows("SELECT custom_title FROM media_files WHERE custom_title IS NOT NULL")
+        self.assertEqual(len(rows), 4)
+        self.assertTrue(all(r["custom_title"] == "芙莉莲改名" for r in rows))
+        # 另一部作品不受牵连
+        aot = db.scalar("SELECT custom_title FROM media_files WHERE title_guess = 'Attack on Titan'")
+        self.assertIsNone(aot)
 
 
 class FrontendTreeTests(unittest.TestCase):

@@ -1477,3 +1477,38 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `web/app.js`：`fileMatch` 下拉加两个 `option`，沿用 `match_state` 字段与现有 change 链路（切筛选自动重置页码、重新加载），无需新状态；
 - `tests/test_media_browser.py`：`CoverFilterTests`（三视图 / 全库无封面 / 与搜索组合）+ `CoverFilterFrontendTests`，用真实 `set_manual_cover` 落图验证，共 6 例；
 - 增量 **513/513 全绿**。
+
+---
+
+## 42. 作品改名入库 + 搜索同步（2026-11-18）
+
+### 42-A 场景
+
+用户反馈「在媒体库改完一个名字，再在搜索框输入新名就查不到」。根因：改名（树 / 剧集墙卡片的
+「改名」按钮 → `rename_work`）此前只写 `settings.work_labels_json`（一个按 `series::KEY` 索引的
+展示标签映射），`media_files` 表一字未动；而媒体库搜索（`_media_filters` / `get_media_files`）只查
+`filename / title_guess / title_cn / title_raw / path`，看不到展示标签，于是「改名与搜索不一致」。
+
+### 42-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 42-B1 | 改名后输入**新名字**能在媒体库搜到该作品（平铺列表 / 树 / 封面墙三视图共用同一筛选）；旧名仍可搜 |
+| 42-B2 | 新名字写进 `media_files.custom_title` 新列，改名组下**全部**文件（多季 + 同集多版本）都写，不漏版本 |
+| 42-B3 | 展示统一：平铺列表 / 历史 / 搜索结果的 `display_title` 优先用新名，树 / 剧集墙 label 同步新名 |
+| 42-B4 | **不碰 `title_cn`**：分组键、封面键、追剧匹配、自动刮削 / 外文补中文仍走原名，一处改名不牵动四个系统 |
+| 42-B5 | `custom_title` 为空时展示 / 搜索回退原名，行为与改动前完全一致；reset（留空改名）清空该列即恢复自动名称 |
+| 42-B6 | 改名只影响当前分组，其它作品不受牵连；回放记录、磁盘文件一律不动；写库失败不阻断改名本身 |
+
+### 42-C 实现位置
+
+- `app/db.py`：`media_files` 加 `custom_title TEXT` 列，并在 `_migrate()` 的 `ALTER ADD COLUMN` 列表登记，旧库自动补列；
+- `app/api.py`：
+  - `_display_title_expr()` 改为 `COALESCE(f.custom_title, f.title_cn, f.title_guess)`（`orig` 偏好同理），新名最高优先；
+  - `rename_work()` 在写 `work_labels_json` 的同时，把新名写进按 gid 反查到的组内所有行 `custom_title`；reset 清空；命中 >300 放弃；
+  - 新增 `_series_member_ids()` 反查分组全部 file id——树在展示层合并了多版本，主条目在 `files`、其余版本挂在 `versions[].file_id`，两处都收；
+  - `_media_filters()` / `get_media_files()` 的关键词条件加入 `COALESCE(f.custom_title,'') LIKE ?`；
+- `web/app.js`：改名成功提示补上「按新名搜索」；
+- `tests/test_media_tree.py`：`test_rename_work_persists_and_can_be_reset`（改为验证新名入库 / reset 清空）、
+  `test_renamed_custom_title_is_searchable`、`test_rename_writes_all_seasons_and_versions`；
+- 增量 **380/380 全绿**（改了 schema，增量工具自动扩展到相关模块，未额外加跑全量）。

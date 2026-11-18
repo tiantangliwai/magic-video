@@ -2589,7 +2589,7 @@ async function handleAction(action, btn) {
       if (label === null) return;                  // 取消 / Esc
       const r = await call('rename_work', gid, label);
       if (!r.ok) { toast(r.error || '改名失败', false); return; }
-      toast(label ? '名称已更新，媒体库与剧集墙同步生效' : '已恢复自动识别的名称');
+      toast(label ? '名称已更新，媒体库 / 剧集墙 / 按新名搜索同步生效' : '已恢复自动识别的名称');
       if (currentView === 'library' || currentView === 'scan') await loadFileList();
       else if (currentView === 'posters') await loadPosterWall();
       else await refresh();

@@ -77,6 +77,9 @@ CREATE TABLE IF NOT EXISTS media_files (
     title_raw     TEXT,
     title_guess   TEXT,
     title_cn      TEXT,
+    -- 用户在媒体库 / 剧集墙手改的展示名：改名写这里，搜索与展示都优先用它，
+    -- 但不碰 title_cn（分组键 / 封面键 / 追剧匹配 / 自动刮削仍走原名），互不干扰。
+    custom_title  TEXT,
     match_by      TEXT,
     -- 文件名里的作品 ID（{tmdb-123} / [tvdbid-456]）：稳定的作品键。
     -- 同一部番不同季、不同压制组的标题写法差异很大，按 ID 归组后
@@ -307,6 +310,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     additions = {
         "media_files": (
             ("title_cn", "TEXT"), ("match_by", "TEXT"), ("deleted_at", "TEXT"),
+            ("custom_title", "TEXT"),
             ("partial_hash", "TEXT"),
             # 作品 ID（v0.1.6 P1-4）：老库靠这条 ALTER 补列，首次扫描惰性填充
             ("tmdb_id", "INTEGER"), ("tvdb_id", "INTEGER"),
