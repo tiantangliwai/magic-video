@@ -359,10 +359,16 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("fileListState.view_mode = 'folder'", self.js)
         self.assertIn("fileListState.view_mode = 'cards'", self.js)
 
-    def test_settings_actions_are_pinned_to_top(self):
-        for token in ("settings-actions", "data-action=\"save-settings\"",
-                      "position: sticky"):
-            self.assertIn(token, self.js if token.startswith("settings-actions") or token.startswith("data-") else self.css)
+    def test_settings_is_tabbed_dialog_with_pinned_actions(self):
+        """设置改成 IDEA 式弹窗：左侧分类 + 右侧面板，保存按钮固定在弹窗底部。"""
+        for token in ('id="settingsModal"', 'id="settingsNav"', 'id="settingsPane"',
+                      'data-action="save-settings"', "settings-foot",
+                      'data-action="close-settings"'):
+            self.assertIn(token, self.html)
+        for token in ("SETTINGS_TABS", "openSettingsDialog", "closeSettingsDialog",
+                      "switchSettingsTab", 'data-pane="player"', 'data-pane="about"',
+                      "settings-nav-item"):
+            self.assertIn(token, self.js)
 
     def test_watched_list_has_card_wall_and_flat_table(self):
         """看过的列表：卡片墙 / 表格可切换，默认平铺，只显示一个作品名。"""
@@ -388,8 +394,13 @@ class FrontendContractTests(unittest.TestCase):
             self.assertIn(token, self.js)
         self.assertIn("def rename_work", (ROOT / "app/api.py").read_text(encoding="utf-8"))
 
-    def test_settings_actions_are_sticky_in_css(self):
-        self.assertIn(".settings-actions { position: sticky", self.css)
+    def test_settings_dialog_layout_in_css(self):
+        """弹窗布局：遮罩 + 定宽定高对话框 + 左侧导航 + 右侧滚动面板 + 底部按钮条。"""
+        for token in (".modal-dialog", ".settings-nav-item.active", ".settings-pane",
+                      ".pane.active", ".settings-foot", ".modal-backdrop"):
+            self.assertIn(token, self.css)
+        # 旧的「整页 sticky 工具条」已随弹窗改造移除，别被改回来
+        self.assertNotIn(".settings-actions {", self.css)
         # 卡片墙改成「外层普通块 + 内层 grid」（与剧集墙同结构），不再靠 flex 撑高
         self.assertIn(".watched-cards { display: block", self.css)
         self.assertIn(".watched-cards .poster-grid", self.css)

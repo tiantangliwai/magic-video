@@ -112,6 +112,28 @@
   </main>
 </div>
 <div class="toast" id="toast"></div>
+<!-- 设置弹窗（IDEA 式）：左侧分类列表、右侧内容，整体浮层，不占用主视图；
+     点侧栏「设置」打开，Esc / 取消 / 点遮罩关闭。 -->
+<div class="modal-root" id="settingsModal" hidden>
+  <div class="modal-backdrop" data-action="close-settings"></div>
+  <div class="modal-dialog" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+    <div class="settings-head">
+      <h2 id="settingsTitle">设置</h2>
+      <button class="modal-x" data-action="close-settings" title="关闭（Esc）" aria-label="关闭">✕</button>
+    </div>
+    <div class="settings-body">
+      <nav class="settings-nav" id="settingsNav" aria-label="设置分类"></nav>
+      <div class="settings-pane" id="settingsPane"></div>
+    </div>
+    <div class="settings-foot">
+      <span class="hint">改动后点「保存设置」生效；Esc 或「取消」放弃未保存的改动。</span>
+      <div class="btn-row">
+        <button class="btn" data-action="close-settings">取消</button>
+        <button class="btn btn-primary" data-action="save-settings">保存设置</button>
+      </div>
+    </div>
+  </div>
+</div>
 <div id="btAlert" style="display:none;position:absolute;right:26px;bottom:78px;max-width:400px;z-index:100;
   background:var(--surface-2,#252a36);color:var(--text,#fff);border:1px solid var(--border,#3a4150);
   border-radius:10px;padding:13px 15px;box-shadow:0 8px 28px rgba(0,0,0,.35);font-size:12px;line-height:1.6">

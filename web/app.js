@@ -1289,20 +1289,68 @@ function switchHtml(key, on, label, desc) {
 
 function isOn(v) { return v === true || v === 1 || v === '1' || v === 'true' || v === 'on'; }
 
+// ---------- 设置弹窗（IDEA 式：左侧分类 + 右侧内容）----------
+// 所有分类面板一次性渲染、只切可见性：保存时仍按 #set-xxx / [data-setting] 一次收全量字段，
+// 不会因为「没切到那个分类」而漏存——这是把长设置页拆成多页时最容易踩的坑。
+const SETTINGS_TABS = [
+  ['player', '播放与记录'],
+  ['keys', '播放控制键位'],
+  ['match', '中文名与刮削'],
+  ['search', '全盘快搜'],
+  ['blacklist', '视频黑名单'],
+  ['obsidian', 'Obsidian 笔记'],
+  ['library', '媒体库体检'],
+  ['backup', '备份与导出'],
+  ['about', '数据与外观'],
+];
+
+let settingsTab = SETTINGS_TABS[0][0];
+
+function switchSettingsTab(id) {
+  if (!SETTINGS_TABS.some(([k]) => k === id)) id = SETTINGS_TABS[0][0];
+  settingsTab = id;
+  const nav = document.getElementById('settingsNav');
+  if (nav) {
+    nav.querySelectorAll('.settings-nav-item')
+      .forEach(b => b.classList.toggle('active', b.dataset.tab === id));
+  }
+  const pane = document.getElementById('settingsPane');
+  if (pane) {
+    pane.querySelectorAll('.pane').forEach(p => p.classList.toggle('active', p.dataset.pane === id));
+  }
+}
+
+function closeSettingsDialog() {
+  const root = document.getElementById('settingsModal');
+  if (root) root.hidden = true;
+}
+
+async function openSettingsDialog() {
+  const root = document.getElementById('settingsModal');
+  if (!root) return;
+  const nav = document.getElementById('settingsNav');
+  const pane = document.getElementById('settingsPane');
+  if (nav) nav.innerHTML = '<div class="settings-loading">读取中…</div>';
+  if (pane) pane.innerHTML = '<div class="settings-loading">正在读取设置…</div>';
+  root.hidden = false;
+  try {
+    await renderSettings();
+  } catch (err) {
+    if (pane) pane.innerHTML = `<div class="card">${empty('设置读取失败', String(err && err.message || err))}</div>`;
+  }
+}
+
 async function renderSettings() {
   const s = await call('get_settings');
   const d = s.dictionary || {};
   const o = s.obsidian || {};
-  // 保存设置等按钮固化在内容区顶部：设置页很长，上下滚动时常驻可点，改完随时能保存。
-  setContent(`<div class="settings-actions btn-row">
-      <button class="btn btn-primary" data-action="save-settings">保存设置</button>
-      <button class="btn" data-action="rematch">重新匹配未识别标题</button>
-      <button class="btn" data-action="obsidian-sync">同步到 Obsidian</button>
-      <button class="btn" data-action="obsidian-open">打开笔记目录</button>
-      <button class="btn" data-action="open-data">打开数据目录</button>
-      <span class="hint">改动后立即点「保存设置」生效，滚动页面时这一栏会一直停在最上面。</span>
-    </div>
-    <div class="grid-2">
+  const nav = document.getElementById('settingsNav');
+  const pane = document.getElementById('settingsPane');
+  if (!nav || !pane) return;
+  nav.innerHTML = SETTINGS_TABS.map(([id, label]) =>
+    `<button class="settings-nav-item" data-action="settings-tab" data-tab="${id}">${label}</button>`).join('');
+  pane.innerHTML = `
+    <section class="pane" data-pane="player">
     <div class="card"><h3>播放器与记录</h3>
       <div class="field"><label>PotPlayer 可执行文件路径</label>
         <input class="input" id="set-potplayer_path" value="${esc(s.potplayer_path)}">
@@ -1329,6 +1377,8 @@ async function renderSettings() {
       ${switchHtml('recording_enabled', isOn(s.recording_enabled), '启用播放记录', '关闭后守护进程不再写入历史')}
       ${switchHtml('autostart', isOn(s.autostart_enabled), '开机自动启动后台记录', '写当前用户注册表 Run 项，无需管理员权限')}
     </div>
+    </section>
+    <section class="pane" data-pane="keys">
     <div class="card"><h3>播放控制键位</h3>
       <div class="notice">PotPlayer 不提供公开的运行时控制接口，播放/暂停、停止、倍速、全屏是把<b>快捷键投递到播放器窗口</b>实现的。
       不同版本默认键位可能不同，可在 PotPlayer 里按 F5 → 快捷键核对后在此修改。填的是键名（如 <span class="mono">SPACE</span> / <span class="mono">C</span> / <span class="mono">ENTER</span>），无效值会自动回退默认。</div>
@@ -1348,6 +1398,12 @@ async function renderSettings() {
         </select>
         <div class="tip">倍速下拉每次先按「恢复正常倍速」归 1.0，再按 N 次「加速」，结果与当前倍速无关。步进 0.1 时 1.25× 无法精确到达，界面会提示实际值。</div></div>
     </div>
+    </section>
+    <section class="pane" data-pane="match">
+      <div class="btn-row" style="margin-bottom:12px">
+        <button class="btn btn-sm" data-action="rematch">重新匹配未识别标题</button>
+        <button class="btn btn-sm" data-action="rematch-force" title="清空刮削缓存后重新联网匹配，手改过的中文名不会被覆盖">强制重新刮削</button>
+      </div>
     <div class="card"><h3>中文名自动匹配</h3>
       <div class="notice">只在<b>导入列表 / 扫描目录 / 手动点「重新匹配」</b>时执行，没有定时任务。
       顺序：内置离线词典 → 本地已学对照 → 在线 Bangumi（未命中且允许联网时才查）。结果当场入库并展示。
@@ -1383,14 +1439,9 @@ async function renderSettings() {
       <div class="field"><label>已命中结果缓存（天，0 = 永久）</label>
         <input class="input" type="number" min="0" max="3650" step="1" id="set-online_cache_ttl_days" value="${esc(s.online_cache_ttl_days)}">
         <div class="tip">已确认的匹配默认永久有效；想定期刷新可填天数，或点下方「强制重新刮削」一次性清空。</div></div>
-      <div class="field"><label>主窗口尺寸</label>
-        <div style="display:flex;gap:9px">
-          <input class="input" type="number" id="set-window_width" value="${esc(s.window_width)}">
-          <input class="input" type="number" id="set-window_height" value="${esc(s.window_height)}">
-        </div><div class="tip">下次启动生效</div></div>
-      <div class="field"><label>展示风格</label>
-        <div class="tip">点右上角「深色 / 浅色」即可切换黑白两套主题，设置会保存到本机数据库。</div></div>
     </div>
+    </section>
+    <section class="pane" data-pane="search">
     <div class="card"><h3>全盘快搜（Everything）</h3>
       <p class="hint">默认优先用 es.exe，其次 Everything 的 HTTP 服务；两者都没启用时自动降级为媒体库检索，功能始终可用。
         Everything 核心引擎闭源，仅 es.exe 命令行客户端开源（MIT），所以本软件通过调用它检索，而不是把搜索引擎编译进来。</p>
@@ -1402,7 +1453,7 @@ async function renderSettings() {
         <input class="input" id="set-everything_http_url" value="${esc(s.everything_http_url || '')}" placeholder="例如 http://127.0.0.1:8080">
         <div class="tip">在 Everything「选项 → HTTP 服务器」启用并设定端口（如 8080）。<b>本机 Everything 以服务模式 (-svc) 运行，es.exe 无法连它的 IPC，推荐改用这条 HTTP 通道。</b></div></div>
       <div class="field"><label>HTTP 服务用户名 / 密码（可选）</label>
-        <div class="btn-row">
+        <div class="field-inline">
           <input class="input" id="set-everything_http_user" value="${esc(s.everything_http_user || '')}" placeholder="用户名（留空=无认证）">
           <input class="input" id="set-everything_http_pass" value="${esc(s.everything_http_pass || '')}" placeholder="密码" type="password">
         </div>
@@ -1414,7 +1465,9 @@ async function renderSettings() {
         <button class="btn btn-sm btn-primary" data-action="everything-open">打开 Everything</button>
         <button class="btn btn-sm" data-action="goto" data-view="quicksearch">去全盘快搜</button>
       </div>
-    </div></div>
+    </div>
+    </section>
+    <section class="pane" data-pane="blacklist">
     <div class="card"><h3>视频黑名单</h3>
       <div class="notice">名称包含任一关键词的视频，会在<b>媒体库、剧集墙、扫描结果、看过的列表、
         播放历史、继续观看、追剧列表的本地匹配与全盘快搜</b>里默认不展示（不区分大小写）。
@@ -1427,6 +1480,12 @@ async function renderSettings() {
         <div class="tip">按「名称包含」匹配：短英文词（如 jul / ipx / ure）可能误伤正常片名，
           发现误伤把它从词表里删掉即可。改完点上方「保存设置」，切换页面即生效。</div></div>
     </div>
+    </section>
+    <section class="pane" data-pane="obsidian">
+      <div class="btn-row" style="margin-bottom:12px">
+        <button class="btn btn-sm" data-action="obsidian-sync">同步到 Obsidian</button>
+        <button class="btn btn-sm" data-action="obsidian-open">打开笔记目录</button>
+      </div>
     <div class="card"><h3>Obsidian 知识沉淀</h3>
       <div class="notice">把<b>开发流程、自测结果、优化路线图、功能缺口</b>自动写进 vault 下独立的
         <span class="mono">${esc(o.folder || 'Magic Video')}</span> 文件夹。只读你已有的笔记、只写这个文件夹；
@@ -1445,6 +1504,8 @@ async function renderSettings() {
       </div>
       ${switchHtml('obsidian_auto_sync', isOn(o.auto_sync), '跑完单元测试自动同步', '命令行执行 cli.py test 通过后自动写入一次结果')}
     </div>
+    </section>
+    <section class="pane" data-pane="library">
     <div class="card"><h3>媒体库体检与路径重定位</h3>
       <p class="hint">移动硬盘换盘符、目录改名、网络盘掉线后，观看进度会完整保留——程序只把文件标为「缺失」，
         <b>绝不删记录、不动播放进度</b>。这里可以整体修正路径前缀（比逐个文件重关联可靠），
@@ -1452,6 +1513,8 @@ async function renderSettings() {
       <div id="relocateBox" class="hint">点「检查媒体库」查看当前状态。</div>
       <div class="btn-row"><button class="btn" data-action="diagnose-library">检查媒体库</button></div>
     </div>
+    </section>
+    <section class="pane" data-pane="backup">
     <div class="card"><h3>数据备份与恢复</h3>
       <div class="notice">把播放记录、看过的列表、追剧清单、中文名对照等 9 张表导出成一个 JSON 文件。
         换机 / 换盘前先备份，误删也能恢复。<b>每次恢复前都会自动把当前库再备份一份</b>，恢复本身也可回退。</div>
@@ -1480,7 +1543,25 @@ async function renderSettings() {
       </div>
       <p class="hint" id="exportInfo" style="margin:8px 0 0">导出文件默认放在数据目录的 exports 文件夹。</p>
     </div>
-    <div class="card"><p class="hint" style="margin:0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p></div>`);
+    </section>
+    <section class="pane" data-pane="about">
+      <div class="card"><h3>外观与窗口</h3>
+        <div class="field"><label>主窗口尺寸</label>
+          <div class="field-inline">
+            <input class="input" type="number" id="set-window_width" value="${esc(s.window_width)}">
+            <input class="input" type="number" id="set-window_height" value="${esc(s.window_height)}">
+          </div><div class="tip">下次启动生效</div></div>
+        <div class="field"><label>展示风格</label>
+          <div class="tip">点右上角「深色 / 浅色」即可切换黑白两套主题，设置会保存到本机数据库。</div></div>
+      </div>
+      <div class="card"><h3>数据目录</h3>
+        <div class="btn-row">
+          <button class="btn btn-sm" data-action="open-data">打开数据目录</button>
+        </div>
+        <p class="hint" style="margin:10px 0 0">数据库：<span class="mono">${esc(s.db_path || '')}</span> · 所有数据仅保存在本机，不会上传。</p>
+      </div>
+    </section>`;
+  switchSettingsTab(settingsTab);
 }
 
 let lastMissingIds = [];
@@ -2194,6 +2275,9 @@ async function refresh() {
 
 function switchView(view, opts = {}) {
   if (!VIEW_META[view]) return;
+  // 设置是浮层弹窗，不再是主内容区的一页：不切 currentView、不动导航高亮，
+  // 关掉弹窗仍停在原来的页面。所有 data-action="goto" data-view="settings" 也走这里。
+  if (view === 'settings') { openSettingsDialog(); return; }
   const prev = currentView;
   // 「查看分集 / 媒体库搜索」带搜索词过来：把作品名带进媒体库并自动展开命中分组，
   // 否则跳过去面对几千个文件就忘了自己要点哪部。
@@ -2288,6 +2372,12 @@ async function handleAction(action, btn) {
   switch (action) {
     case 'bt-open-settings': await openBluetoothSettings(); return;
     case 'bt-dismiss': dismissBluetoothAlert(); return;
+    case 'settings-tab':
+      switchSettingsTab(btn.dataset.tab);
+      return;
+    case 'close-settings':
+      closeSettingsDialog();
+      return;
     case 'goto':
       if (playerStageActive) await stopEmbedded(true);
       switchView(btn.dataset.view, { keyword: btn.dataset.keyword });
@@ -2646,6 +2736,10 @@ async function handleAction(action, btn) {
       document.querySelectorAll('[data-setting]').forEach(el => { data[el.dataset.setting] = el.dataset.value; });
       await call('save_settings', data);
       await refreshEmbedState();
+      closeSettingsDialog();
+      // 保存后立刻按新设置重绘当前页：黑名单、标题偏好等改完马上能看到效果，
+      // 不用像旧版那样切一次页面才生效。
+      await refresh();
       toast('设置已保存');
       return;
     }
@@ -3084,6 +3178,8 @@ async function handleAction(action, btn) {
 document.addEventListener('click', async (ev) => {
   const nav = ev.target.closest('.nav-item');
   if (nav) {
+    // 「设置」只是弹窗：不打断内嵌播放，也不切当前页
+    if (nav.dataset.view === 'settings') { switchView('settings'); return; }
     if (playerStageActive) await stopEmbedded(true);   // 离开播放页 -> 播放器还原为独立窗口，播放不中断
     switchView(nav.dataset.view);
     return;
@@ -3261,6 +3357,13 @@ window.addEventListener('resize', () => {
   embedResizeTimer = setTimeout(() => {
     if (playerStageActive) call('embed_sync', hostRect()).catch(() => {});
   }, 120);
+});
+
+// 设置弹窗：Esc 关闭。独立监听（不复用上面的 Enter 分支），任何输入框里按 Esc 都生效。
+document.addEventListener('keydown', (ev) => {
+  if (ev.key !== 'Escape') return;
+  const root = document.getElementById('settingsModal');
+  if (root && !root.hidden) { ev.preventDefault(); closeSettingsDialog(); }
 });
 
 window.addEventListener('pywebviewready', init);
