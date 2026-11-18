@@ -564,3 +564,35 @@ API 挂接 + 设置白名单 + 前端契约，全程不碰真实 COM / 真实库
 依赖 pycaw/comtypes 已写入 `requirements.txt`；`build_dist.py` 加 `--collect-all pycaw/comtypes`
 （comtypes 运行时动态生成类型库缓存，漏收会在打包版降级为 error）。
 增量 517/517 全绿。
+
+---
+
+## 18. v0.1.8 发版打包（2026-11-18）
+
+### 18.1 触发与范围
+
+用户明确「运行打包程序」→ 命中全量白名单②，走完整发版清单。0.1.7 打包提交 `6c662a7`
+之后积累 7 个提交（4570b44/4b8e116/9c4f69a/ce9d28e/a7887ff/7ae7ef5/646067e），安装版用户此前拿不到。
+升 `0.1.7 → 0.1.8`，全量 **951/951**（121.0 秒），本地提交 `36a1cae` + tag `v0.1.8`，**未推送、未建 Release**。
+
+### 18.2 打包链实测（可复用命令）
+
+1. 打包前先把 `build/pyi-dist/Magic Video` 改名为 `Magic Video.prev-0.1.7`（不动旧的 `.prev-0.1.3`~`.prev-0.1.6-rc`）。
+   PyInstaller COLLECT 会先删同名旧目录，被 safe-delete 策略拦下导致构建失败——**必须先 mv 再 build**。
+2. `.venv/Scripts/python.exe build_dist.py`（完整链：PyInstaller → exe `--selftest` → ZIP → WiX MSI）。
+   日志 `tee` 到 `build/build_0.1.8.log`。约 36 秒。
+3. 自检：`ok=True version=0.1.8 frozen=True`，资源 `_internal`、数据在临时目录。
+4. 产物：`dist/MagicVideo-0.1.8-win64-portable.zip` 28,464,500 字节（27.1 MB，492 条目，
+   封面资产 82 条、前端 `app.js?v=0.1.8`）；`dist/MagicVideo-0.1.8-win64.msi` 27,825,848 字节（26.5 MB）。
+5. 验收命令：
+   - `.venv/Scripts/python.exe installer/inspect_msi.py dist/MagicVideo-0.1.8-win64.msi`
+     → `ProductVersion=0.1.8`、`UpgradeCode={8F3A1C2E-...}` 与历史一致、`WIXUI_INSTALLDIR=APPFOLDER`、`APPFOLDER <- PreviousInstallFolder`。
+     其中 `RegLocator` 那行 `MsiDatabaseOpenView 失败 (1615)` 是只读查表脚本的兼容性提示，不影响产物属性。
+   - `.venv/Scripts/python.exe installer/verify_install_flow.py --static` → `[PASS]` 目录 Id 全大写 + Secure + InstallPath 回读 + MajorUpgrade。
+   - ZIP 内容用 `zipfile` 逐项核对 exe / portable.txt / `_internal/web/index.html` / 封面 82 条。
+6. 真机 7 步（改路径安装、升级继承路径、卸载重装）仍需人工按 `MANUAL_CHECKLIST` 跑，`--static` 覆盖不到。
+
+### 18.3 提交坑
+
+Git Bash 下 `git commit` 用 `-m "..."` 或多次 `-m` 分段；PowerShell here-string 语法（`at` 加单引号）在 Bash 里会变成字面量、提交信息开头多出 `at` 符号。
+若已提交且未推送，用 `git tag -d` → `git commit --amend` → 重打 tag 修正。
