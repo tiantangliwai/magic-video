@@ -5,6 +5,38 @@
 
 ---
 
+## [0.1.8] - 2026-11-18
+
+**主题：把 0.1.7 打包后积累的 7 项真实使用反馈一次性固化进安装包**（6 个功能/修复提交 + 1 个测试制度提交）。这些改动此前都在源码里、未进 0.1.7 安装包，安装版用户拿不到。用例数 **900 → 951**。
+
+### Added
+
+- **看完一集后「继续观看」直接接下一集**：作品完结但仍存在后续集时，在首页 / 导航页 / 剧集墙顶部三个入口都显示下一集卡片，点击从头播。只在取数侧用 `_adjacent_in_tree()` + `_completed_followups()` 补「已完成集 + 下一集」伪条目（`after_completed=True` / `from_episode` / `file_id` 指向下一集 / `position_ms=0`），**绝不改 watcher 完成判定 / `completed` / `position_ms` / 历史记录**；全剧看完才消失。
+- **播放前蓝牙音箱保障（自适应）**：设置页填音箱名（子串匹配、留空禁用），起播前 `app/bluetooth.py::probe()` 探测——仅 `Active` 但非默认时用 pycaw 切默认（纯用户态 ~5ms）；链路真断（Unplugged/NotPresent）Windows 无公开 A2DP 重连 API，**不假装连上**，只弹提示条 +「打开蓝牙设置」按钮（`ms-settings:bluetooth`）。未配置 / COM 不可用 / 异常一律静默、绝不影响起播。挂接在 Api 四个播放方法的 `_with_bluetooth()`，仅 `ok` 时挂 `result['bluetooth']`。
+
+### Changed
+
+- **「看片统计」改名「观影报告」**：视图标题与导航同步更名。旧会话的 `watch_sessions.watched_ms`（v0.1.6 才加、迁移只 `ADD COLUMN DEFAULT 0` 不回填）不再被当成 0——`_session_ms_and_estimate()` 用会话区间保守估算，`get_watch_stats` / `get_watch_calendar` 共用并返回 `estimated`，前端标「估」/`~`，**不写库、不冒充精确口径**。
+- **启动首屏直达持久化主题**：主题存 SQLite、private_mode 下 localStorage 不持久；由 `app/main.py::startup_url()` 把 theme 注入 URL 参数，`index.html` head 同步脚本在 CSS 加载前设 `data-theme`，JS 侧 `currentTheme` 初值跟随 DOM。表头不再先白后黑。
+
+### Fixed
+
+- **单元测试会改动真实数据库**：`tests/db_guard.py` 全局 patch `sqlite3.connect`，任何指向 `D:\magicvideo\library.db` 的连接立即抛错，两个测试运行器入口与 `tests/__init__.py` 都装守卫；`tests/test_db_isolation.py` 静态扫描确保碰库用例（传递地）继承 `IsolatedDbTestCase`。取证真实库只能用 `mode=ro` 只读连接且写在测试之外。
+- **剧集墙「按季」按钮点了没反应**：`handleAction` 把形参 `btn` 误写成未声明的 `el`（严格模式抛错被吞），共 6 处同类笔误（save-episode / export-csv / stats-range / calendar-shift / poster-mode / rate-work）一律改从 `btn.dataset` 取值；同时移除「刷新」（后端按数据指纹 + TTL 自动缓存）与「去后台进程管理封面」（纯跳转已有页）两个冗余按钮。
+- **全盘快搜假降级 + 中文路径乱码**：Everything 核心引擎闭源无法编译进本软件（架构结论不变）；① es.exe 在中文 Windows 输出 GBK，`search_es` 用 raw bytes + `_decode_output()`（utf-8 strict 优先 / GBK 回退）解码，否则中文路径点不开；② 通道「执行成功但 0 命中」不再误判为「通道不可用」，用 `es_error` / `http_error` 是否为空判定并新增 `channel_ok`，只有全通道真失败才 `degraded=True`。
+
+### Tests
+
+- 用例数 **900 → 951**（全量 951/951，116.7 秒）。新增 `tests/test_continue_followup.py`、`test_stats_estimate.py`、`test_db_isolation.py`、`test_bluetooth.py`、`test_theme.py` 相关用例，扩充 `test_everything.py` 等。
+- 依赖 `comtypes` / `pycaw` 入 `requirements.txt`，打包 `--collect-all` 一并带上；蓝牙用例全程 mock `_audio`，不碰真实设备。
+
+### Docs
+
+- `docs/FEATURES.md` §29–§35、`docs/IMPLEMENTATION_NOTES.md` §12–§17、`AGENTS.md` 需求基线扩到 **63 条**、`docs/TESTING.md` 新增第 14 节；`~/.workbuddy` 用户级记忆与项目 `MEMORY.md`（L1）记录测试隔离与发版节奏铁律。
+- ZIP 与 MSI 随版本重新构建；**commit / tag 仅本地，未推送、未建 Release**（用户 2026-11-18 要求「运行打包程序」，未要求推送）。
+
+---
+
 ## [0.1.7] - 2026-11-17
 
 **主题：把 0.1.6 发版后暴露的 4 个「明明改了但用不上」的问题一次性固化进安装包。**

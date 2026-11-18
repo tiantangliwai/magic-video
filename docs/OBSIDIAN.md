@@ -1,4 +1,4 @@
-# Obsidian 集成说明 · v0.1.7
+# Obsidian 集成说明 · v0.1.8
 
 > 目标：让**开发流程、自测结果、优化路线图、功能缺口**自动沉淀到本机 Obsidian，
 > 后续优化和补齐功能时有一份可持续更新的、可手写的知识底稿，而不用翻 git log 或聊天记录。
@@ -89,9 +89,9 @@ python cli.py obsidian open                    :: 打开笔记目录
 
 ```json
 {
-  "timestamp": "2026-11-16 22:40:00",
-  "version": "0.1.7",
-  "total": 900, "passed": 900, "failures": 0, "errors": 0, "skipped": 0,
+  "timestamp": "2026-11-18 07:55:00",
+  "version": "0.1.8",
+  "total": 951, "passed": 951, "failures": 0, "errors": 0, "skipped": 0,
   "success": true, "duration_sec": 118.7,
   "modules": {"tests.test_db": 12, "...": "..."}
 }
@@ -108,8 +108,8 @@ python cli.py obsidian open                    :: 打开笔记目录
 ---
 title: 00 项目总览
 tags: [magic-video, status]
-version: 0.1.7
-generated_at: "2026-11-16 22:40:00"
+version: 0.1.8
+generated_at: "2026-11-18 07:55:00"
 source: Magic Video
 managed: true
 ---

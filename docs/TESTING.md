@@ -1,6 +1,6 @@
-# 自测与单元测试报告 · v0.1.7
+# 自测与单元测试报告 · v0.1.8
 
-> 执行时间：2026-11-17（v0.1.7 打包门禁）；环境：Windows 10 专业版 / Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157。
+> 执行时间：2026-11-18（v0.1.8 打包门禁）；环境：Windows 10 专业版 / Python 3.13 / Node 22 / SQLite 3.53 / Edge WebView2 157。
 > 本报告只记录**实际跑过的命令与真实输出**，未实测的能力不会写成「通过」。
 
 ---
@@ -26,15 +26,15 @@
 
 | 项目 | 结果 |
 |---|---|
-| 单元测试 | **900 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，118.74 秒，详见第 13 节；0.1.6 那轮的 863 见第 12 节） |
+| 单元测试 | **951 个用例全部通过**（0 失败 / 0 错误 / 0 跳过，116.68 秒，详见第 14 节；0.1.7 那轮的 900 见第 13 节） |
 | Python 语法 | `compileall` 全通过 |
 | JavaScript 语法 | `node --check web/app.js` 通过 |
 | 原生窗口 | 14 个页面（含新增「看片统计」）全部渲染成功，`js_api` 暴露 50 余个方法；扫描结果 / 媒体库共用全量列表组件 |
-| 打包产物 | 0.1.4：ZIP 21.8 MB / MSI 22.0 MB（见第 10 节）；0.1.5 见第 11.3 节；0.1.6 见第 12.3 节；**0.1.7 重新构建的产物验收见第 13.3 节** |
+| 打包产物 | 0.1.4：ZIP 21.8 MB / MSI 22.0 MB（见第 10 节）；0.1.5 见第 11.3 节；0.1.6 见第 12.3 节；0.1.7 见第 13.3 节；**0.1.8 重新构建的产物验收见第 14.3 节** |
 | CLI | `init / status / dict / progress / player / mark / test / obsidian` 全部可用 |
 | 真实数据 | 旧播放记录、会话、断点进度、词典完整保留，未被本轮改动破坏 |
 | Obsidian 真实 vault | 首次同步生成 6 篇笔记 + 当天日志；用户原有 2 篇笔记 md5 前后完全一致；二次同步批注保留、日志去重通过 |
-| 远程推送 | 0.1.6 已推送：`master` + `v0.1.0`~`v0.1.6` 到私有仓库 `tiantangliwai/magic-video`（SSH 通道），GitHub Release 附 ZIP + MSI；**v0.1.7 仅本地**（2026-11-17 按用户要求只打包，commit 与 tag 均未推送，未建 Release） |
+| 远程推送 | 0.1.6 已推送：`master` + `v0.1.0`~`v0.1.6` 到私有仓库 `tiantangliwai/magic-video`（SSH 通道），GitHub Release 附 ZIP + MSI；**v0.1.7 / v0.1.8 仅本地**（只打包，commit 与 tag 均未推送，未建 Release） |
 
 ---
 
@@ -526,3 +526,39 @@ AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0�
 
 - **版本传播**：commit 与 tag `v0.1.7` 仅本地，未 `git push`、未建 GitHub Release（用户 2026-11-17 明确选择「只打包，先不推送」）。
 - 安装器真机 7 步、内嵌播放真实窗口行为、外部站点改版风险 —— 同 12.4，仍需人工。
+
+---
+
+## 14. v0.1.8 打包门禁（0.1.7 之后 7 项反馈固化进安装包）
+
+> 0.1.7 打包后，源码又积累了 7 个提交（继续观看接下一集 / 首屏主题 / 观影报告 / DB 隔离 / 剧集墙按钮 / 全盘快搜 / 蓝牙保障），但安装版用户拿不到。本版唯一目的是让安装包与源码一致。逐项细节见 `docs/FEATURES.md` §29–§35 与 `docs/IMPLEMENTATION_NOTES.md` §12–§17。
+
+### 14.1 触发原因
+
+用户 2026-11-18 明确要求「运行打包程序」，命中全量白名单第 ② 条（打 tag / 发版 / 打包），按发版清单升版本 → 补 CHANGELOG → 全量门禁 → 重出 ZIP + MSI → 本地 tag。
+
+### 14.2 门禁结果（真实执行）
+
+| 检查项 | 说明 |
+|---|---|
+| 全量用例 | `python run_tests.py` → **951 / 951 通过**，0 失败 / 0 错误 / 0 跳过，**116.68 秒**；快照写入 `D:\magicvideo\test_last.json` |
+| Python 语法 | `compileall -q app tests *.py` 全通过 |
+| JavaScript 语法 | `node --check web/app.js` 通过 |
+| 版本一致性 | `tests/test_docs.py` 16 例通过：`__version__` / README / AGENTS / CHANGELOG / OBSIDIAN / `app.js?v=` 全部为 `0.1.8` |
+
+### 14.3 产物验收（0.1.8，真实执行）
+
+| 检查 | 方法 | 结果 |
+|---|---|---|
+| 构建链 | `.venv\Scripts\python.exe build_dist.py` | ZIP **27.1 MB**（28,464,500 字节）/ MSI **26.5 MB**（27,825,848 字节）；WiX `candle -dProductVersion=0.1.8` |
+| exe 自检 | 构建脚本内 `Magic Video.exe --selftest` | `ok=True` / `version=0.1.8` / `frozen=True`；资源在 `_internal`、数据在临时目录 |
+| ZIP 内容 | `zipfile` 逐项核对 | **492 条目**；`Magic Video/Magic Video.exe`、`portable.txt`、`_internal/web/index.html` / `app.js` 齐全；README / CHANGELOG 在包内 |
+| 打包版前端 | 读 ZIP 内 `_internal/web/index.html` | 缓存串 `app.js?v=0.1.8` 存在 |
+| 封面资产 | 读 ZIP 内 `_internal/assets/covers/` | 82 条（80 张封面 + `index.json` + `README.md`），与 0.1.7 一致 |
+| MSI 属性 | `installer/inspect_msi.py dist/MagicVideo-0.1.8-win64.msi` | `ProductVersion='0.1.8'`、`ProductName='Magic Video'`、`UpgradeCode='{8F3A1C2E-...}'` 与历史版本一致、`WIXUI_INSTALLDIR='APPFOLDER'`、`APPFOLDER <- PreviousInstallFolder`（升级读回旧路径） |
+| 安装器静态层 | `installer/verify_install_flow.py --static` | `[PASS]`：目录 Id 全大写 + `Secure` + `InstallPath` 写入/回读 + `MajorUpgrade` |
+
+### 14.4 本版未覆盖
+
+- **版本传播**：commit 与 tag `v0.1.8` 仅本地，未 `git push`、未建 GitHub Release（用户本轮只要求打包，未要求推送）。
+- 安装器真机 7 步、内嵌播放真实窗口行为、蓝牙音箱真实切换、外部站点改版风险 —— 同 12.4，仍需人工。
