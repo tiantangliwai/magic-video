@@ -1449,3 +1449,31 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `tests/test_blacklist.py`：`PathBlacklistTests`（解析归一 / 段边界 / 开关 / SQL 粗筛 / filter_rows）
   + `PathBlacklistApiTests`（各视图屏蔽 / 不删库 / 开关恢复 / 保存键）+ 前端契约，共 16 例；
 - 增量 **549/549 全绿**。
+
+---
+
+## 41. 媒体库「有封面 / 没封面」筛选（2026-11-18）
+
+### 41-A 场景
+
+用户反馈媒体库筛选条件不够用，想快速找出「哪些作品有封面、哪些还没图」以便集中补封面。
+在媒体库筛选下拉（`#fileMatch`）新增「有封面 / 没封面」两项，与「已匹配中文 / 有播放进度」并列。
+
+### 41-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 41-B1 | 媒体库筛选下拉含「有封面」（`with_cover`）/「没封面」（`no_cover`）两项，选中后当前页与总数立即更新 |
+| 41-B2 | 「有封面」= 该作品能解析到真封面图——与剧集墙卡片显示同一套判断（本机缓存 + subjects + 随包资产 + 模糊兜底），不是只看某一张表是否有记录 |
+| 41-B3 | 两个条件对平铺列表 / 树状视图 / 封面墙三种视图都生效；同一作品多集标题相同只解析一次 |
+| 41-B4 | `match_state` 新增两值不影响原有 `matched / unmatched / progress`，可与搜索、目录筛选自由组合 |
+| 41-B5 | 全库无封面时：`with_cover` 返回 0、`no_cover` 返回全部，不报错也不漏项 |
+
+### 41-C 实现位置
+
+- `app/api.py`：模块级 `_covered_ids_from_rows()` 按标题去重后批量走 `covers.resolve_cover_many` 求有封面的 file id；
+  `_media_filters` 选中封面条件时先查出候选文件、解析出 id 集合再回填 `f.id IN / NOT IN (...)`——因为封面判断 SQL 无法表达，
+  回填进 SQL 才能让 `total` 与分页准确（纯 Python 后置过滤会让分页数量错位）；空集合时 `with_cover` 用 `0=1`；
+- `web/app.js`：`fileMatch` 下拉加两个 `option`，沿用 `match_state` 字段与现有 change 链路（切筛选自动重置页码、重新加载），无需新状态；
+- `tests/test_media_browser.py`：`CoverFilterTests`（三视图 / 全库无封面 / 与搜索组合）+ `CoverFilterFrontendTests`，用真实 `set_manual_cover` 落图验证，共 6 例；
+- 增量 **513/513 全绿**。

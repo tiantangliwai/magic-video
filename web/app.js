@@ -673,6 +673,7 @@ function fileListCard(title, hint, directories) {
       <select class="input" id="fileMatch">
         ${option('', '全部状态', s.match_state)}${option('matched', '已匹配中文', s.match_state)}
         ${option('unmatched', '未匹配中文', s.match_state)}${option('progress', '有播放进度', s.match_state)}
+        ${option('with_cover', '有封面', s.match_state)}${option('no_cover', '没封面', s.match_state)}
       </select>
       <select class="input" id="fileSort">
         ${option('newest', '最近扫描', s.sort)}${option('name', '文件名', s.sort)}

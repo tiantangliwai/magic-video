@@ -8,7 +8,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from app import db, potplayer
+from app import covers, db, potplayer
 from app.api import Api
 from tests.base import IsolatedDbTestCase
 
@@ -198,3 +198,80 @@ class FrontendFileListTests(unittest.TestCase):
         self.assertLess(js.index("function backRow"), js.index("function fileListCard"))
         back = js[js.index("case 'goto-back'"):]
         self.assertLess(back.index("viewReturn = null"), back.index("switchView(target)"))
+
+
+JPEG = b"\xff\xd8\xff" + b"x" * 1024
+
+
+class CoverFilterTests(IsolatedDbTestCase):
+    """媒体库「有封面 / 没封面」筛选：三视图共用同一套判断。
+
+    封面是作品级的，是否有图走 covers.resolve_cover_many（与卡片显示一致），
+    这里用真实的 set_manual_cover 落一张缓存图来验证，不 mock 判定逻辑。
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.api = Api()
+
+    def _seed_two(self):
+        for title in ("WithCover", "NoCover"):
+            db.execute(
+                "INSERT INTO media_files(path, filename, title_raw, title_guess, status) "
+                "VALUES (?,?,?,?,?)",
+                (str(self.tmp / f"{title} - 01.mkv"), f"{title} - 01.mkv",
+                 f"{title} 01", title, "new"),
+            )
+
+    def test_with_and_no_cover_split_library(self):
+        self._seed_two()
+        r = covers.set_manual_cover("WithCover", JPEG)
+        self.assertTrue(r["ok"])
+
+        def ids(state):
+            page = self.api.get_media_files_page({"match_state": state, "page_size": 0})
+            return {row["title_guess"] for row in page["rows"]}, page["total"]
+
+        self.assertEqual(ids("with_cover"), ({"WithCover"}, 1))
+        self.assertEqual(ids("no_cover"), ({"NoCover"}, 1))
+        self.assertEqual(ids(""), ({"WithCover", "NoCover"}, 2))
+
+    def test_no_cover_when_library_has_no_covers_at_all(self):
+        self._seed_two()
+        # 全库没有封面：with_cover 空，no_cover 全保留（不能因空集合报错或漏掉）
+        self.assertEqual(self.api.get_media_files_page(
+            {"match_state": "with_cover", "page_size": 0})["total"], 0)
+        self.assertEqual(self.api.get_media_files_page(
+            {"match_state": "no_cover", "page_size": 0})["total"], 2)
+
+    def test_tree_view_honors_cover_filter(self):
+        self._seed_two()
+        covers.set_manual_cover("WithCover", JPEG)
+        tree = self.api.get_media_tree({"match_state": "with_cover", "mode": "series"})
+        self.assertEqual([g.get("label") for g in tree["groups"]], ["WithCover"])
+        tree2 = self.api.get_media_tree({"match_state": "no_cover", "mode": "series"})
+        self.assertEqual([g.get("label") for g in tree2["groups"]], ["NoCover"])
+
+    def test_poster_wall_honors_cover_filter(self):
+        self._seed_two()
+        covers.set_manual_cover("WithCover", JPEG)
+        wall = self.api.get_poster_wall({"match_state": "with_cover", "limit": 50})
+        self.assertEqual([c["title"] for c in wall["cards"]], ["WithCover"])
+        wall2 = self.api.get_poster_wall({"match_state": "no_cover", "limit": 50})
+        self.assertEqual([c["title"] for c in wall2["cards"]], ["NoCover"])
+
+    def test_cover_filter_combines_with_search(self):
+        self._seed_two()
+        covers.set_manual_cover("WithCover", JPEG)
+        page = self.api.get_media_files_page(
+            {"match_state": "with_cover", "keyword": "NoCover", "page_size": 0})
+        self.assertEqual(page["total"], 0)  # 有封面的作品里搜不到 NoCover
+
+
+class CoverFilterFrontendTests(unittest.TestCase):
+    def setUp(self):
+        self.js = (ROOT / "web/app.js").read_text(encoding="utf-8")
+
+    def test_match_select_offers_cover_options(self):
+        for token in ("option('with_cover', '有封面'", "option('no_cover', '没封面'"):
+            self.assertIn(token, self.js)

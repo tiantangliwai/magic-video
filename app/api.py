@@ -194,6 +194,39 @@ def _db_signature() -> tuple:
     return (str(config.DB_PATH), db.write_count()) + _data_fingerprint()
 
 
+def _covered_ids_from_rows(rows: list[dict]) -> set[int]:
+    """判断这批文件行里哪些「有封面」，返回有封面的 file id 集合。
+
+    封面是作品级的，是否有图必须走 :func:`covers.resolve_cover_many`（本机缓存 +
+    subjects + 随包资产 + 模糊兜底），跟剧集墙卡片看到的是同一套逻辑——这样
+    「有封面」筛出来的作品，卡片上一定真能看到图。SQL 表达不了这套判断，故在
+    Python 侧解析后把 id 集合回填成 ``f.id IN(...)`` 条件。
+
+    先按标题去重再批量解析：同一部作品的多集标题相同，避免重复跑模糊兜底。
+    """
+    if not rows:
+        return set()
+    file_cands: dict[int, list[str]] = {}
+    all_titles: set[str] = set()
+    for r in rows:
+        cands: list[str] = []
+        for key in ("display_title", "title_cn", "title_guess", "title_raw", "filename"):
+            value = str(r.get(key) or "").strip()
+            if value and value not in cands:
+                cands.append(value)
+                all_titles.add(value)
+        try:
+            file_cands[int(r["id"])] = cands
+        except (TypeError, ValueError, KeyError):
+            continue
+    if not all_titles:
+        return set()
+    resolved = covers.resolve_cover_many([(title, [title]) for title in all_titles])
+    covered_titles = {title for title, name in resolved.items() if name}
+    return {fid for fid, cands in file_cands.items()
+            if any(c in covered_titles for c in cands)}
+
+
 def _cache_get(key: tuple):
     item = _MEDIA_CACHE.get(key)
     if item and (time.monotonic() - item[0]) < _MEDIA_CACHE_TTL:
@@ -1080,6 +1113,25 @@ class Api:
         if ban_sql:
             conditions.append(ban_sql)
             params.extend(ban_params)
+        # 有 / 无封面：SQL 无法表达封面解析（缓存 + subjects + 随包资产 + 模糊兜底），
+        # 先按上面已确定的条件查出候选文件的标题，解析出真有图的 file id，再回填
+        # f.id IN / NOT IN。因此分页 total 与卡片显示的是同一套判断，不会错位。
+        if match_state in ("with_cover", "no_cover"):
+            candidates = db.rows(
+                "SELECT f.id, f.title_cn, f.title_guess, f.title_raw, f.filename, "
+                f"{_display_title_expr()} AS display_title "
+                "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+                "WHERE " + " AND ".join(conditions),
+                tuple(params),
+            )
+            covered = _covered_ids_from_rows(candidates)
+            if covered:
+                marks = ",".join("?" for _ in covered)
+                op = "IN" if match_state == "with_cover" else "NOT IN"
+                conditions.append(f"f.id {op} ({marks})")
+                params.extend(sorted(covered))
+            elif match_state == "with_cover":
+                conditions.append("0=1")   # 没有任何有封面的文件
         return " AND ".join(conditions), params
 
     @staticmethod
