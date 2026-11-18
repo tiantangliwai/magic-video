@@ -161,8 +161,12 @@ def _remember_hwnd(hwnd: int) -> None:
         pass  # 数据库暂不可用时不影响本次播放，只是后台记录会退回外部窗口查找
 
 
-def find_main_window() -> int:
-    """按 PID + 标题找 pywebview 主窗口；不访问 ``window.native``，避免 COM 反射。"""
+def find_main_window(require_visible: bool = True) -> int:
+    """按 PID + 标题找 pywebview 主窗口；不访问 ``window.native``，避免 COM 反射。
+
+    ``require_visible=False`` 用于窗口 ``before_show`` 阶段：此时 Form 的 HWND 已创建
+    但还没 Show，原生标题栏要在显示前刷成主题色，否则第一帧必然是白条。
+    """
     if not HAS_WIN32:
         return 0
     pid, hits = os.getpid(), []
@@ -171,7 +175,9 @@ def find_main_window() -> int:
         owner = wintypes.DWORD()
         try:
             _user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
-            if int(owner.value) != pid or not _user32.IsWindowVisible(hwnd):
+            if int(owner.value) != pid:
+                return True
+            if require_visible and not _user32.IsWindowVisible(hwnd):
                 return True
             buf = ctypes.create_unicode_buffer(256)
             _user32.GetWindowTextW(hwnd, buf, 256)

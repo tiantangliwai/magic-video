@@ -57,11 +57,11 @@ def _set(hwnd: int, attr: int, value: int) -> bool:
         return False
 
 
-def _find_window(retries: int = 5) -> int:
+def _find_window(retries: int = 5, require_visible: bool = True) -> int:
     """pywebviewready 触发时窗口可能还没显示；单次调用内短重试，不建常驻线程。"""
     from . import embedded_player  # 延迟导入，避免模块初始化顺序耦合
     for attempt in range(max(1, retries)):
-        hwnd = embedded_player.find_main_window()
+        hwnd = embedded_player.find_main_window(require_visible=require_visible)
         if hwnd:
             return int(hwnd)
         if attempt + 1 < retries:
@@ -69,13 +69,17 @@ def _find_window(retries: int = 5) -> int:
     return 0
 
 
-def apply(theme: str) -> dict:
-    """把原生标题栏同步到 light / dark；返回状态字典，绝不抛异常。"""
+def apply(theme: str, *, require_visible: bool = True, retries: int = 5) -> dict:
+    """把原生标题栏同步到 light / dark；返回状态字典，绝不抛异常。
+
+    ``require_visible=False`` 供窗口 ``before_show`` 时调用（HWND 已建、尚未显示），
+    这样标题栏在窗口第一次绘制前就是主题色，不会先闪一条白。
+    """
     dark = str(theme or "").strip().lower() == "dark"
     if sys.platform != "win32" or _dwm is None:
         return {"ok": False, "error": "当前系统不支持 DWM 标题栏主题"}
 
-    hwnd = _find_window()
+    hwnd = _find_window(retries=retries, require_visible=require_visible)
     if not hwnd:
         return {"ok": False, "error": "找不到主窗口句柄"}
 

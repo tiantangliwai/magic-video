@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import webview
 
-from . import config, db, embedded_player, single_instance
+from . import config, db, embedded_player, single_instance, theme_native
 from .api import Api
 
 
@@ -20,6 +20,22 @@ def startup_url(settings: dict | None = None) -> str:
     # server，把 query 交给 HTTP 层解析；file:// URI 会被原样交给 WebView2，路径含空格
     # (%20) 且带 ?theme= 时被当成文件名的一部分 → ERR_FILE_NOT_FOUND（v0.1.8 回归）。
     return str(config.WEB_DIR / "index.html") + f"?theme={theme}"
+
+
+def sync_native_theme_before_show(settings: dict | None = None) -> None:
+    """窗口显示前把原生标题栏刷成主题色，避免第一帧白条。
+
+    Windows 标题栏由 DWM 绘制，CSS 管不到；之前只靠页面 JS 加载完的 IPC 去同步，
+    暗色用户会先看到一条白标题栏再变黑。``before_show`` 时 Form 的 HWND 已创建、
+    还没有 Show，所以这里允许「未显示窗口」并只在显示前同步一次。
+    DWM 不可用、找不到句柄等一律静默降级，绝不阻断窗口显示。
+    """
+    try:
+        raw = str((settings or {}).get("theme", config.DEFAULTS["theme"]) or "light").strip().lower()
+        theme = raw if raw in ("light", "dark") else "light"
+        theme_native.apply(theme, require_visible=False, retries=2)
+    except Exception:
+        pass
 
 
 def create_window(debug: bool = False) -> None:
@@ -45,6 +61,9 @@ def create_window(debug: bool = False) -> None:
         text_select=True,
     )
     api.attach_window(window)
+    # 窗口第一次绘制前就把原生标题栏定成主题色（before_show 是同步事件，
+    # 在 Form.Show() 之前执行）。页面里的 sync_native_theme 仍保留，作为二次兜底。
+    window.events.before_show += lambda: sync_native_theme_before_show(settings)
     # 后台记录默认自动启动（设置页可关）。放在窗口创建后、WebView 启动前，
     # 即使前端脚本加载失败也能生效；失败只降级，绝不阻断窗口。
     try:
