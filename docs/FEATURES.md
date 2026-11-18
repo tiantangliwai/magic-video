@@ -1394,3 +1394,25 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `app/config.py`：`auto_sync_watched: 1`；
 - `web/app.js::renderWatched()`：渲染前静默调用 `sync_watched_auto`，有新增才 toast；设置「播放与记录」加开关。
 - `tests/test_auto_sync.py`（13 例）：聚合不拆行、标题自带数字不误伤、`only_titles` 范围、墓碑跳过 / 手动导入解除 / 删除记墓碑、时长兜底判完成、完成即同步、开关关闭、Api 节流。
+
+## 39. 播放控制按钮放大（2026-11-18）
+
+### 39-A 场景
+
+用户反馈「上一集、播放、停止、下一集、快进（倍速）」这几个按钮太小、点击不方便。
+两套控制条（顶栏常驻符号键 + 内嵌播放舞台底部文字键）提供同一组功能，同步放大保持手感一致。
+
+### 39-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 39-B1 | 顶栏 `.player-bar .pbtn` 点击区 36×36（原约 25×21），倍速下拉 84×36 同高；整条控制在 74px 顶栏内不溢出，不与状态/主题按钮挤在一起 |
+| 39-B2 | 内嵌 `.player-controls` 高 64px（原 54px），控制按钮 `min-height: 40px`（原约 32px）、倍速 108×40；全部单行、文字不裁切 |
+| 39-B3 | 深浅两套主题下按钮边界清晰、文字可读、对齐一致 |
+| 39-B4 | `test_player_controls.py::test_player_buttons_have_comfortable_hit_area` 锁定两套尺寸契约，防止改小 |
+
+### 39-C 实现位置
+
+- `web/style.css`：`.player-bar` / `.pbtn` / `.pbar-speed`、`.player-controls` / `.player-controls .btn` / `.player-speed`；
+- `tests/test_player_controls.py` 新增尺寸契约；`build/probe_player.py` 无头回读实测：
+  顶栏 5 键均 36×36、倍速 84×36、整条 293×46；内嵌按钮均 40px 高、倍速 108×40、控制条 938×64。

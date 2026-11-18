@@ -239,6 +239,16 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn(".player-controls-side.right", self.css)
         self.assertIn(".player-stage.stage-zoom", self.css)
 
+    def test_player_buttons_have_comfortable_hit_area(self):
+        """两套控制条的按钮点击区都要够大（用户 2026-11-18 反馈原本太小）。"""
+        # 顶栏符号键：36×36，倍速下拉同高
+        self.assertIn(".player-bar .pbtn { width: 36px; height: 36px;", self.css)
+        self.assertIn(".player-bar .pbar-speed { width: 84px !important; height: 36px;", self.css)
+        # 内嵌文字键：控制条 64 高、按钮 40 高，倍速同步
+        self.assertIn(".player-controls { height: 64px;", self.css)
+        self.assertIn(".player-controls .btn { min-height: 40px;", self.css)
+        self.assertIn(".player-speed { width: auto; min-width: 108px; min-height: 40px;", self.css)
+
     def test_js_wires_controls_and_settings(self):
         for needle in ("function playerControl(", "function playerAdjacent(",
                        "function setPlayerSpeed(", "function toggleStageZoom(",

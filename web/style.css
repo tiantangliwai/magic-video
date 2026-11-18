@@ -147,15 +147,17 @@ html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #33
 .title-menu .menu-sep { height: 1px; margin: 5px 8px; background: var(--border); }
 html[data-theme="dark"] .title-menu { box-shadow: 0 14px 34px rgba(0, 0, 0, .55); }
 .topbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
-/* 常驻播放控制条：紧凑圆角胶囊，不抢顶栏空间；无播放任务时整条隐藏 */
-.player-bar { display: flex; align-items: center; gap: 2px; flex: none; padding: 3px 5px;
+/* 常驻播放控制条：圆角胶囊；无播放任务时整条隐藏。
+   2026-11-18：符号键点击区放大到 36×36（原来约 25×21 太难点），倍速同步加高。 */
+.player-bar { display: flex; align-items: center; gap: 3px; flex: none; padding: 4px 6px;
   border: 1px solid var(--border); border-radius: 20px; background: var(--surface-2); }
 .player-bar[hidden] { display: none; }
-.player-bar .pbtn { border: 0; background: transparent; color: var(--text); cursor: pointer;
-  padding: 4px 6px; border-radius: 12px; font-size: 13px; line-height: 1; }
+.player-bar .pbtn { width: 36px; height: 36px; padding: 0; border: 0; background: transparent;
+  color: var(--text); cursor: pointer; border-radius: 10px; font-size: 16px; line-height: 1;
+  display: inline-flex; align-items: center; justify-content: center; }
 .player-bar .pbtn:hover { background: var(--primary-soft); color: var(--primary); }
-.player-bar .pbar-speed { width: 72px !important; padding: 3px 5px !important;
-  font-size: 11px !important; border-radius: 12px; }
+.player-bar .pbar-speed { width: 84px !important; height: 36px; padding: 0 8px !important;
+  font-size: 12px !important; border-radius: 10px; }
 .theme-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; padding: 8px 12px;
   border: 1px solid var(--border); border-radius: 20px; background: var(--surface-2);
   color: var(--text); cursor: pointer; font-size: 12px; white-space: nowrap; }
@@ -186,14 +188,16 @@ html[data-theme="dark"] .title-menu { box-shadow: 0 14px 34px rgba(0, 0, 0, .55)
 .player-host { flex: 1; min-height: 0; position: relative; background: #05060a; overflow: hidden; }
 .player-holder { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
   color: #7c8494; font-size: 13px; pointer-events: none; }
-/* 播放控制条：所有按钮都在 HTML 层，原生播放器窗口盖不住 */
-.player-controls { height: 54px; flex: none; display: flex; align-items: center; justify-content: space-between;
+/* 播放控制条：所有按钮都在 HTML 层，原生播放器窗口盖不住。
+   2026-11-18：上一集/播放/停止/下一集/倍速是高频点击目标，点击区放大到 40px 高。 */
+.player-controls { height: 64px; flex: none; display: flex; align-items: center; justify-content: space-between;
   gap: 10px; padding: 0 18px; border-top: 1px solid var(--border); background: var(--surface); }
 .player-controls-side { flex: 1 1 0; min-width: 0; display: flex; align-items: center; }
 .player-controls-side.right { justify-content: flex-end; }
-.player-controls-center { flex: none; display: flex; align-items: center; gap: 8px; }
-.player-play { min-width: 108px; }
-.player-speed { width: auto; min-width: 96px; padding: 6px 8px; font-size: 12px; }
+.player-controls-center { flex: none; display: flex; align-items: center; gap: 10px; }
+.player-controls .btn { min-height: 40px; padding: 9px 16px; font-size: 13px; border-radius: 9px; }
+.player-play { min-width: 128px; }
+.player-speed { width: auto; min-width: 108px; min-height: 40px; padding: 9px 12px; font-size: 13px; }
 /* 放大模式：舞台盖过顶栏但保留底部控制条，全屏按钮仍在右下角 */
 .player-stage.stage-zoom { top: 0; }
 .player-stage.stage-zoom .player-stage-bar { display: none; }
