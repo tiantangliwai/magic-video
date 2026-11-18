@@ -104,7 +104,7 @@ _EP_SUFFIX_RE = re.compile(
 
 
 def cover_key(title: str) -> str:
-    """把展示标题归一成「作品名」：去掉结尾的季标记与集号，作为搜索词 / 缓存键。"""
+    """把展示标题归一成「作品名」：去掉结尾的季标记与集号，作为搜索词。"""
     original = str(title or "").strip()
     text = _strip_season(original)
     previous = None
@@ -112,6 +112,68 @@ def cover_key(title: str) -> str:
         previous = text
         text = _EP_SUFFIX_RE.sub("", text).strip(" -_·:：")
     return text or original
+
+
+# 结尾的季标记。``cover_key()`` 故意把它去掉（同部番各集共用一个搜索词），
+# 但**封面缓存键不能去季**：否则「哥布林杀手」和「哥布林杀手 S2」会哈希到同一个
+# 文件名，后设的那张直接把先设的覆盖掉（用户反馈「两季封面强制一致」）。
+_SEASON_TAIL_RE = re.compile(
+    r"(?:[\s·・\-_:：]*第\s*([一二三四五六七八九十两\d]{1,3})\s*[季期]"
+    r"|[\s·・\-_:：]*[Ss](?:eason)?\s*0?(\d{1,2})"
+    r"|[\s·・\-_:：]*(\d{1,2})\s*(?:st|nd|rd|th)\s*[Ss]eason)\s*$",
+    re.IGNORECASE,
+)
+_CN_NUM = {"一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+           "六": 6, "七": 7, "八": 8, "九": 9}
+
+
+def _cn_number(text: str) -> int:
+    """「二」「十二」「20」→ 数字；认不出返回 0。"""
+    text = str(text or "").strip()
+    if not text:
+        return 0
+    if text.isdigit():
+        return int(text)
+    if text == "十":
+        return 10
+    if "十" in text:
+        head, _, tail = text.partition("十")
+        tens = _CN_NUM.get(head, 1) if head else 1
+        ones = _CN_NUM.get(tail, 0) if tail else 0
+        return tens * 10 + ones
+    return _CN_NUM.get(text, 0)
+
+
+def season_key(title: str) -> str:
+    """封面缓存键：**保留季**、去掉集号，季标记归一成 ``#s{季号}``。
+
+    没有季标记时与 :func:`cover_key()` 完全一致，所以存量缓存/资产不用迁移；
+    带季的标题（``… S2`` / ``… 第二季`` / ``… · 第 2 季``）会得到独立键，
+    两季可以各存一张封面。多种季写法归一到同一季号，避免同一季存出两份。
+    """
+    original = str(title or "").strip()
+    text = original
+    season = 0
+    while text:
+        # 季标记优先：先认「… S2」再剥集号，否则 `… S2 - 01` 的集号规则会把
+        # S2 里的 2 当成集号吃掉（剩下「… S」）。
+        match = _SEASON_TAIL_RE.search(text)
+        if match:
+            number = _cn_number(match.group(1) or match.group(2) or match.group(3) or "")
+            if number > 0:
+                if not season:
+                    season = number
+                text = text[:match.start()].strip(" ·・-_:：")
+                continue
+        trimmed = _EP_SUFFIX_RE.sub("", text).strip(" -_·:：")
+        if trimmed and trimmed != text:
+            text = trimmed
+            continue
+        break
+    key = cover_key(text) if text else ""
+    if not key:
+        return cover_key(original)
+    return f"{key}#s{season}" if season else key
 
 
 _SESSION = None
@@ -492,10 +554,16 @@ def download_cover(url: str, dest: Path) -> bool:
 
 
 def local_cover(title: str) -> str:
-    """已缓存的封面相对文件名；先按归一化的作品名找，再兼容旧的原标题哈希。"""
-    for key in (cover_key(title), str(title or "").strip()):
-        if not key:
-            continue
+    """已缓存的封面相对文件名。
+
+    顺序：**带季键**（本季单独设过的图）→ 作品级键（S2 没单独设就用 S1 那张）
+    → 原串哈希。带季优先是「两季各自一张封面」能生效的关键。
+    """
+    keys: list[str] = []
+    for key in (season_key(title), cover_key(title), str(title or "").strip()):
+        if key and key not in keys:
+            keys.append(key)
+    for key in keys:
         path = cache_path(key)
         try:
             if path.is_file() and path.stat().st_size > 512:
@@ -530,13 +598,13 @@ def validate_image_bytes(data: bytes) -> tuple[bool, str]:
 
 
 def manual_marker(title: str) -> str:
-    """人工封面的 subjects 标记键（与自动抓取共用归一化规则）。"""
-    return _norm_key(cover_key(str(title or "")))
+    """人工封面的 subjects 标记键（带季，与缓存键同一套规则）。"""
+    return _norm_key(season_key(str(title or "")))
 
 
 def manual_filename(title: str) -> str:
     """按缓存文件名判定人工封面：哈希唯一，不受标题空格/大小写影响。"""
-    return cache_path(cover_key(str(title or ""))).name
+    return cache_path(season_key(str(title or ""))).name
 
 
 def is_manual(title: str) -> bool:
@@ -559,10 +627,14 @@ def is_manual(title: str) -> bool:
 def set_manual_cover(title: str, data: bytes, origin: str = "manual:datauri") -> dict:
     """把用户粘贴/选择的图片落盘，覆盖该作品的自动封面缓存。
 
-    写在同一 ``cache_path(cover_key(title))`` 上，``resolve_cover`` 的哈希直查
+    写在同一 ``cache_path(season_key(title))`` 上，``resolve_cover`` 的哈希直查
     天然优先命中；``subjects.source='manual'`` 让后台抓取永远不覆盖用户选择。
+
+    键**带季**：第二季设封面不会动到第一季的那张（否则两季共用同一文件、
+    后设的覆盖先设的）。``subjects`` 里存的是展示名，方便按名字精确匹配。
     """
-    key_title = cover_key(str(title or "").strip())
+    display = str(title or "").strip()
+    key_title = season_key(display)
     if not key_title:
         return {"ok": False, "error": "作品名为空"}
     ok, why = validate_image_bytes(data or b"")
@@ -573,7 +645,7 @@ def set_manual_cover(title: str, data: bytes, origin: str = "manual:datauri") ->
         dest = cache_path(key_title)
         dest.write_bytes(data)
         # 覆盖掉可能存在的旧自动记录，保证 subjects 里只剩 manual 这一条
-        save_cover_record(key_title, str(origin)[:200], "manual", dest.name)
+        save_cover_record(display, str(origin)[:200], "manual", dest.name)
         return {"ok": True, "file": dest.name, "title": key_title,
                 "size": len(data), "source": "manual"}
     except OSError as exc:
@@ -607,12 +679,18 @@ def clear_manual_cover(title: str) -> dict:
 
 
 def save_cover_record(title: str, url: str, source: str, filename: str) -> None:
-    """写 subjects 表，供剧集卡片直接读；同标题只保留最新一条。"""
+    """写 subjects 表，供剧集卡片直接读；同一张图只保留一条记录。
+
+    判重除了标题，还看 ``cover_local``：同一季的两种写法（``… S2`` /
+    ``… · 第 2 季``）会落到同一个缓存文件，不该在 subjects 里长出两行。
+    """
     # 有新图落盘（手选或重新抓到）就解除「清除」标记，否则下次会因墓碑拒用这张图
     _mark_cleared(manual_marker(title), False)
     key = _norm_key(title)
-    existing = db.row("SELECT id FROM subjects WHERE lower(COALESCE(title_cn,'')) = ? OR "
-                      "lower(COALESCE(title_orig,'')) = ? LIMIT 1", (key, key))
+    existing = db.row("SELECT id FROM subjects WHERE cover_local = ? OR "
+                      "lower(COALESCE(title_cn,'')) = ? OR "
+                      "lower(COALESCE(title_orig,'')) = ? LIMIT 1",
+                      (filename, key, key))
     now = db.now()
     if existing:
         db.execute("UPDATE subjects SET cover_url = ?, cover_local = ?, source = ?, updated_at = ? WHERE id = ?",
@@ -628,18 +706,20 @@ def save_cover_record(title: str, url: str, source: str, filename: str) -> None:
 def fetch_one(title: str, force: bool = False) -> dict:
     """抓一个作品的封面：先查缓存 → 搜索 → 下载 → 入库。
 
-    统一用 `cover_key()`（去季 + 去尾集号）做缓存键与入库标题，
-    剧集墙里逐集分组的卡片因此能共用同一张封面。
+    缓存键用 `season_key()`（**保留季**、去尾集号）：同一部番的不同季各存一张，
+    互不覆盖；逐集分组的卡片仍共用同一张，因为它们的标题只差集号。
+    搜索词用原始标题（`search_cover` 内部会自己去季重试）。
     """
-    key_title = cover_key(title)
+    display = str(title or "").strip()
+    key_title = season_key(display)
     dest = cache_path(key_title)
     # 人工设定的封面优先级最高：连 force 重抓也不能覆盖用户的选择，
     # 想恢复自动结果必须先调 clear_manual_cover()。
-    if is_manual(key_title):
+    if is_manual(display):
         return {"ok": True, "cached": True, "file": dest.name, "source": "manual"}
     if not force and dest.is_file() and dest.stat().st_size > 512:
         return {"ok": True, "cached": True, "file": dest.name, "source": "cache"}
-    found = search_cover(title)
+    found = search_cover(display)
     if not found.get("ok"):
         return {"ok": False, "error": found.get("error", "未找到"),
                 "query": found.get("query", "")}
@@ -650,7 +730,7 @@ def fetch_one(title: str, force: bool = False) -> dict:
             break
     if not used_url:
         return {"ok": False, "error": "封面下载失败", "query": found.get("query", "")}
-    save_cover_record(key_title, used_url, found["source"], dest.name)
+    save_cover_record(display, used_url, found["source"], dest.name)
     return {"ok": True, "cached": False, "file": dest.name,
             "source": found["source"], "hit": found.get("hit"),
             "query": found.get("query", "")}
@@ -697,6 +777,9 @@ def poster_labels() -> list[str]:
 
     封面按「抓取标题」哈希落盘，只有直接拿卡片标题去抓，缓存才能被
     `cover_map()` 直接命中；用导入清单标题抓到的图很可能展示不出来。
+
+    标题**保留季标记**（``season_key``）：否则第二季永远抓不到自己那张，
+    只会复用第一季的图。
     """
     try:
         from . import library_tree
@@ -707,7 +790,7 @@ def poster_labels() -> list[str]:
         tree = library_tree.build_tree(rows, "series", None)
         seen, labels = set(), []
         for group in tree.get("groups", []):
-            key = cover_key(str(group.get("label") or ""))
+            key = season_key(str(group.get("label") or ""))
             normalized = _norm_key(key)
             if key and normalized and normalized not in seen:
                 seen.add(normalized)
@@ -988,6 +1071,11 @@ def cover_index(entries: list[tuple[str, str]] | None) -> tuple[dict, dict]:
         key = _norm_key(rec_title)
         if key:
             exact.setdefault(key, filename)
+        season_norm = _norm_key(season_key(rec_title))
+        if season_norm and season_norm != key:
+            exact.setdefault(season_norm, filename)
+        # 去季键用于「没单独设过封面的卡片」回落到该作品的图（有图总比白板好）。
+        # 两季各自设过时不会走到这里：`local_cover()` 先用带季键命中自己那张。
         base_key = _norm_key(_strip_season(rec_title))
         if base_key:
             base.setdefault(base_key, filename)
@@ -1043,6 +1131,10 @@ def resolve_cover_many(pairs: list[tuple[str, list[str]]],
             if norm and ok(exact.get(norm, "")):
                 hit = exact[norm]
                 break
+            season_norm = _norm_key(season_key(text))
+            if season_norm and ok(exact.get(season_norm, "")):
+                hit = exact[season_norm]
+                break
             norm_base = _norm_key(base_text)
             if norm_base and ok(base.get(norm_base, "")):
                 hit = base[norm_base]
@@ -1059,6 +1151,10 @@ def resolve_cover_many(pairs: list[tuple[str, list[str]]],
     fuzzy_entries = []
     for rec_title, filename in entries:
         if not filename or not ok(filename):
+            continue
+        # 带季的封面只按精确/哈希命中：否则「第二季」那张会通过模糊匹配
+        # 糊到第一季或别的写法上，用户分开设的两张又变成一样。
+        if _SEASON_TAIL_RE.search(str(rec_title or "")):
             continue
         norm = _norm_key(rec_title)
         if norm:

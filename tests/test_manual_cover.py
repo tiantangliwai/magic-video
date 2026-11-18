@@ -160,8 +160,14 @@ class ManualCoverTests(IsolatedDbTestCase):
         self.assertTrue(r["ok"])
         self.assertEqual(r["source"], "manual")
         self.assertTrue((covers.config.COVER_DIR / r["file"]).is_file())
-        self.assertTrue(covers.is_manual("间谍过家家"))
-        self.assertTrue(covers.resolve_cover("间谍过家家"))
+        # 键带季：给第二季设图不会替第一季作主（用户 2026-11-18 反馈需求）
+        self.assertTrue(covers.is_manual("间谍过家家 第二季"))
+        self.assertFalse(covers.is_manual("间谍过家家"))
+        self.assertTrue(covers.resolve_cover("间谍过家家 第二季"))
+        # 作品级卡片会「回落显示」这张（有图总比白板好），但那只是显示，
+        # 不是写入：第一季单独设图时仍是自己的文件。
+        self.assertEqual(covers.resolve_cover("间谍过家家"),
+                         covers.resolve_cover("间谍过家家 第二季"))
 
     def test_validate_image_rejects_bad_payloads(self):
         for bad in (b"", b"x" * 100, b"<html>not an image</html>" + b"x" * 1024,
@@ -233,6 +239,84 @@ class ManualCoverTests(IsolatedDbTestCase):
         self.assertFalse(self.api.cover_is_manual(["作品C", "其它"])["其它"])
         self.assertTrue(self.api.clear_cover("作品C")["ok"])
         self.assertFalse(covers.is_manual("作品C"))
+
+
+class SeasonCoverTests(IsolatedDbTestCase):
+    """同一部番的不同季各存一张封面：用户 2026-11-18 反馈「两季强制一致」。"""
+
+    PNG_HEAD = (b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01"
+                b"\x08\x06\x00\x00\x00\x1f\x15\xc4\x89")
+
+    def setUp(self):
+        super().setUp()
+        self.api = Api()
+        covers.config.COVER_DIR.mkdir(parents=True, exist_ok=True)
+
+    def png(self, tag: bytes) -> bytes:
+        return self.PNG_HEAD + tag * 700
+
+    def test_season_key_keeps_season_and_strips_episode(self):
+        base = "哥布林杀手"
+        self.assertEqual(covers.season_key(base), base)          # 无季：与旧键一致
+        self.assertEqual(covers.season_key("哥布林杀手 S2"), f"{base}#s2")
+        self.assertEqual(covers.season_key("哥布林杀手 第二季"), f"{base}#s2")
+        self.assertEqual(covers.season_key("哥布林杀手 · 第 2 季"), f"{base}#s2")
+        self.assertEqual(covers.season_key("哥布林杀手 S2 · 第 2 季"), f"{base}#s2")
+        self.assertEqual(covers.season_key("哥布林杀手 第3季"), f"{base}#s3")
+        # 集号仍然要去掉：同一季各集共用一个键
+        self.assertEqual(covers.season_key("哥布林杀手 S2 - 01"), f"{base}#s2")
+        # 不带季标记的标题不能被误伤
+        for title in ("魔王2099", "10天的爱人 10-Day Lover2023", "Goblin Slayer"):
+            self.assertEqual(covers.season_key(title), covers.cover_key(title))
+
+    def test_two_seasons_store_different_files(self):
+        s1 = covers.set_manual_cover("哥布林杀手", self.png(b"A"))
+        s2 = covers.set_manual_cover("哥布林杀手 S2", self.png(b"B"))
+        self.assertTrue(s1["ok"] and s2["ok"])
+        self.assertNotEqual(s1["file"], s2["file"])
+        # 后设的那张绝不覆盖先设的
+        self.assertEqual((covers.config.COVER_DIR / s1["file"]).read_bytes()[-1:], b"A")
+        self.assertEqual((covers.config.COVER_DIR / s2["file"]).read_bytes()[-1:], b"B")
+        self.assertEqual(covers.resolve_cover("哥布林杀手"), s1["file"])
+        self.assertEqual(covers.resolve_cover("哥布林杀手 S2"), s2["file"])
+        self.assertEqual(covers.resolve_cover("哥布林杀手 第二季"), s2["file"])
+
+    def test_unset_season_falls_back_to_work_cover(self):
+        """只给作品设了图时，第二季仍能显示它（默认共享，不是强行覆盖）。"""
+        s1 = covers.set_manual_cover("哥布林杀手", self.png(b"A"))
+        self.assertEqual(covers.resolve_cover("哥布林杀手 S2"), s1["file"])
+        self.assertFalse(covers.is_manual("哥布林杀手 S2"))
+
+    def test_clearing_one_season_keeps_the_other(self):
+        s1 = covers.set_manual_cover("哥布林杀手", self.png(b"A"))
+        s2 = covers.set_manual_cover("哥布林杀手 S2", self.png(b"B"))
+        self.assertTrue(covers.clear_manual_cover("哥布林杀手 S2")["ok"])
+        self.assertFalse(covers.is_manual("哥布林杀手 S2"))
+        self.assertTrue(covers.is_manual("哥布林杀手"))
+        self.assertTrue((covers.config.COVER_DIR / s1["file"]).is_file())
+        self.assertFalse((covers.config.COVER_DIR / s2["file"]).is_file())
+
+    def test_poster_wall_season_cards_resolve_own_cover(self):
+        """剧集墙季卡片必须拿自己那张：候选里自身标题要排在作品名之前。"""
+        self.media("01.mkv", title_guess="Goblin Slayer", title_cn="哥布林杀手",
+                   season_no=1, episode_no=1)
+        self.media("02.mkv", title_guess="Goblin Slayer", title_cn="哥布林杀手",
+                   season_no=2, episode_no=1)
+        s1 = covers.set_manual_cover("哥布林杀手 · 第 1 季", self.png(b"A"))
+        s2 = covers.set_manual_cover("哥布林杀手 · 第 2 季", self.png(b"B"))
+        data = self.api.get_poster_wall({"limit": 50})
+        resolved = data.get("covers") or {}
+        by_season = {int(c.get("season_no") or 0): resolved.get(c.get("title"), "")
+                     for c in data.get("season_cards") or []}
+        self.assertEqual(by_season.get(1), s1["file"], data.get("season_cards"))
+        self.assertEqual(by_season.get(2), s2["file"], data.get("season_cards"))
+
+    def test_season_candidates_put_own_title_first(self):
+        """源码契约：季卡片候选顺序不许再退回「作品名优先」。"""
+        import inspect
+        src = inspect.getsource(Api.get_poster_wall)
+        block = src.split("for card in season_cards:", 1)[1].split("resolved =", 1)[0]
+        self.assertLess(block.index('card["title"]'), block.index('card["work_title"]'))
 
 
 class ManualCoverFrontendTests(unittest.TestCase):

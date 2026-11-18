@@ -1632,7 +1632,11 @@ class Api:
             pending.append((card["title"], [raw_label, card["title"],
                                             *card.pop("_cover_titles")]))
         for card in season_cards:
-            pending.append((card["title"], [card["work_title"], *card.pop("_cover_titles")]))
+            # 季卡片自己的标题（「作品 · 第 2 季」）必须排在最前：它带季标记，
+            # 能命中本季单独设过的封面；排在作品名后面就永远被作品级封面抢先，
+            # 用户给两季各设一张也会看着一模一样。
+            pending.append((card["title"],
+                            [card["title"], card["work_title"], *card.pop("_cover_titles")]))
         resolved = covers.resolve_cover_many(pending, cover_entries)
         return _cache_put(cache_key, {
             "ok": True, "cards": cards, "total": total, "shown": len(cards),

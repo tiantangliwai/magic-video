@@ -383,7 +383,7 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 | 有对应动漫展示图 | `app/covers.py` 主源 AGE动漫搜索页（精确标题 → `data-original` 高清图）、备源 SeedHub 首页/分类页（title 属性配对）；下载到自己的 `<数据目录>/covers/`，`subjects.cover_local` 落库 |
 | 后台起一次性任务 | `start_cover_fetch()` 只在用户点击时起 daemon 线程，可 `cancel_cover_fetch()`；**没有 `Timer` / 定时任务 / 开机自跑**；重复点击不会起第二个线程 |
 | 不阻塞界面、不炸磁盘 | 短超时 + 单张 3 MB 上限 + Content-Type 校验 + 单部作品异常只记失败；`cover_data_uris()` 转 data URI 给 WebView2（不依赖 `file://`） |
-| 抓到就能显示 | 封面按标题哈希落盘，所以 `cover_titles()` **第一优先级就是剧集墙卡片标题**（`poster_labels()` 复用 `library_tree.build_tree(rows,"series")`）；`cover_key()` 去季标记 + 去尾集号，逐集分组共用一张；卡片标题与抓取标题仍不一致时 `resolve_cover()` 按 `subjects` 精确/去季/包含回退，`get_poster_wall()` 再用分组内文件 `title_cn/title_guess` 兜底 |
+| 抓到就能显示 | 封面按标题哈希落盘，所以 `cover_titles()` **第一优先级就是剧集墙卡片标题**（`poster_labels()` 复用 `library_tree.build_tree(rows,"series")`）；`season_key()` **保留季标记**（`… S2` / `… 第二季` / `… · 第 2 季` 统一归一为 `#s2`）+ 去尾集号，逐集分组共用一张、**不同季各存一张**；卡片标题与抓取标题仍不一致时 `resolve_cover()` 按「带季键 → 作品级键 → subjects 精确/去季/包含」回退，`get_poster_wall()` 再用分组内文件 `title_cn/title_guess` 兜底 |
 | 优先抓能抓到的 | 卡片标题之后依次是导入清单中文名、媒体库中文名、其余英文标题；技术标签 / 番号编号 /「（完）」残行 / 零宽字符先过滤 |
 | Everything 快搜 | `app/everything.py`：`es.exe` → Everything HTTP 服务 → **自动降级为媒体库检索**；能力探测与提示写进「设置」页 |
 | 全盘快搜独立入口 | 左侧导航「全盘快搜」→ 独立视图 `quicksearch`（搜索框 / 结果 / 当前通道徽标 / 设置跳转）；剧集墙只保留封面卡片，不再内嵌搜索框；`VIEW_META` / `RENDERERS` 与导航项一一对应，由 `tests/test_quicksearch.py` 守护 |
@@ -695,10 +695,12 @@ web/app.js::loadFileList()  (view_mode != 'flat')
 |---|---|
 | 22-B1 | 剧集墙卡片与看过的列表卡片墙都有「设定封面」；弹窗支持 **Ctrl+V 粘贴剪贴板图片**（FileReader → base64）、系统文件对话框选本地图片、或粘贴 http(s) 图片网址 |
 | 22-B2 | 三种来源统一由后端 `Api.set_cover()` 读取/下载，`covers.validate_image_bytes()` 校验魔数（JPEG/PNG/WebP/GIF/BMP）与 `512B ≤ size ≤ 3MB`；拒绝相对路径、非图片后缀、非 http(s)、非法 base64 |
-| 22-B3 | 落盘到 `cache_path(cover_key(title))`，写 `subjects(source='manual')`；`subject_covers()` 用 `ORDER BY (source='manual') DESC` 保证人工图优先 |
+| 22-B3 | 落盘到 `cache_path(season_key(title))`（**键带季**：`… S2` → `… #s2`，无季标题与原键一致，存量不用迁移），写 `subjects(source='manual')`；`subject_covers()` 用 `ORDER BY (source='manual') DESC` 保证人工图优先 |
 | 22-B4 | `is_manual()` 按**缓存文件名**（哈希）判定，不受标题空格/大小写影响；`fetch_one()` 连 `force=True` 也不覆盖人工图，`cover_titles()` 把人工作品排除出抓取队列 |
 | 22-B5 | 弹窗「恢复自动」调 `clear_cover()` 删 manual 记录并删掉这一张缓存文件；不碰用户视频/图片文件 |
-| 22-B6 | 不是定时任务；`app/covers.py` 源码不含 `Timer(` / `schedule` |
+| 22-B6 | **两季可以各设一张**（2026-11-18 用户反馈「设完两季强制一致」）：键保留季，第二季设图不会覆盖第一季；季卡片解析时**自身标题排在作品名之前**（`get_poster_wall`），否则永远被作品级封面抢先 |
+| 22-B7 | 没单独设过的季仍显示该作品的图（`local_cover()` 带季键未命中 → 回落作品级键），只是显示回落、不写库；「清除某一季」只删这一季的键，另一季与本季作品级图不受影响 |
+| 22-B8 | 不是定时任务；`app/covers.py` 源码不含 `Timer(` / `schedule` |
 
 ### 22-C Everything A+B（彻底集成评估结论）
 
