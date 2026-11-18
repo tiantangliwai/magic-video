@@ -172,6 +172,35 @@ class MediaTreeTests(IsolatedDbTestCase):
         self.assertEqual(group["file_count"], 3)
         self.assertEqual([f["tree_episode"] for f in group["files"]], [1, 2, 3])
 
+    def test_version_merge_survives_best_version_not_being_first(self):
+        """同一集多个版本、最优版不是入库首版时不能整页崩溃。
+
+        真实触发：100 个女朋友第二季 12 集 + 9 个 PV 因片名数字误判全归到
+        「第 100 集」，_collapse_versions 里 order.index(primary) 按 dict 内容
+        找位置，而 primary 从未进过 order → ValueError: ... is not in list，
+        总览 / 继续观看直接加载失败。修复后按 bucket 锚点对象身份替换。
+        """
+        dir_id = self._dir()
+        show = "超超超超超喜欢你的100个女朋友"
+        # 第一版先入库（bucket[0]，进 order）；第二版体积更大，rank 会选它作 primary
+        first = self.media("Show - 07 [BD].mkv", title_guess=show, title_cn=show,
+                           season_no=2, episode_no=7, size=1000, dir_id=dir_id)
+        best = self.media("Show - 07 [WEB].mkv", title_guess=show, title_cn=show,
+                          season_no=2, episode_no=7, size=9999, dir_id=dir_id)
+        # 再来一集，确保树里既有被合并 bucket 也有普通 bucket，走完整 _apply_version_merge
+        self.media("Show - 08.mkv", title_guess=show, title_cn=show,
+                   season_no=2, episode_no=8, size=500, dir_id=dir_id)
+
+        tree = self.api.get_media_tree({})
+        group = self._group(tree, show)
+        season2 = group["children"][0]
+        ep7 = [f for f in season2["files"] if f["tree_episode"] == 7]
+        self.assertEqual(len(ep7), 1, "同集多版本必须合并成一条")
+        self.assertEqual(ep7[0]["id"], best["id"], "primary 应是最优版本（体积大）")
+        self.assertEqual(ep7[0]["version_count"], 2)
+        self.assertEqual({v["file_id"] for v in ep7[0]["versions"]},
+                         {first["id"], best["id"]})
+
     def test_chinese_numeral_season_and_single_file_movie_keeps_own_group(self):
         dir_id = self._dir()
         show = "Re：从零开始的异世界生活"

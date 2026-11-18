@@ -571,10 +571,19 @@ def _collapse_versions(items: list[dict]) -> list[dict]:
         if len(bucket) < 2:
             bucket[0]["versions"] = [_version_entry(bucket[0])]
             continue
-        primary = sorted(bucket, key=rank)[0]
-        primary["versions"] = [_version_entry(x) for x in sorted(bucket, key=rank)]
+        ranked = sorted(bucket, key=rank)
+        primary = ranked[0]
+        primary["versions"] = [_version_entry(x) for x in ranked]
         primary["version_count"] = len(bucket)
-        order[order.index(primary)] = primary
+        # bucket[0] 是这个分组首次出现、已 append 进 order 的锚点；primary 是按
+        # rank 选出的最优版本，往往不是它。绝不能用 order.index(primary) 按 dict
+        # 内容找位置——primary 从未进过 order（进的是 bucket[0]），内容又各不
+        # 相同，必然抛 ValueError: ... is not in list，让整页加载失败。
+        # 按对象身份定位锚点换成 primary，既不依赖内容相等，也保持原有顺序。
+        for pos, placed in enumerate(order):
+            if placed is bucket[0]:
+                order[pos] = primary
+                break
     return order
 
 

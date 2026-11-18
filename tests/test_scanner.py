@@ -136,6 +136,21 @@ class EpisodeConfidenceTests(IsolatedDbTestCase):
         self.assertIsNone(info["episode_no"])
         self.assertEqual(info["episode_confidence"], "")
 
+    def test_hyphenated_title_number_is_not_an_episode(self):
+        """片名里的 `100-nin`（「100个女朋友」）不能当第 100 集。
+
+        numbered 正则结尾的 -/_ 若允许紧跟字母，` 100-nin` 就会被误判成集号，
+        整部番的 01-12 集 + PV 全被塞进「第 100 集」一个 bucket。真正的集号
+        来自方括号 [07]（低置信度，交用户确认）。
+        """
+        name = ("[DBD-Raws][Kimi no Koto ga Dai Dai Dai Dai Daisuki na 100-nin "
+                "no Kanojo S2][07][1080P][BDRip][HEVC-10bit][FLAC].mkv")
+        info = scanner.parse_filename(name)
+        self.assertEqual((info["season_no"], info["episode_no"]), (2, 7))
+        self.assertEqual(info["episode_source"], "bracket")
+        # 带空格 / 方括号的独立集号写法不能回归
+        self.assertEqual(scanner.parse_filename("Show - 05 - 1080p.mkv")["episode_no"], 5)
+
     def test_scan_persists_source_and_confidence(self):
         root = self.tmp / "conf"
         root.mkdir()
