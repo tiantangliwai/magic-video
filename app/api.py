@@ -34,6 +34,11 @@ _WORK_LABELS_KEY = "work_labels_json"
 # python.exe，看不到 --daemon 的 exe 守护，会误报「未启动」。
 _PRODUCT_EXE_NAME = "magic video.exe"
 
+# 「打开看过的列表」自动补同步的节流：切页 / 改标题都会重渲染列表，
+# 每次都全扫一遍已完成的播放记录没必要，8 秒内只跑一次。
+_AUTO_SYNC_INTERVAL = 8.0
+_AUTO_SYNC_AT = 0.0
+
 # 剧集墙「查看分集」的搜索词清洗：树分组偶尔把 [1.36G] 这类文件大小当成
 # 作品名，此时退回文件名方括号里的真实中文片名（例：[爱的躯壳].La.Belle...）。
 _CARD_CJK_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
@@ -519,8 +524,13 @@ class Api:
             (file_id, stamp, stamp, stamp),
         )
 
-    def _set_watch_state(self, file_id: int, completed: int) -> dict:
-        """标记已看/未看；两种操作都清空续播点，但绝不删除 watch_sessions 历史。"""
+    def _set_watch_state(self, file_id: int, completed: int, *,
+                         sync_watched: bool = True) -> dict:
+        """标记已看/未看；两种操作都清空续播点，但绝不删除 watch_sessions 历史。
+
+        ``sync_watched``：手动标「已看」时顺手把作品同步进看过的列表（与自动同步
+        同一套逻辑）；批量标记时为 False，由调用方在循环结束后统一同步一次。
+        """
         try:
             fid = int(file_id)
         except (TypeError, ValueError):
@@ -533,7 +543,28 @@ class Api:
             "last_played_at = COALESCE(last_played_at, ?), updated_at = ? WHERE file_id = ?",
             (completed, db.now(), db.now(), fid),
         )
+        if completed and sync_watched:
+            self._sync_watched_for_file(fid)
         return {"ok": True, "file_id": fid, "completed": completed}
+
+    def _sync_watched_for_file(self, file_id: int) -> None:
+        """把该文件所属作品补进看过的列表；失败静默（不改动返回值）。"""
+        try:
+            if not db.get_int("auto_sync_watched", 1):
+                return
+            row = db.row(
+                "SELECT title_cn, title_guess, title_raw, filename, episode_no "
+                "FROM media_files WHERE id = ?", (int(file_id),))
+            if not row:
+                return
+            title = (row.get("title_cn") or row.get("title_guess")
+                     or row.get("title_raw") or row.get("filename") or "")
+            title = importer._strip_episode_suffix(title, row.get("episode_no"))
+            if title:
+                importer.sync_watched_from_progress(
+                    only_titles=[title], merge_duplicates=False)
+        except Exception:
+            pass
 
     def mark_watched(self, file_id: int) -> dict:
         return self._set_watch_state(file_id, 1)
@@ -571,11 +602,18 @@ class Api:
             if fid in seen:
                 continue
             seen.append(fid)
-            result = self._set_watch_state(fid, completed)
+            result = self._set_watch_state(fid, completed, sync_watched=False)
             if result.get("ok"):
                 updated += 1
             else:
                 failed += 1
+        # 批量标记只在这里同步一次：逐条同步会把整部剧重扫几百遍
+        if completed and updated:
+            try:
+                if db.get_int("auto_sync_watched", 1):
+                    importer.sync_watched_from_progress()
+            except Exception:
+                pass
         return {"ok": True, "action": key, "completed": completed,
                 "updated": updated, "failed": failed, "total": len(seen)}
 
@@ -951,7 +989,16 @@ class Api:
         }
 
     def delete_watched(self, item_id: int) -> dict:
-        db.execute("DELETE FROM watched_list WHERE id = ?", (int(item_id),))
+        """从看过的列表删掉一行；自动同步补进来的行要记墓碑，否则会被加回来。"""
+        try:
+            iid = int(item_id)
+        except (TypeError, ValueError):
+            return {"ok": False, "error": "无效的记录 ID"}
+        row = db.row(
+            "SELECT title, season_no, source FROM watched_list WHERE id = ?", (iid,))
+        db.execute("DELETE FROM watched_list WHERE id = ?", (iid,))
+        if row and str(row.get("source") or "") == "playback":
+            importer.mark_sync_ignored(row.get("title"), row.get("season_no"))
         return {"ok": True}
 
     def clean_watched_list(self, dry_run: bool = False) -> dict:
@@ -961,6 +1008,22 @@ class Api:
 
     def sync_watched_from_history(self) -> dict:
         """手动把「已看完」的播放记录回补进看过的列表；幂等，非定时任务。"""
+        return importer.sync_watched_from_progress()
+
+    def sync_watched_auto(self) -> dict:
+        """打开「看过的列表」时的静默补同步（前端兜底，不是用户点按钮）。
+
+        主通道是守护侧「某集判定看完即同步」；这里覆盖守护没运行、那次写库失败、
+        以及旧版本里看过但从未同步过的记录。8 秒节流：切页 / 编辑标题都会重渲染
+        列表，没必要每次都扫一遍已完成的播放记录。
+        """
+        global _AUTO_SYNC_AT
+        if not db.get_int("auto_sync_watched", 1):
+            return {"ok": True, "disabled": True, "added": 0, "updated": 0}
+        now = time.monotonic()
+        if now - _AUTO_SYNC_AT < _AUTO_SYNC_INTERVAL:
+            return {"ok": True, "throttled": True, "added": 0, "updated": 0}
+        _AUTO_SYNC_AT = now
         return importer.sync_watched_from_progress()
 
     def get_media_files(self, keyword: str = "", limit: int = 300) -> list[dict]:
@@ -1897,7 +1960,7 @@ class Api:
     def save_settings(self, data: dict) -> dict:
         allowed = {
             "potplayer_path", "poll_interval_sec", "bluetooth_speaker_name",
-            "complete_percent", "recording_enabled",
+            "complete_percent", "recording_enabled", "auto_sync_watched",
             # 完成判定四阈值（v0.1.6）：片头忽略秒数 / 最低续播百分比 / 片尾忽略百分比
             "min_resume_percent", "ignore_seconds_at_start", "ignore_percent_at_end",
             "http_proxy", "metadata_source", "bangumi_base", "window_width", "window_height",

@@ -68,7 +68,9 @@ class EndToEndTests(IsolatedDbTestCase):
         self.assertEqual(len(api.get_completed()), 1)
         api.mark_unwatched(record["id"])
         self.assertEqual(db.scalar("SELECT COUNT(*) FROM watch_sessions"), 1)
-        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watched_list"), 2)
+        # 第 5 步「标记已看」现在会自动把该作品补进看过的列表（source='playback'），
+        # 标记未看只清续播点、不回收列表行 —— 所以是导入的 2 条 + 自动同步 1 条。
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM watched_list"), 3)
 
         # 6. 历史时间线仍然完整可查
         history = api.get_history()

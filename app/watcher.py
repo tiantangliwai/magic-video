@@ -237,16 +237,30 @@ class Watcher:
             cur["watched_ms"] = int(cur.get("watched_ms") or 0) + delta
             complete_at = db.get_int("complete_percent", 90)
             end_ignore = db.get_int("ignore_percent_at_end", 8)
+            # PotPlayer 的 POT_GET_TOTAL_TIME 偶尔读回 0（个别封装 / 刚起播 / 版本差异），
+            # 此时 percent 恒为 0 → 这一集永远不算看完，也就永远同步不进「看过的列表」。
+            # 用库里已有的时长兜底：扫描时写入的，或上一次播放写入的。
+            duration = (int(status["duration_ms"] or 0)
+                        or int(record.get("duration_ms") or 0)
+                        or int(cur.get("duration_ms") or 0))
+            if not cur.get("duration_ms") and duration:
+                cur["duration_ms"] = duration
             percent = status["percent"] or 0.0
+            if not status["duration_ms"] and duration:
+                percent = round(pos / duration * 100, 2)
             # 四阈值判定：看够上限百分比，或只剩片尾 ignore_percent_at_end 以内 → 已看完
             completed = 1 if (
                 percent >= complete_at or (percent > 0 and 100.0 - percent <= end_ignore)
             ) else 0
-            resume = self._resume_ms(pos, status["duration_ms"], completed)
+            resume = self._resume_ms(pos, duration, completed)
             stamp = db.now()
             # 进度 / 会话 / 媒体时长三条写合成一个 IMMEDIATE 事务：
             # 旧写法分三个事务，中途失败会让 session 与 progress 记的位置不一致。
             with db.session(immediate=True) as conn:
+                prev_row = conn.execute(
+                    "SELECT completed FROM watch_progress WHERE file_id = ?", (file_id,)
+                ).fetchone()
+                completed_before = int((prev_row[0] if prev_row else 0) or 0)
                 conn.execute(
                     "UPDATE watch_progress SET "
                     "position_ms = CASE WHEN ? = 1 THEN 0 WHEN ? > COALESCE(position_ms,0) THEN ? "
@@ -254,7 +268,7 @@ class Watcher:
                     "duration_ms = ?, percent = ?, completed = MAX(completed, ?), "
                     "total_watched_ms = COALESCE(total_watched_ms,0) + ?, "
                     "last_played_at = ?, updated_at = ? WHERE file_id = ?",
-                    (completed, resume, resume, status["duration_ms"], percent, completed,
+                    (completed, resume, resume, duration, percent, completed,
                      delta, stamp, stamp, file_id),
                 )
                 conn.execute(
@@ -269,3 +283,27 @@ class Watcher:
             cur["last_written_ms"] = pos
             cur["last_state"] = status["state"]
             self._emit("progress", {"file_id": file_id, "percent": status["percent"]})
+            if completed and not completed_before:
+                # 刚判定看完 → 立刻把这部作品补进「看过的列表」，不用等用户点按钮
+                self._auto_sync_watched(record)
+
+    def _auto_sync_watched(self, record: dict) -> None:
+        """某集刚被判定看完 → 只同步这一部作品进看过的列表（幂等）。
+
+        与「从播放记录同步」按钮同一个桥，``only_titles`` 限定范围让每次开销
+        只有一次按作品查询。开关 ``auto_sync_watched`` 关闭时直接返回；
+        任何异常都吞掉——同步失败绝不能影响播放进度记录这条主链路。
+        """
+        try:
+            if not db.get_int("auto_sync_watched", 1):
+                return
+            from . import importer          # 延迟导入：守护启动时不必加载词典
+            title = (record.get("title_cn") or record.get("title_guess")
+                     or record.get("title_raw") or record.get("filename") or "")
+            title = importer._strip_episode_suffix(title, record.get("episode_no"))
+            if not title:
+                return
+            importer.sync_watched_from_progress(
+                only_titles=[title], merge_duplicates=False)
+        except Exception as exc:              # 记录型失败不影响守护主循环
+            self.last_error = f"看过的列表自动同步失败：{exc}"

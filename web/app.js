@@ -1066,6 +1066,13 @@ function renderWatchedRows() {
 }
 
 async function renderWatched() {
+  // 打开列表先静默补同步一次：主通道是守护「某集判定看完即同步」，这里兜底
+  // 守护没运行 / 那次写库失败 / 旧记录从未同步过的情况。失败绝不能挡住列表渲染。
+  let autoSynced = null;
+  try { autoSynced = await call('sync_watched_auto'); } catch (_) { /* 忽略 */ }
+  if (autoSynced && autoSynced.added) {
+    toast(`已自动同步 ${autoSynced.added} 部作品到看过的列表`);
+  }
   // 列表数据与「匹配到的本地目录」并行取；目录接口异常时只隐藏按钮，不影响列表本身
   const [rows, folderData] = await Promise.all([
     call('get_watched_list', 0),
@@ -1375,6 +1382,9 @@ async function renderSettings() {
       ${switchHtml('daemon_auto_start', isOn(s.daemon_auto_start), '启动软件时自动开启后台记录',
         '默认开启：打开本软件就自动拉起托盘守护并续记播放进度；关闭后不再自动启动，可在设置里随时改回')}
       ${switchHtml('recording_enabled', isOn(s.recording_enabled), '启用播放记录', '关闭后守护进程不再写入历史')}
+      ${switchHtml('auto_sync_watched', isOn(s.auto_sync_watched ?? 1),
+        '看完自动同步到看过的列表',
+        '每判定看完一集就把这部作品补进「看过的列表」，打开该页时也会静默补一次，不需要再点按钮')}
       ${switchHtml('autostart', isOn(s.autostart_enabled), '开机自动启动后台记录', '写当前用户注册表 Run 项，无需管理员权限')}
     </div>
     </section>

@@ -1351,3 +1351,42 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `web/index.html`：`.quick-block`（`<p class="quick-title">` + `.nav.quick-nav` 两张 `.nav-item.quick-btn`）；`#mainNav` 只留 11 项；设置按钮移入 `.sidebar-foot`；
 - `web/style.css`：`.quick-*` 卡片样式、`#mainNav { flex: 1 1 auto; overflow-y: auto }`，导航项 padding 收到 6px 让 12 个入口在 780 高内放下；
 - `tests/test_watchlist.py::test_sidebar_quick_actions_hold_import_and_scan`：快捷区存在、主导航不重复、样式契约。
+
+---
+
+## 38. 看完自动同步进「看过的列表」（2026-11-18）
+
+### 38-A 现象与根因
+
+用户看完 `Kaichou wa Maid-sama!` 第 1、2 集，点「从播放记录同步」却看不到这部作品。
+只读排查真实库，得到**两个独立原因**：
+
+| # | 现象（库内实据） | 根因 |
+|---|---|---|
+| 1 | 第 1 集 `watch_sessions.max_ms = 1379837`（占时长 94.96%），但 `watch_progress.completed = 0`、`percent = 0` | PotPlayer 的 `POT_GET_TOTAL_TIME` 读回 0 时 `duration_ms = 0` → `percent` 恒为 0 → 永远不满足 `complete_percent=90`，这一集**从来不算看完** |
+| 2 | 第 2 集 `completed = 1`，但同步结果按集拆行 | `title_guess` 是 `Kaichou wa Maid-sama! 02`（集号没剥掉），同一部番每集标题都不同，按 (标题, 季) 聚合就成了每集一条 |
+
+另外用户明确要求：**不能总靠手动点按钮**。
+
+### 38-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 38-B1 | 播放器读不到总时长（`duration_ms=0`）时，用 `media_files.duration_ms`（扫描或上次播放写入的）兜底算 `percent`，该集到阈值即判完成；兜底时长不得被 0 覆盖回库 |
+| 38-B2 | 判定完成的**那一次轮询**就把作品补进看过的列表（`completed` 由 0→1 时触发），无需用户点按钮 |
+| 38-B3 | 实现只处理刚看完的那一部（`only_titles`），不整表重扫；任何异常静默，绝不影响进度记录主链路 |
+| 38-B4 | `title_guess` 末尾并进去的集号按 `episode_no` 精确剥离（`Kaichou wa Maid-sama! 02` → `Kaichou wa Maid-sama!`）；标题自带数字（`魔王2099`）不受影响 |
+| 38-B5 | 打开「看过的列表」先静默补同步一次（8 秒节流），覆盖守护没运行 / 那次写库失败 / 旧记录从未同步；有新增才提示，失败不挡住列表渲染 |
+| 38-B6 | 手动点「标记已看」同样进看过的列表；批量标记只在循环结束后同步一次（不逐条重扫） |
+| 38-B7 | **删除墓碑**：在看过的列表里删掉 `source='playback'` 的行后，自动同步不再把它加回来；用户重新手动导入同名作品则解除标记。删手动导入的行不留墓碑 |
+| 38-B8 | 设置里可关（`auto_sync_watched` 默认开）：关掉后判定完成照常写进度，但不再动看过的列表，手动按钮仍在 |
+
+### 38-C 实现位置
+
+- `app/watcher.py::_tick()`：`duration` 三层兜底（播放器 → `media_files` → 本次会话），`percent` 用兜底时长重算；写库改用兜底值；事务内读 `completed` 旧值，`0→1` 时调 `_auto_sync_watched()`；
+- `app/watcher.py::_auto_sync_watched()`：延迟导入 importer、只同步该作品、异常写 `last_error` 不抛；
+- `app/importer.py::_strip_episode_suffix()`：按 `episode_no` 精确剥尾部集号；`_sync_key` / `mark_sync_ignored` / `clear_sync_ignored` 用 settings `watched_sync_ignored` 存墓碑；`sync_watched_from_progress(only_titles=None, merge_duplicates=True)` 支持限定范围与跳过墓碑，返回 `ignored`；
+- `app/api.py`：`_set_watch_state(..., sync_watched=True)` + `_sync_watched_for_file()`、`batch_mark` 循环后统一同步、`delete_watched` 记墓碑、新增 `sync_watched_auto()`（8 秒节流）、`save_settings` 白名单加 `auto_sync_watched`；
+- `app/config.py`：`auto_sync_watched: 1`；
+- `web/app.js::renderWatched()`：渲染前静默调用 `sync_watched_auto`，有新增才 toast；设置「播放与记录」加开关。
+- `tests/test_auto_sync.py`（13 例）：聚合不拆行、标题自带数字不误伤、`only_titles` 范围、墓碑跳过 / 手动导入解除 / 删除记墓碑、时长兜底判完成、完成即同步、开关关闭、Api 节流。

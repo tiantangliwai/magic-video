@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import re
 import unicodedata
 from collections import OrderedDict
@@ -474,6 +475,8 @@ def commit(records: list[dict], source: str = "manual", skip_unmatched: bool = F
             ),
         )
         inserted += 1
+        # 手动导入同名作品 → 解除「不要再自动同步」的标记（用户明确想要它回来）
+        clear_sync_ignored(title, rec.get("season_no"))
     return {"ok": True, "inserted": inserted, "skipped": skipped,
             "learned": learned, "pending": pending}
 
@@ -543,6 +546,82 @@ def _season_key(value) -> int:
     return season or 1
 
 
+_SYNC_IGNORE_KEY = "watched_sync_ignored"
+
+
+def _sync_key(title: str, season) -> str:
+    """同步条目的作品键：``小写标题|折算季号``。"""
+    return f"{str(title or '').strip().lower()}|{_season_key(season)}"
+
+
+def _sync_ignore_keys() -> set[str]:
+    """用户在看过的列表里**删掉**的自动同步条目键。
+
+    自动同步会跟着播放记录把作品反复补回来，删一次又出现等于没法用；
+    删除时记一笔，同步跳过。用户重新手动导入同名作品则解除（见 :func:`commit`）。
+    只存几十个短串，按封面墓碑的老办法塞进 settings 的 JSON，不另建表。
+    """
+    try:
+        raw = db.get_setting(_SYNC_IGNORE_KEY, "") or ""
+    except Exception:
+        return set()
+    if not raw:
+        return set()
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return set()
+    return {str(x) for x in data} if isinstance(data, list) else set()
+
+
+def mark_sync_ignored(title: str, season=None) -> None:
+    """记下「这条作品不要再自动同步回来」。"""
+    if not str(title or "").strip():
+        return
+    keys = _sync_ignore_keys()
+    keys.add(_sync_key(title, season))
+    try:
+        db.set_setting(_SYNC_IGNORE_KEY, json.dumps(sorted(keys), ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def clear_sync_ignored(title: str, season=None) -> None:
+    """用户主动重新导入同名作品时，解除此前的「不要再同步」标记。"""
+    if not str(title or "").strip():
+        return
+    keys = _sync_ignore_keys()
+    key = _sync_key(title, season)
+    if key not in keys:
+        return
+    keys.discard(key)
+    try:
+        db.set_setting(_SYNC_IGNORE_KEY, json.dumps(sorted(keys), ensure_ascii=False))
+    except Exception:
+        pass
+
+
+def _strip_episode_suffix(title: str, episode_no) -> str:
+    """把 ``title_guess`` 末尾并进去的集号剥掉，得到作品名。
+
+    ``scanner.parse_filename`` 对 ``[SAIO-Raws] Kaichou wa Maid-sama! 02 [BD ...]``
+    这类命名只切出集号，``title_guess`` 仍带着 ``02``——同一部番 26 集会变成
+    26 个"作品"，同步进看过的列表就是 26 条。只有当末尾数字**正好等于**
+    ``episode_no`` 时才剥，``魔王2099`` 这种标题自带数字的不会被误伤。
+    """
+    if not title or episode_no is None:
+        return title
+    try:
+        ep = int(episode_no)
+    except (TypeError, ValueError):
+        return title
+    m = re.search(r"[\s\-_\[（(]+(\d{1,4})\s*(?:END|Fin|完结)?[\s\]）)]*$", title, re.IGNORECASE)
+    if not m or int(m.group(1)) != ep:
+        return title
+    stripped = title[:m.start()].strip(" -_[]()（）")
+    return stripped or title
+
+
 def _merge_playback_duplicates() -> int:
     """合并旧版「每集一条」的 playback 记录，返回删除的重复行数（幂等）。
 
@@ -579,21 +658,38 @@ def _merge_playback_duplicates() -> int:
     return removed
 
 
-def sync_watched_from_progress() -> dict:
-    """手动把「已看完」的播放记录回补进看过的列表；**按作品合并**，幂等。
+def sync_watched_from_progress(only_titles=None, *, merge_duplicates: bool = True) -> dict:
+    """把「已看完」的播放记录回补进看过的列表；**按作品合并**，幂等。
 
     播放记录（``watch_progress`` / ``watch_sessions``）与看过的列表原本是两条
-    互不相交的数据流，这个函数是它们之间唯一的桥。只在用户点按钮时执行一次，
-    **不是定时任务、不随启动运行**。
+    互不相交的数据流，这个函数是它们之间唯一的桥。三个入口：
+
+    * 手动点「从播放记录同步」→ 全量回补（``merge_duplicates=True`` 顺手合并旧重复行）；
+    * 守护判定某集看完 → 只传 ``only_titles=[作品名]``，代价是一次按作品查询；
+    * 打开「看过的列表」→ 前端静默兜底，覆盖守护没跑或那次写库失败。
 
     2026-11-15 修复：旧版对每个文件插一条 ``episode_from=ep, episode_to=ep``，
     而 ``commit()`` 的判重键含集号，所以整部番会变成「每集一条」。现在先按
     (作品名, 季) 聚合成一条区间行，再与既有行取并集；同时把历史遗留的
     ``source='playback'`` 重复行合并掉，所以第一次点就能把旧重复清干净。
+
+    2026-11-18 修复两处真实漏同步：
+
+    * ``title_guess`` 可能带着集号（``Kaichou wa Maid-sama! 02``），同一部番每集
+      标题都不同 → 同步成 26 条。聚合前用 :func:`_strip_episode_suffix` 剥掉；
+    * 用户在看过的列表里删过的作品记了墓碑（settings ``watched_sync_ignored``），
+      自动同步跳过，避免「删了又自己长回来」。
     """
     db.init_db()
     metadata.ensure_builtin_loaded()
-    merged = _merge_playback_duplicates()
+    merged = _merge_playback_duplicates() if merge_duplicates else 0
+    wanted = None
+    if only_titles is not None:
+        wanted = {str(t).strip().lower() for t in only_titles if str(t or "").strip()}
+        if not wanted:                       # 指定了范围但为空 → 明确什么都不做
+            return {"ok": True, "scanned": 0, "added": 0, "updated": 0,
+                    "merged": 0, "skipped": 0, "ignored": 0}
+    ignored_keys = _sync_ignore_keys()
     completed = db.rows(
         "SELECT f.title_guess, f.title_raw, f.title_cn, f.filename, "
         "f.season_no, f.episode_no "
@@ -603,14 +699,20 @@ def sync_watched_from_progress() -> dict:
     # 第一遍：按 (作品, 季) 聚合，得到本批的最小/最大集号
     buckets: dict[tuple[str, int], dict] = {}
     skipped = 0
+    ignored = 0
     for item in completed:
         base = (item.get("title_cn") or item.get("title_guess")
                 or item.get("title_raw") or item.get("filename") or "")
-        title = clean_watched_title(base)
+        title = clean_watched_title(_strip_episode_suffix(base, item.get("episode_no")))
         if not title or _JUNK_TITLE_RE.match(title):
             skipped += 1
             continue
+        if wanted is not None and title.lower() not in wanted:
+            continue
         season = int(item.get("season_no") or 0)
+        if _sync_key(title, season) in ignored_keys:
+            ignored += 1
+            continue
         ep = item.get("episode_no")
         cn = (item.get("title_cn") or "").strip()
         key = (title.lower(), _season_key(season))
@@ -667,4 +769,5 @@ def sync_watched_from_progress() -> dict:
     return {
         "ok": True, "scanned": len(completed), "added": added,
         "updated": updated, "merged": merged, "skipped": skipped + covered,
+        "ignored": ignored,
     }

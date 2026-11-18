@@ -104,6 +104,9 @@ DEFAULTS = {
     "ignore_seconds_at_start": 30,
     "ignore_percent_at_end": 8,
     "recording_enabled": 1,
+    # 看完一集自动把它补进「看过的列表」（守护侧完成即同步 + 打开列表时静默兜底）。
+    # 默认开：用户明确要求「不能总是靠我自己点按钮」。关掉只保留手动同步按钮。
+    "auto_sync_watched": 1,
     "autostart": 0,  # 开机自启：写 HKCU Run 注册表项，只影响系统登录时
     # 主窗口启动时自动拉起托盘守护（默认开）。与 autostart（开机自启）、
     # recording_enabled（守护是否写历史）语义互不重叠；可在设置页关闭。
