@@ -434,25 +434,32 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn('html[data-theme="dark"] .ni-process', self.css)
 
     def test_title_menu_holds_utility_entries(self):
-        """导入 / 扫描 / 设置收进标题旁下拉，侧栏只留浏览页面。"""
-        head = self.html.split('<nav class="nav" id="mainNav">', 1)[0]
-        self.assertNotIn('data-view="import"', head)
-        self.assertNotIn('data-view="scan"', head)
-        sidebar = self.html.split('<aside class="sidebar">', 1)[1].split('</aside>', 1)[0]
-        self.assertNotIn('data-view="settings"', sidebar)
-        menu = self.html.split('<div class="title-menu"', 1)[1].split('<p id="viewSubtitle"', 1)[0]
+        """导入 / 扫描 / 设置收进 logo 区「Magic Video」旁的下拉，侧栏只留浏览页面。"""
+        # 菜单锚在侧栏 logo 区，箭头紧贴程序名「Magic Video」那一行
+        brand = self.html.split('<div class="brand">', 1)[1].split('<nav class="nav" id="mainNav">', 1)[0]
+        self.assertIn('<h1>Magic Video</h1>', brand)
+        self.assertIn('class="brand-title-row"', brand)
+        self.assertIn('id="titleMenuBtn"', brand)
+        self.assertIn('<div class="title-menu"', brand)
+        menu = brand.split('<div class="title-menu"', 1)[1]
         for view in ('import', 'scan', 'settings'):
             self.assertIn(f'data-view="{view}"', menu)
         # 按钮文本必须紧贴 </button>，跟导航/脚本依赖的既有形状一致
         for label in ('导入列表', '扫描目录', '设置'):
             self.assertIn(f'>{label}</button>', menu)
         self.assertIn('data-action="toggle-title-menu"', self.html)
+        # 顶栏只留标题与副标题，不再出现下拉按钮或工具入口
+        topbar = self.html.split('<header class="topbar">', 1)[1].split('</header>', 1)[0]
+        self.assertNotIn('title-menu', topbar)
+        for view in ('import', 'scan', 'settings'):
+            self.assertNotIn(f'data-view="{view}"', topbar)
         main = self.html.split('<nav class="nav" id="mainNav">', 1)[1].split('</nav>', 1)[0]
         for view in ('import', 'scan', 'settings'):
             self.assertNotIn(f'data-view="{view}"', main)
         self.assertIn(".title-menu { position: absolute;", self.css)
         self.assertIn(".title-menu[hidden] { display: none; }", self.css)
         self.assertIn(".title-menu .menu-item {", self.css)
+        self.assertIn(".brand-title-row { display: flex;", self.css)
         for token in ('toggle-title-menu', 'closeTitleMenu()',
                       "ev.target.closest('#titleMenu')", "aria-expanded"):
             self.assertIn(token, self.js)

@@ -65,12 +65,14 @@ button, input, textarea, select { font-family: inherit; font-size: 13px; }
 
 .sidebar { width: 218px; flex: none; background: var(--surface); border-right: 1px solid var(--border);
   display: flex; flex-direction: column; padding: 20px 12px 14px; }
-.brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 18px; }
+.brand { display: flex; align-items: center; gap: 11px; padding: 0 8px 18px; position: relative; }
 .logo { width: 34px; height: 34px; border-radius: 10px; background: var(--primary); position: relative; flex: none; }
 .logo span { position: absolute; left: 13px; top: 10px; width: 0; height: 0;
   border-left: 10px solid #fff; border-top: 7px solid transparent; border-bottom: 7px solid transparent; }
 .brand-text h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .2px; }
 .brand-text p { margin: 2px 0 0; font-size: 11px; color: var(--faint); }
+/* 「Magic Video」标题与小箭头同一行，箭头紧贴程序名右侧 */
+.brand-title-row { display: flex; align-items: center; gap: 3px; }
 .nav { display: flex; flex-direction: column; gap: 3px; }
 /* 侧栏只剩浏览页面：主导航自己滚，底栏常驻可见 */
 #mainNav { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
@@ -128,10 +130,9 @@ html[data-theme="dark"] .nav-item.active .nav-icon { color: #14171d; }
    互斥的显式规则让每次切主题都发生选择器命中变化，顶栏当场重绘，不用再点别处。 */
 html[data-theme="light"] .topbar { background: #ffffff; border-bottom-color: #e5e8ef; }
 html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #333a47; }
-.topbar-title .title-row { display: flex; align-items: center; gap: 7px; position: relative; }
 .topbar-title h2 { margin: 0; font-size: 17px; font-weight: 600; }
 .topbar-title p { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
-/* 标题旁的小箭头：PotPlayer 式「工具入口」下拉。默认收起，点开悬浮在内容之上。 */
+/* 小箭头：PotPlayer 式「工具入口」下拉。锚在侧栏 logo 区，默认收起，展开悬浮在内容之上。 */
 .title-menu-btn { flex: none; width: 22px; height: 22px; padding: 0; display: inline-flex;
   align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px;
   background: transparent; color: var(--muted); cursor: pointer; transition: background .12s, color .12s; }
@@ -139,7 +140,7 @@ html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #33
   stroke-linecap: round; stroke-linejoin: round; }
 .title-menu-btn:hover, .title-menu-btn[aria-expanded="true"] {
   background: var(--surface-2); border-color: var(--border); color: var(--primary); }
-.title-menu { position: absolute; top: calc(100% + 10px); left: -8px; z-index: 60;
+.title-menu { position: absolute; top: calc(100% - 12px); left: 8px; z-index: 60;
   min-width: 190px; padding: 6px; border: 1px solid var(--border); border-radius: 11px;
   background: var(--surface); box-shadow: 0 14px 34px rgba(0, 0, 0, .18); }
 .title-menu[hidden] { display: none; }

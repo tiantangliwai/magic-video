@@ -20,7 +20,24 @@
   <aside class="sidebar">
     <div class="brand">
       <div class="logo"><span></span></div>
-      <div class="brand-text"><h1>Magic Video</h1><p>本地视频管理</p></div>
+      <div class="brand-text">
+        <div class="brand-title-row">
+          <h1>Magic Video</h1>
+          <!-- PotPlayer 式标题旁下拉：点程序名右侧小箭头展开工具入口。
+               菜单项复用 .nav-item，点击/高亮逻辑与普通导航一致。 -->
+          <button class="title-menu-btn" id="titleMenuBtn" data-action="toggle-title-menu"
+                  title="更多功能：导入列表 / 扫描目录 / 设置" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg>
+          </button>
+          <div class="title-menu" id="titleMenu" role="menu" hidden>
+            <button class="nav-item menu-item" data-view="import" role="menuitem"><span class="nav-icon ni-import"><svg viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m8 10.5 4 4 4-4"/><path d="M4 17v3h16v-3"/></svg></span>导入列表</button>
+            <button class="nav-item menu-item" data-view="scan" role="menuitem"><span class="nav-icon ni-folder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>扫描目录</button>
+            <div class="menu-sep" role="separator"></div>
+            <button class="nav-item menu-item" data-view="settings" role="menuitem"><span class="nav-icon ni-gear"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.3M12 19.2v2.3M4.5 4.5l1.6 1.6M17.9 17.9l1.6 1.6M2.5 12h2.3M19.2 12h2.3M4.5 19.5l1.6-1.6M17.9 6.1l1.6-1.6"/></svg></span>设置</button>
+          </div>
+        </div>
+        <p>本地视频管理</p>
+      </div>
     </div>
     <nav class="nav" id="mainNav">
       <button class="nav-item active" data-view="home"><span class="nav-icon ni-home"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg></span>总览</button>
@@ -44,21 +61,7 @@
   <main class="main">
     <header class="topbar">
       <div class="topbar-title">
-        <!-- PotPlayer 式标题旁下拉：导入 / 扫描 / 设置这类「偶尔用一次」的工具入口
-             收进这里，侧栏只留浏览页面。菜单项复用 .nav-item，点击/高亮逻辑不变。 -->
-        <div class="title-row">
-          <h2 id="viewTitle">总览</h2>
-          <button class="title-menu-btn" id="titleMenuBtn" data-action="toggle-title-menu"
-                  title="更多功能：导入列表 / 扫描目录 / 设置" aria-haspopup="menu" aria-expanded="false">
-            <svg viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg>
-          </button>
-          <div class="title-menu" id="titleMenu" role="menu" hidden>
-            <button class="nav-item menu-item" data-view="import" role="menuitem"><span class="nav-icon ni-import"><svg viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m8 10.5 4 4 4-4"/><path d="M4 17v3h16v-3"/></svg></span>导入列表</button>
-            <button class="nav-item menu-item" data-view="scan" role="menuitem"><span class="nav-icon ni-folder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>扫描目录</button>
-            <div class="menu-sep" role="separator"></div>
-            <button class="nav-item menu-item" data-view="settings" role="menuitem"><span class="nav-icon ni-gear"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.3M12 19.2v2.3M4.5 4.5l1.6 1.6M17.9 17.9l1.6 1.6M2.5 12h2.3M19.2 12h2.3M4.5 19.5l1.6-1.6M17.9 6.1l1.6-1.6"/></svg></span>设置</button>
-          </div>
-        </div>
+        <h2 id="viewTitle">总览</h2>
         <p id="viewSubtitle">你的播放进度一目了然</p>
       </div>
       <div class="topbar-right">

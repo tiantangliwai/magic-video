@@ -1317,7 +1317,7 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 
 | # | 验收标准 |
 |---|---|
-| 36-B1 | 从标题旁下拉菜单点「设置」打开浮层弹窗（遮罩 + 对话框），不再切主视图；关闭后仍停在原来那页 |
+| 36-B1 | 从 logo 区「Magic Video」旁下拉菜单点「设置」打开浮层弹窗（遮罩 + 对话框），不再切主视图；关闭后仍停在原来那页 |
 | 36-B2 | 弹窗左侧列 9 个分类（播放与记录 / 播放控制键位 / 中文名与刮削 / 全盘快搜 / 视频黑名单 / Obsidian 笔记 / 媒体库体检 / 备份与导出 / 数据与外观），右侧只显示当前分类的内容 |
 | 36-B3 | 切分类只切显隐，不重新取数；打开时一次性读全量设置，字段契约 `#set-xxx` + `[data-setting]` 保持不变 |
 | 36-B4 | Esc / 右上角 ✕ / 「取消」/ 点遮罩都能关闭并放弃未保存改动；「保存设置」照旧整批写库并刷新 |
@@ -1331,30 +1331,31 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 
 ---
 
-## 37. 标题旁下拉菜单收纳工具入口（2026-11-18）
+## 37. logo 区「Magic Video」旁下拉菜单收纳工具入口（2026-11-18）
 
 ### 37-A 场景
 
 侧栏原来 14 个入口平铺：先按用户提议把「导入列表 / 扫描目录」提成左上角快捷卡片、「设置」下沉底栏；
-随后用户反馈「这三个这样不好看，参考 PotPlayer 在表头名称处加个下拉按钮」。最终形态是**顶栏标题旁的小箭头下拉**，
-侧栏只留浏览页面，工具性入口按需展开。
+随后用户反馈「这三个这样不好看，参考 PotPlayer 在表头名称处加个下拉按钮」。做成顶栏「总览」标题旁下拉后，
+用户再纠正「位置不对，不应该是总览名称后面，应该是表头的 Magic Video 处」。
+**最终形态：侧栏 logo 区「Magic Video」文字右侧的小箭头下拉**，锚在 `.brand`；侧栏只留浏览页面，工具性入口按需展开。
 
 ### 37-B 验收标准
 
 | # | 验收标准 |
 |---|---|
-| 37-B1 | 顶栏「总览」等标题右侧有小箭头按钮（`data-action="toggle-title-menu"`），点击展开下拉；再点箭头、点菜单外、按 Esc、点任一菜单项都收起，`aria-expanded` 同步 |
+| 37-B1 | 侧栏 logo 区「Magic Video」标题同一行右侧有小箭头按钮（`data-action="toggle-title-menu"`），点击展开下拉；再点箭头、点菜单外、按 Esc、点任一菜单项都收起，`aria-expanded` 同步 |
 | 37-B2 | 下拉含「导入列表 / 扫描目录 / 设置」三项（设置前有分隔线），复用 `.nav-item`，点击行为与普通导航完全一致（切视图、离开内嵌播放时还原播放器、设置仍开弹窗） |
-| 37-B3 | 侧栏不再出现这三个入口：`#mainNav` 只留 11 个浏览页，底栏只留守护状态与版本号 |
+| 37-B3 | 菜单从 logo 区下方弹出、浮在导航项之上；顶栏只留「总览」标题与副标题，不含任何工具入口或下拉按钮；`#mainNav` 只留 11 个浏览页，底栏只留守护状态与版本号 |
 | 37-B4 | `nav == VIEW_META == RENDERERS` 仍是 14 项（菜单项也计入），不出现同一视图两份实现 |
 | 37-B5 | 深浅两套主题下菜单有独立卡片底、描边与阴影，浮在内容之上不被遮挡；780 高窗口下侧栏 11 项与底栏全部可见 |
 
 ### 37-C 实现位置
 
-- `web/index.html`：`.topbar-title .title-row` 内加 `.title-menu-btn` + `.title-menu`（三个 `.nav-item.menu-item`）；删掉 `.quick-block` 与 `.sidebar-foot` 的设置按钮；
-- `web/style.css`：`.title-menu { position:absolute; z-index:60 }` + `[hidden]` 规则；删掉 `.quick-*` 卡片样式；
-- `web/app.js`：`closeTitleMenu()` + 点击委托里的开关/外部关闭分支 + Esc 分支；
-- `tests/test_watchlist.py::test_title_menu_holds_utility_entries`：菜单三项、侧栏不含这三项、样式与交互契约。
+- `web/index.html`：`.brand > .brand-text > .brand-title-row` 内放 `<h1>Magic Video</h1>` + `.title-menu-btn` + `.title-menu`（三个 `.nav-item.menu-item`）；顶栏 `.topbar-title` 只留 `h2#viewTitle` + `p#viewSubtitle`；
+- `web/style.css`：`.brand { position:relative }` 作锚点，`.title-menu { position:absolute; top:calc(100% - 12px); left:8px; z-index:60 }` + `[hidden]` 规则；`.brand-title-row { display:flex }` 让箭头紧贴标题；
+- `web/app.js`：`closeTitleMenu()` + 点击委托里的开关/外部关闭分支 + Esc 分支（按 id / data-action 定位，DOM 移动不影响逻辑）；
+- `tests/test_watchlist.py::test_title_menu_holds_utility_entries`：菜单三项、锚在 brand、顶栏无残留、主导航不含这三项、样式与交互契约。
 
 ---
 
