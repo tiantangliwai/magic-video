@@ -104,6 +104,19 @@ class ThemeFrontendContractTests(unittest.TestCase):
         self.assertTrue(startup_url({}).endswith("?theme=light"))
         self.assertTrue(startup_url({"theme": "bogus"}).endswith("?theme=light"))
 
+    def test_startup_url_is_local_path_not_file_uri(self):
+        """首屏必须是本地路径 + query，不能是 file:// URI（v0.1.8 ERR_FILE_NOT_FOUND 回归）。
+
+        pywebview 6.2.1 只对本地路径启动内置 HTTP server 解析 ?theme=；file:// URI 会被
+        原样交给 WebView2，路径含空格 (%20) 且带 query 时会报 ERR_FILE_NOT_FOUND。
+        """
+        url = startup_url({"theme": "dark"})
+        self.assertFalse(url.startswith("file://"), url)
+        self.assertTrue(url.startswith(str(ROOT)), url)
+        self.assertTrue(url.endswith("index.html?theme=dark"), url)
+        # web_index 必须在源码/包内真实存在，否则路径拼对了也白搭
+        self.assertTrue((ROOT / "web" / "index.html").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

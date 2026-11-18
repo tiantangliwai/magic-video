@@ -16,7 +16,10 @@ def startup_url(settings: dict | None = None) -> str:
     """
     raw = str((settings or {}).get("theme", config.DEFAULTS["theme"]) or "light").strip().lower()
     theme = raw if raw in ("light", "dark") else "light"
-    return (config.WEB_DIR / "index.html").as_uri() + f"?theme={theme}"
+    # 必须传本地路径（不是 file:// URI）：pywebview 6.2.1 只对本地路径启动内置 HTTP
+    # server，把 query 交给 HTTP 层解析；file:// URI 会被原样交给 WebView2，路径含空格
+    # (%20) 且带 ?theme= 时被当成文件名的一部分 → ERR_FILE_NOT_FOUND（v0.1.8 回归）。
+    return str(config.WEB_DIR / "index.html") + f"?theme={theme}"
 
 
 def create_window(debug: bool = False) -> None:
