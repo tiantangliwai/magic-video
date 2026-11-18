@@ -1489,6 +1489,11 @@ async function renderSettings() {
         <textarea class="input" id="set-video_blacklist" placeholder="例如：daas,sone,三上悠亚">${esc(s.video_blacklist || '')}</textarea>
         <div class="tip">按「名称包含」匹配：短英文词（如 jul / ipx / ure）可能误伤正常片名，
           发现误伤把它从词表里删掉即可。改完点上方「保存设置」，切换页面即生效。</div></div>
+      <div class="field"><label>路径黑名单（每个路径一行，逗号 / 顿号 / 分号也可分隔）</label>
+        <textarea class="input" id="set-video_blacklist_paths" placeholder="例如：D:\片库\里番&#10;E:\临时下载">${esc(s.video_blacklist_paths || '')}</textarea>
+        <div class="tip">按「路径包含」匹配：填写一个目录或路径片段，该路径下的所有视频都不展示
+          （写 D:\片库\里番 就隐藏这一整个目录）。斜杠方向、大小写不影响匹配。
+          同样只是展示层过滤，<b>不删本地文件</b>；留空即不按路径屏蔽。</div></div>
     </div>
     </section>
     <section class="pane" data-pane="obsidian">
@@ -2744,7 +2749,7 @@ async function handleAction(action, btn) {
         'bangumi_rate_ms', 'bangumi_backoff_sec', 'online_cache_ttl_days',
         'obsidian_vault', 'obsidian_folder', 'everything_es_path', 'everything_http_url',
         'everything_http_user', 'everything_http_pass', 'everything_app_path',
-        'video_blacklist',
+        'video_blacklist', 'video_blacklist_paths',
         'pot_key_play_pause', 'pot_key_stop', 'pot_key_faster', 'pot_key_slower',
         'pot_key_reset_speed', 'pot_key_fullscreen', 'pot_speed_step'];
       const data = {};

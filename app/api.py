@@ -1977,8 +1977,9 @@ class Api:
             "everything_es_path", "everything_http_url", "everything_app_path",
             "everything_http_user", "everything_http_pass",
             "embed_player", "daemon_auto_start",
-            # 视频黑名单：名称包含任一关键词的视频默认隐藏，开关关闭后恢复全部
-            "blacklist_enabled", "video_blacklist",
+            # 视频黑名单：名称包含任一关键词 / 路径包含任一片段的视频默认隐藏，
+            # 开关关闭后恢复全部
+            "blacklist_enabled", "video_blacklist", "video_blacklist_paths",
             # 播放快捷键绑定与倍速步进：PotPlayer 各版本键位不同，允许在设置里改
             "pot_key_play_pause", "pot_key_stop", "pot_key_faster", "pot_key_slower",
             "pot_key_reset_speed", "pot_key_fullscreen", "pot_speed_step",

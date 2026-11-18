@@ -25,6 +25,13 @@
 :func:`normalize_name` 在比较前先做 NFKC（全角字母数字转半角）再查
 :data:`_VARIANTS` 把异体字归到规范简体。**只改比较、不改展示**：卡片标题、
 文件名、词表原文一律原样保留。
+
+**路径黑名单**（2026-11-18 用户要求「设置某些路径下的视频不展示」）：
+独立于名称词表的设置项 ``video_blacklist_paths``，语义是「路径包含任一片段即隐藏」
+（填 ``D:\\片库\\里番`` 就隐藏该目录下所有视频）。与名称黑名单共用
+``blacklist_enabled`` 总开关，同样只影响展示。路径归一化只做「反斜杠转正斜杠、
+连续斜杠合一、大小写归一、去首尾空白」，**不做**名称那套异体字 / 连接符归并——
+路径是磁盘上的真实串，归并会把不同目录混为一谈。默认空，因此旧库行为不变。
 """
 from __future__ import annotations
 
@@ -136,9 +143,23 @@ _TRANSLATE = {ord(ch): None for ch in _SEP_CHARS}
 _TRANSLATE.update({ord(k): v for k, v in _VARIANTS.items()})
 
 
-# 只判断「名称」字段：路径不参与，否则目录名里的一个词会把整棵子树的正常作品隐藏。
+# 名称黑名单只判断「名称」字段：路径不参与，否则目录名里的一个词会把整棵子树的正常作品隐藏。
+# 路径屏蔽是另一条独立规则（video_blacklist_paths），见 normalize_path / _path_match。
 # 注意 SQL 表达式要自己带别名前缀，不能写成 ``f.COALESCE(...)``（别名后不能接函数）。
 _ROW_KEYS = ("filename", "title_guess", "title_cn", "display_title", "title", "raw_text")
+
+
+def normalize_path(text: object) -> str:
+    """路径归一：反斜杠→正斜杠、连续斜杠合一、小写、去首尾空白与首尾斜杠。
+
+    不做 NFKC / 异体字 / 连接符归并——那是名称匹配才需要的（文件名写法千变万化）；
+    路径是磁盘真实串，用户填什么就匹配什么，只抹平跨平台斜杠与大小写差异。
+    去掉首尾斜杠是为了让 ``\\TEMP\\`` 这类「任意盘符下的目录」写法也能按路径段命中。
+    """
+    s = str(text or "").replace("\\", "/").strip().lower()
+    while "//" in s:
+        s = s.replace("//", "/")
+    return s.strip("/")
 
 
 def normalize_name(text: object) -> str:
@@ -230,7 +251,7 @@ def raw() -> str:
 # 词表 / 开关的进程内快照。命中判断会被「每个分组、每一行」反复调用，
 # 每次都读一次 settings 等于每次开一条 SQLite 连接，剧集墙 190 个分组要 2 秒。
 # 失效条件是 db.write_count()：任何写库（含保存设置）都会让它 +1。
-_STATE: dict = {"version": -1, "keywords": [], "norm": [], "enabled": True}
+_STATE: dict = {"version": -1, "keywords": [], "norm": [], "paths": [], "enabled": True}
 
 
 def _state() -> dict:
@@ -248,11 +269,21 @@ def _state() -> dict:
                 continue
             seen.add(key)
             words.append(word)
+        # 路径片段：同样切分 / 去重，但用路径归一（反斜杠→斜杠、大小写），不做异体字归并。
+        paths: list[str] = []
+        seen_path: set[str] = set()
+        for part in _SPLIT_RE.split(str(db.get_setting("video_blacklist_paths") or "")):
+            key = normalize_path(part)
+            if not key or key in seen_path:
+                continue
+            seen_path.add(key)
+            paths.append(key)
         flag = str(db.get_setting("blacklist_enabled") or "").strip().lower()
         _STATE.update(
             version=version,
             keywords=words,
             norm=[normalize_name(w) for w in words],
+            paths=paths,
             enabled=flag not in ("0", "false", "off", "no", ""),
         )
     return _STATE
@@ -278,10 +309,47 @@ def enabled() -> bool:
 
 
 def active() -> bool:
-    """开关打开**且**词表非空时才真正过滤。"""
+    """开关打开**且**（名称词表或路径词表任一非空）时才真正过滤。"""
     state = _state()
-    return bool(state["enabled"]) and bool(state["keywords"])
+    return bool(state["enabled"]) and bool(state["keywords"] or state["paths"])
 
+
+def path_keywords() -> list[str]:
+    """归一化后的路径片段列表（已切分 / 去重 / 斜杠与大小写归一），供设置页对照与测试。"""
+    return list(_state()["paths"])
+
+
+def _path_segment_hit(hay: str, frag: str) -> bool:
+    """片段必须落在完整路径段上：命中处左侧是开头或 ``/``、右侧是结尾或 ``/``。
+
+    这是为了避免误伤：片段 ``里番`` 不应把同级目录 ``里番2`` 一起隐藏。
+    """
+    start = 0
+    while True:
+        pos = hay.find(frag, start)
+        if pos < 0:
+            return False
+        left_ok = pos == 0 or hay[pos - 1] == "/"
+        end = pos + len(frag)
+        right_ok = end == len(hay) or hay[end] == "/"
+        if left_ok and right_ok:
+            return True
+        start = pos + 1
+
+
+def path_hit(path: object) -> bool:
+    """路径包含任一屏蔽片段（按路径段边界）即命中；开关关闭 / 片段表空时永不命中。
+
+    与名称匹配不同，路径片段是用户明确指定的目录 / 文件名串，不套名称的短英文词
+    边界规则，但要求落在完整路径段上——既命中 ``D:\\片库\\里番`` 整个目录，
+    又不误伤 ``D:\\片库\\里番2`` 这种名字相近的兄弟目录。
+    """
+    if not active():
+        return False
+    hay = normalize_path(path)
+    if not hay:
+        return False
+    return any(_path_segment_hit(hay, frag) for frag in _state()["paths"])
 
 
 def hit(*names: object) -> bool:
@@ -295,14 +363,22 @@ def hit(*names: object) -> bool:
 
 
 def filter_rows(rows, keys: tuple[str, ...] = _ROW_KEYS) -> list[dict]:
-    """给已经查出来的行做 Python 侧过滤（列表总条数不大时才用）。"""
+    """给已经查出来的行做 Python 侧过滤（列表总条数不大时才用）。
+
+    名称和路径两条规则是「或」关系：任一命中即隐藏。路径只认行里的 ``path``
+    字段；有些行（如全盘快搜 / Everything 结果）没有 path，就只走名称规则。
+    """
     items = list(rows or [])
     if not active():
         return items
+    paths_on = bool(_state()["paths"])
     out: list[dict] = []
     for r in items:
-        if not _match_text("\n".join(str(r.get(k) or "") for k in keys if k in r)):
-            out.append(r)
+        if _match_text("\n".join(str(r.get(k) or "") for k in keys if k in r)):
+            continue
+        if paths_on and path_hit(r.get("path")):
+            continue
+        out.append(r)
     return out
 
 
@@ -330,6 +406,7 @@ def sql_clause(alias: str = "f") -> tuple[str, list]:
     if not active():
         return "", []
     kws = keywords()
+    paths = _state()["paths"]
     fields = _sql_expressions(alias)
     parts: list[str] = []
     params: list[str] = []
@@ -345,13 +422,27 @@ def sql_clause(alias: str = "f") -> tuple[str, list]:
         ors = " OR ".join(f"{expr} LIKE ? ESCAPE '\\'" for expr in fields)
         parts.append(f"({ors})")
         params.extend([like] * len(fields))
+    # 路径粗筛：与 Python 侧 _path_segment_hit 同一套「路径段边界」语义。
+    # 做法：把归一后的路径首尾各补一个 '/'（如 d:/片库/里番/01.mkv → /d:/片库/里番/01.mkv/），
+    # 片段也首尾补 '/'（/d:/片库/里番/），再做包含匹配。这样 `里番` 只会命中独立目录段，
+    # 不会误伤 `里番2`。SQL 里无法复用 normalize_path 的连续斜杠合一，但片段已归一、
+    # 库内路径一般是规范写法；边界判定若仍漏，filter_rows 精筛会兜住。
+    if paths:
+        path_expr = f"replace(lower({alias}.path), char(92), '/')"
+        wrapped = f"('/' || {path_expr} || '/')"
+        for frag in paths:
+            parts.append(f"({wrapped} LIKE ? ESCAPE '\\')")
+            params.append(f"%/{_escape_like(frag)}/%")
+    if not parts:
+        return "", []
     return "NOT (" + " OR ".join(parts) + ")", params
 
 
 def status() -> dict:
     """供设置页 / 测试读取的只读快照。"""
     kws = keywords()
-    return {"enabled": enabled(), "count": len(kws), "keywords": kws}
+    return {"enabled": enabled(), "count": len(kws), "keywords": kws,
+            "paths": path_keywords(), "path_count": len(path_keywords())}
 
 
 def invalidate() -> None:

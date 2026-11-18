@@ -152,6 +152,10 @@ DEFAULTS = {
         "冲田杏梨,春菜,miaa,mida,mvsd.naiad,小早川,mmpk,n房间,pakx,pfes,potplayer,"
         "未步奈奈,pred,rctd.rki,royd,same,sone,sps,ssni,stars-,start-,suji,tysf,ure,waaa,ymdd"
     ),
+    # 路径黑名单（用户 2026-11-18 要求）：路径包含任一片段的视频在展示位置隐藏，
+    # 默认空（不屏蔽任何路径）。与名称黑名单共用 blacklist_enabled 开关，
+    # 只影响展示，不删文件 / 不动播放记录。分隔符同名称词表。
+    "video_blacklist_paths": "",
 }
 
 

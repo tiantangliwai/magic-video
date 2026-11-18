@@ -1416,3 +1416,35 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `web/style.css`：`.player-bar` / `.pbtn` / `.pbar-speed`、`.player-controls` / `.player-controls .btn` / `.player-speed`；
 - `tests/test_player_controls.py` 新增尺寸契约；`build/probe_player.py` 无头回读实测：
   顶栏 5 键均 36×36、倍速 84×36、整条 293×46；内嵌按钮均 40px 高、倍速 108×40、控制条 938×64。
+
+## 40. 路径黑名单：按目录屏蔽视频展示（2026-11-18）
+
+### 40-A 场景
+
+用户要求「展示黑名单增加可以设置某些路径下的视频的不展示」。名称黑名单明确只判名称、
+路径不参与（避免目录名里的词把整棵子树的正常作品隐藏），所以路径屏蔽作为**独立配置**
+叠加，与名称词表共用同一个总开关，互不污染。
+
+### 40-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 40-B1 | 设置 →「视频黑名单」新增「路径黑名单」输入框（每个路径一行，逗号/顿号/分号/换行也可），留空即不按路径屏蔽 |
+| 40-B2 | 路径片段按「路径段」匹配：写 `D:\片库\里番` 隐藏该目录及子目录下全部视频；`里番` 不误伤同级 `里番2` |
+| 40-B3 | 反斜杠/正斜杠、大小写、首尾斜杠差异都被抹平（`\TEMP\` 与 `d:/temp/x` 视为同一目录段） |
+| 40-B4 | 与名称黑名单共用 `blacklist_enabled`：关掉开关后所有位置恢复展示；名称词表仍照常工作 |
+| 40-B5 | 只影响展示：不删 `media_files` 行、不动播放记录、不删追剧清单条目 |
+| 40-B6 | 覆盖全部展示位置：媒体库 / 剧集墙 / 剧集展示 / 扫描结果 / 统计 / 继续观看 / 历史 / 看过的列表 / 追剧本地匹配 / 全盘快搜 |
+| 40-B7 | 默认 `video_blacklist_paths=''`：旧库 SQL 不掺 `f.path`，全部既有用例行为零变化 |
+
+### 40-C 实现位置
+
+- `app/config.py`：`video_blacklist_paths` 默认空；
+- `app/blacklist.py`：`normalize_path`（斜杠/大小写/首尾归一）、`_path_segment_hit`（段边界）、
+  `path_hit` / `path_keywords`、`filter_rows` 加路径规则、`sql_clause` 用 `('/'||路径||'/') LIKE '%/片段/%'`
+  在 SQL 层做同样的段边界粗筛，`active()` 改为两表任一非空即生效，`status()` 暴露路径快照；
+- `app/api.py`：`save_settings` 白名单加 `video_blacklist_paths`（读取走 `get_settings` 全量返回，无需额外改）；
+- `web/app.js`：黑名单面板加 `set-video_blacklist_paths` 输入框与「不删本地文件」说明，保存字段列表加入该键；
+- `tests/test_blacklist.py`：`PathBlacklistTests`（解析归一 / 段边界 / 开关 / SQL 粗筛 / filter_rows）
+  + `PathBlacklistApiTests`（各视图屏蔽 / 不删库 / 开关恢复 / 保存键）+ 前端契约，共 16 例；
+- 增量 **549/549 全绿**。

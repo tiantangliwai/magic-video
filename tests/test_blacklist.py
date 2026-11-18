@@ -364,5 +364,139 @@ class MediaCacheTests(IsolatedDbTestCase):
         self.assertEqual(self.api.get_poster_wall({})["total"], 1)
 
 
+class PathBlacklistTests(IsolatedDbTestCase):
+    """路径黑名单（2026-11-18）：按路径片段屏蔽视频，与名称词表相互独立。"""
+
+    def test_default_paths_empty_keeps_name_only_behavior(self):
+        self.assertEqual(blacklist.path_keywords(), [])
+        self.assertFalse(blacklist.path_hit("D:\\任意\\目录\\01.mkv"))
+        # 名称黑名单仍照常工作（路径配置为空不影响名称规则）
+        self.assertTrue(blacklist.hit("FC2PPV-1.mp4"))
+        clause, _ = blacklist.sql_clause("f")
+        self.assertNotIn("f.path", clause)   # 默认无路径片段 → SQL 不掺 path
+
+    def test_split_normalize_and_dedupe_slash_and_case(self):
+        db.set_setting("video_blacklist_paths",
+                       "D:\\片库\\里番，d:/片库/里番/；\\TEMP\\;E:\\A\\B")
+        paths = blacklist.path_keywords()
+        # 反斜杠转正斜杠、大小写归一、去尾斜杠、去重
+        self.assertEqual(paths, ["d:/片库/里番", "temp", "e:/a/b"])
+
+    def test_path_hit_is_slash_and_case_insensitive(self):
+        db.set_setting("video_blacklist_paths", "D:\\片库\\里番")
+        self.assertTrue(blacklist.path_hit("D:/片库/里番/[字幕组] 某番 01.mkv"))
+        self.assertTrue(blacklist.path_hit("d:\\片库\\里番\\SP01.mp4"))
+        # 片段必须是路径子串，不能只命中盘符的一部分
+        self.assertFalse(blacklist.path_hit("D:/片库/里番2/01.mkv"))
+        self.assertFalse(blacklist.path_hit("E:/正常/01.mkv"))
+
+    def test_no_false_hit_from_name_keyword(self):
+        # 名称词表里的词不应跑到路径规则里：同名目录不该仅因名称词表被隐藏
+        self.assertTrue(blacklist.hit("daas-001.mp4"))
+        db.set_setting("video_blacklist", "")   # 清空名称词表
+        self.assertFalse(blacklist.path_hit("D:/片库/daas/01.mp4"))
+
+    def test_switch_off_disables_path_hit_and_sql(self):
+        db.set_setting("video_blacklist_paths", "D:\\屏蔽")
+        self.assertTrue(blacklist.path_hit("D:/屏蔽/01.mkv"))
+        db.set_setting("blacklist_enabled", 0)
+        self.assertFalse(blacklist.path_hit("D:/屏蔽/01.mkv"))
+        clause, params = blacklist.sql_clause("f")
+        self.assertEqual(clause, "")
+        self.assertEqual(params, [])
+
+    def test_only_paths_configured_still_active(self):
+        db.set_setting("video_blacklist", "")  # 名称词表空
+        db.set_setting("video_blacklist_paths", "D:\\屏蔽")
+        self.assertTrue(blacklist.enabled())
+        self.assertTrue(blacklist.active())
+        self.assertTrue(blacklist.path_hit("D:/屏蔽/01.mkv"))
+
+    def test_sql_clause_includes_normalized_path_fragment(self):
+        db.set_setting("video_blacklist_paths", "D:\\片库\\里番")
+        clause, params = blacklist.sql_clause("f")
+        self.assertIn("f.path", clause)
+        self.assertIn("char(92)", clause)           # 反斜杠归一
+        self.assertTrue(any("/d:/片库/里番/" in p for p in params))  # 首尾补 / 的段边界
+
+    def test_sql_segment_boundary_does_not_hit_sibling_dir(self):
+        """SQL 粗筛与 Python 精筛的段边界一致：里番 不命中 里番2。"""
+        db.set_setting("video_blacklist_paths", "里番")
+        good = self.media("里番2 01.mkv", path="D:/片库/里番2/01.mkv")
+        bad = self.media("里番 01.mkv", path="D:/片库/里番/01.mkv")
+        # 直接把 SQL 片段拼进查询验证粗筛本身
+        clause, params = blacklist.sql_clause("f")
+        rows = db.rows(f"SELECT id FROM media_files f WHERE {clause}", tuple(params))
+        ids = [r["id"] for r in rows]
+        self.assertIn(good["id"], ids)
+        self.assertNotIn(bad["id"], ids)
+
+    def test_like_wildcards_in_path_are_escaped(self):
+        db.set_setting("video_blacklist_paths", "D:\\100%_real")
+        clause, params = blacklist.sql_clause("f")
+        self.assertTrue(any("\\%\\_" in p for p in params))
+
+    def test_filter_rows_checks_path_field(self):
+        db.set_setting("video_blacklist_paths", "D:\\屏蔽")
+        rows = [
+            {"filename": "正常.mkv", "path": "D:/正常/正常.mkv"},
+            {"filename": "隐藏.mkv", "path": "D:\\屏蔽\\隐藏.mkv"},
+            {"filename": "无名.mkv"},  # 无 path 字段：只走名称规则，保留
+        ]
+        out = blacklist.filter_rows(rows)
+        self.assertEqual([r["filename"] for r in out], ["正常.mkv", "无名.mkv"])
+
+
+class PathBlacklistApiTests(IsolatedDbTestCase):
+    """各展示视图都要按路径屏蔽，但不删库里任何一行。"""
+
+    def setUp(self):
+        super().setUp()
+        self.api = api.Api()
+        self.ok = self.media("正常番 01.mkv", title_guess="正常番",
+                             path="D:/片库/正常番/正常番 01.mkv")
+        self.hidden = self.media("里番 01.mkv", title_guess="里番",
+                                 path="D:/片库/里番/里番 01.mkv")
+        db.set_setting("video_blacklist_paths", "D:\\片库\\里番")
+
+    def test_media_files_and_stats_hide_by_path(self):
+        names = [r["filename"] for r in self.api.get_media_files()]
+        self.assertEqual(names, ["正常番 01.mkv"])
+        self.assertEqual(self.api.get_stats()["files"], 1)
+
+    def test_media_page_total_excludes_hidden_path(self):
+        data = self.api.get_media_files_page({"page": 1, "page_size": 50})
+        self.assertEqual([r["filename"] for r in data["rows"]], ["正常番 01.mkv"])
+        self.assertEqual(data["total"], 1)
+        self.assertEqual(data["total_all"], 1)
+
+    def test_tree_wall_and_continue_hide_by_path(self):
+        self.assertNotIn("里番", str(self.api.get_media_tree({"mode": "series"})))
+        wall = self.api.get_poster_wall({})
+        self.assertNotIn("里番", str(wall["cards"]))
+        # 让被屏蔽的文件也有播放进度
+        db.execute("INSERT INTO watch_progress(file_id, position_ms, completed) VALUES (?, 1000, 0)",
+                   (self.hidden["id"],))
+        self.assertEqual(self.api.get_continue_watching(50), [])
+
+    def test_files_not_deleted_and_switch_restores(self):
+        self.assertEqual(db.scalar("SELECT COUNT(*) FROM media_files"), 2)
+        db.set_setting("blacklist_enabled", 0)
+        names = [r["filename"] for r in self.api.get_media_files()]
+        self.assertCountEqual(names, ["正常番 01.mkv", "里番 01.mkv"])
+
+    def test_save_settings_accepts_path_key(self):
+        saved = self.api.save_settings({"video_blacklist_paths": "E:\\屏蔽\\X"})
+        self.assertEqual(saved["video_blacklist_paths"], "E:\\屏蔽\\X")
+
+
+class PathBlacklistFrontendTests(unittest.TestCase):
+    def test_settings_page_has_path_editor_and_save_key(self):
+        js = APP_JS.read_text(encoding="utf-8")
+        self.assertIn("set-video_blacklist_paths", js)
+        self.assertIn("'video_blacklist_paths'", js)
+        self.assertIn("s.video_blacklist_paths", js)
+
+
 if __name__ == "__main__":
     unittest.main()
