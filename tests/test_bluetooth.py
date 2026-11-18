@@ -71,6 +71,10 @@ class BluetoothProbeTests(IsolatedDbTestCase):
         with mock.patch.object(bt, "_audio", return_value=fake):
             r = bt.probe()
         self.assertEqual(r["status"], bt.NOT_FOUND)
+        # 设备关机后被驱动从列表摘掉也走这条分支，用户此时最需要的是重连入口，
+        # 所以必须给「打开蓝牙设置」按钮，不能只说「检查设备名」。
+        self.assertEqual(r["action"], "open_settings")
+        self.assertIn("未开机", r["message"])
 
     def test_ignores_capture_endpoints(self):
         """capture 端点（{0.0.1.}）即便名字匹配也不能被当成音箱。"""

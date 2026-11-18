@@ -85,8 +85,13 @@ def probe(name: str | None = None) -> dict:
                       if _is_render_endpoint(getattr(d, "id", ""))
                       and needle in _friendly(d).lower()]
         if not candidates:
-            return {"status": NOT_FOUND, "device": "", "action": "",
-                    "message": f"没找到名为「{target}」的播放设备，请检查设置里的设备名"}
+            # 部分蓝牙/声卡驱动在设备关机后会把它从系统端点列表里彻底摘掉，
+            # 此时「没找到」更可能是没开机/没连上，而不是名字写错；所以要给
+            # 「打开蓝牙设置」按钮，文案也不能把锅全甩给配置。
+            # （仍连在列表里但状态非 Active 的情况走上方的 LINK_DOWN。）
+            return {"status": NOT_FOUND, "device": "", "action": "open_settings",
+                    "message": f"系统里没看到「{target}」，可能是设备未开机或蓝牙未连接；"
+                               f"若已连接请核对设置里的设备名"}
 
         candidates.sort(key=lambda d: 0 if _state_name(getattr(d, "state", None)) == "active" else 1)
         dev = candidates[0]
