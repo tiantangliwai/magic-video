@@ -72,11 +72,7 @@ button, input, textarea, select { font-family: inherit; font-size: 13px; }
 .brand-text h1 { margin: 0; font-size: 15px; font-weight: 600; letter-spacing: .2px; }
 .brand-text p { margin: 2px 0 0; font-size: 11px; color: var(--faint); }
 .nav { display: flex; flex-direction: column; gap: 3px; }
-/* 左上角快捷区：小标题 + 两张横排卡片，底部细线与下面的浏览导航分开 */
-.quick-block { padding-bottom: 11px; margin-bottom: 11px; border-bottom: 1px solid var(--border); }
-.quick-title { margin: 0 0 6px; padding: 0 10px; font-size: 10.5px; font-weight: 600;
-  letter-spacing: .5px; color: var(--faint); }
-/* 导航项变多后小屏会顶到底栏：让主导航自己滚，快捷区与底栏常驻可见 */
+/* 侧栏只剩浏览页面：主导航自己滚，底栏常驻可见 */
 #mainNav { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding-right: 2px; }
 .nav-item { display: flex; align-items: center; gap: 10px; width: 100%; padding: 6px 10px; border: 0;
   border-radius: 9px; background: transparent; color: var(--nav-text); text-align: left; cursor: pointer;
@@ -90,18 +86,6 @@ button, input, textarea, select { font-family: inherit; font-size: 13px; }
   stroke-linecap: round; stroke-linejoin: round; }
 .nav-item.active .nav-icon { background: var(--ic-color); color: #fff; }
 .nav-item:hover .nav-icon { transform: translateY(-1px); }
-/* 快捷区两张卡片：图标在上、文字在下，底色比普通导航项重一点，一眼能认出是「动作」 */
-.quick-nav { flex-direction: row; gap: 6px; }
-.quick-nav .quick-btn { flex: 1 1 0; width: 0; min-width: 0; flex-direction: column; justify-content: center;
-  gap: 4px; padding: 8px 4px; font-size: 12px; line-height: 1.2; text-align: center;
-  background: var(--surface-2); border: 1px solid var(--border); font-weight: 600; }
-.quick-nav .quick-btn .nav-icon { width: 26px; height: 26px; }
-.quick-nav .quick-btn .nav-icon svg { width: 16px; height: 16px; }
-.quick-nav .quick-btn:hover { background: var(--primary-soft); border-color: var(--primary-soft);
-  color: var(--primary); }
-.quick-nav .quick-btn:hover .nav-icon { transform: none; }
-.quick-nav .quick-btn.active { background: var(--primary-soft); border-color: var(--primary-soft);
-  color: var(--primary); }
 .ni-home   { --ic-bg: #e6edff; --ic-color: #3b6ef5; }
 .ni-play   { --ic-bg: #ece5ff; --ic-color: #8b5cf6; }
 .ni-clock  { --ic-bg: #fff0e2; --ic-color: #ea8b32; }
@@ -129,7 +113,7 @@ html[data-theme="dark"] .ni-process { --ic-bg: #1d3a44; --ic-color: #7fd2e8; }
 html[data-theme="dark"] .ni-gear   { --ic-bg: #322c40; --ic-color: #b9a8d0; }
 html[data-theme="dark"] .ni-stats  { --ic-bg: #1e3050; --ic-color: #7ab0ff; }
 html[data-theme="dark"] .nav-item.active .nav-icon { color: #14171d; }
-/* 底栏：守护状态 + 设置入口 + 版本号。左右内边距与侧栏一致，设置图标跟上方导航对齐 */
+/* 底栏：守护状态 + 版本号。左右内边距与侧栏一致 */
 .sidebar-foot { margin-top: auto; padding: 10px 12px 0; border-top: 1px solid var(--border); }
 .daemon-state { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; margin-bottom: 8px; }
 .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--green); display: inline-block; flex: none; }
@@ -144,8 +128,24 @@ html[data-theme="dark"] .nav-item.active .nav-icon { color: #14171d; }
    互斥的显式规则让每次切主题都发生选择器命中变化，顶栏当场重绘，不用再点别处。 */
 html[data-theme="light"] .topbar { background: #ffffff; border-bottom-color: #e5e8ef; }
 html[data-theme="dark"]  .topbar { background: #1e222b; border-bottom-color: #333a47; }
+.topbar-title .title-row { display: flex; align-items: center; gap: 7px; position: relative; }
 .topbar-title h2 { margin: 0; font-size: 17px; font-weight: 600; }
 .topbar-title p { margin: 3px 0 0; font-size: 12px; color: var(--muted); }
+/* 标题旁的小箭头：PotPlayer 式「工具入口」下拉。默认收起，点开悬浮在内容之上。 */
+.title-menu-btn { flex: none; width: 22px; height: 22px; padding: 0; display: inline-flex;
+  align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 6px;
+  background: transparent; color: var(--muted); cursor: pointer; transition: background .12s, color .12s; }
+.title-menu-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.1;
+  stroke-linecap: round; stroke-linejoin: round; }
+.title-menu-btn:hover, .title-menu-btn[aria-expanded="true"] {
+  background: var(--surface-2); border-color: var(--border); color: var(--primary); }
+.title-menu { position: absolute; top: calc(100% + 10px); left: -8px; z-index: 60;
+  min-width: 190px; padding: 6px; border: 1px solid var(--border); border-radius: 11px;
+  background: var(--surface); box-shadow: 0 14px 34px rgba(0, 0, 0, .18); }
+.title-menu[hidden] { display: none; }
+.title-menu .menu-item { padding: 8px 10px; font-size: 13px; }
+.title-menu .menu-sep { height: 1px; margin: 5px 8px; background: var(--border); }
+html[data-theme="dark"] .title-menu { box-shadow: 0 14px 34px rgba(0, 0, 0, .55); }
 .topbar-right { display: flex; align-items: center; gap: 8px; min-width: 0; }
 /* 常驻播放控制条：紧凑圆角胶囊，不抢顶栏空间；无播放任务时整条隐藏 */
 .player-bar { display: flex; align-items: center; gap: 2px; flex: none; padding: 3px 5px;

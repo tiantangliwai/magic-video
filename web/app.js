@@ -2268,6 +2268,15 @@ const RENDERERS = {
   import: renderImport, scan: renderScan, settings: renderSettings,
 };
 
+// 标题旁的 PotPlayer 式下拉：只在点小箭头时展开，点菜单项 / 外部 / Esc 收起。
+function closeTitleMenu() {
+  const menu = document.getElementById('titleMenu');
+  if (!menu || menu.hidden) return;
+  menu.hidden = true;
+  const btn = document.getElementById('titleMenuBtn');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+}
+
 async function refresh() {
   if (!apiReady()) return;
   const [title, subtitle] = VIEW_META[currentView];
@@ -3186,14 +3195,26 @@ async function handleAction(action, btn) {
 }
 
 document.addEventListener('click', async (ev) => {
+  const menuBtn = ev.target.closest('[data-action="toggle-title-menu"]');
+  if (menuBtn) {
+    const menu = document.getElementById('titleMenu');
+    if (!menu) return;
+    const open = menu.hidden;
+    menu.hidden = !open;
+    menuBtn.setAttribute('aria-expanded', String(open));
+    return;
+  }
   const nav = ev.target.closest('.nav-item');
   if (nav) {
+    closeTitleMenu();
     // 「设置」只是弹窗：不打断内嵌播放，也不切当前页
     if (nav.dataset.view === 'settings') { switchView('settings'); return; }
     if (playerStageActive) await stopEmbedded(true);   // 离开播放页 -> 播放器还原为独立窗口，播放不中断
     switchView(nav.dataset.view);
     return;
   }
+  // 点到菜单以外的地方就收起下拉；点菜单内部（分隔线等）不动。
+  if (!ev.target.closest('#titleMenu')) closeTitleMenu();
   const sw = ev.target.closest('[data-setting]');
   if (sw) {
     const on = sw.dataset.value !== '1';
@@ -3374,6 +3395,7 @@ document.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return;
   const root = document.getElementById('settingsModal');
   if (root && !root.hidden) { ev.preventDefault(); closeSettingsDialog(); }
+  closeTitleMenu();
 });
 
 window.addEventListener('pywebviewready', init);

@@ -433,21 +433,30 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn(".ni-track", self.css)
         self.assertIn('html[data-theme="dark"] .ni-process', self.css)
 
-    def test_sidebar_quick_actions_hold_import_and_scan(self):
-        """导入列表 / 扫描目录 常驻侧栏顶部快捷区，主导航里不能再出现同一入口。"""
+    def test_title_menu_holds_utility_entries(self):
+        """导入 / 扫描 / 设置收进标题旁下拉，侧栏只留浏览页面。"""
         head = self.html.split('<nav class="nav" id="mainNav">', 1)[0]
-        self.assertIn('<div class="quick-block">', head)
-        quick = head.split('<div class="quick-block">', 1)[1]
-        self.assertIn('data-view="import"', quick)
-        self.assertIn('data-view="scan"', quick)
-        # 快捷按钮文本必须紧贴 </button>，跟主导航保持同一种结构（有测试/脚本依赖这个形状）
-        self.assertIn('>导入列表</button>', quick)
-        self.assertIn('>扫描目录</button>', quick)
+        self.assertNotIn('data-view="import"', head)
+        self.assertNotIn('data-view="scan"', head)
+        sidebar = self.html.split('<aside class="sidebar">', 1)[1].split('</aside>', 1)[0]
+        self.assertNotIn('data-view="settings"', sidebar)
+        menu = self.html.split('<div class="title-menu"', 1)[1].split('<p id="viewSubtitle"', 1)[0]
+        for view in ('import', 'scan', 'settings'):
+            self.assertIn(f'data-view="{view}"', menu)
+        # 按钮文本必须紧贴 </button>，跟导航/脚本依赖的既有形状一致
+        for label in ('导入列表', '扫描目录', '设置'):
+            self.assertIn(f'>{label}</button>', menu)
+        self.assertIn('data-action="toggle-title-menu"', self.html)
         main = self.html.split('<nav class="nav" id="mainNav">', 1)[1].split('</nav>', 1)[0]
-        self.assertNotIn('data-view="import"', main)
-        self.assertNotIn('data-view="scan"', main)
-        self.assertIn(".quick-nav .quick-btn {", self.css)
-        # 导航项变多后要能自己滚动，否则小屏会顶到底栏
+        for view in ('import', 'scan', 'settings'):
+            self.assertNotIn(f'data-view="{view}"', main)
+        self.assertIn(".title-menu { position: absolute;", self.css)
+        self.assertIn(".title-menu[hidden] { display: none; }", self.css)
+        self.assertIn(".title-menu .menu-item {", self.css)
+        for token in ('toggle-title-menu', 'closeTitleMenu()',
+                      "ev.target.closest('#titleMenu')", "aria-expanded"):
+            self.assertIn(token, self.js)
+        # 侧栏项变少后主导航仍要能自己滚，否则矮窗口会顶到底栏
         self.assertIn("#mainNav { flex: 1 1 auto; min-height: 0; overflow-y: auto;", self.css)
 
     def test_nav_meta_renderers_stay_in_sync(self):

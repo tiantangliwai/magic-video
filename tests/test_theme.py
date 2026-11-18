@@ -73,8 +73,11 @@ class ThemeFrontendContractTests(unittest.TestCase):
         html = (ROOT / "web" / "index.html").read_text(encoding="utf-8")
         self.assertIn('data-theme="light"', html)
         self.assertIn('data-action="toggle-theme"', html)
-        # 每个左侧导航项都带一个内联 SVG 图标（新增视图时必须同步加图标，否则这里会红）
-        self.assertEqual(html.count("<svg"), 14)
+        # 每个导航项都带一个内联 SVG 图标（新增视图时必须同步加图标，否则这里会红）：
+        # 侧栏 11 个浏览页 + 标题下拉里 3 个工具入口 + 下拉箭头 1 个 = 15
+        self.assertEqual(html.count("<svg"), 15)
+        sidebar = html.split('<aside class="sidebar">', 1)[1].split('</aside>', 1)[0]
+        self.assertEqual(sidebar.count("<svg"), 11)
         self.assertIn('data-view="posters"', html)
         self.assertIn('data-view="stats"', html)
         self.assertIn('data-view="quicksearch"', html)

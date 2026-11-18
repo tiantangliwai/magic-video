@@ -22,16 +22,6 @@
       <div class="logo"><span></span></div>
       <div class="brand-text"><h1>Magic Video</h1><p>本地视频管理</p></div>
     </div>
-    <!-- 左上角快捷区：「导入列表」「扫描目录」是往库里加东西的两个高频动作，
-         放在 logo 正下方常驻，不用每次在下面一长串导航里翻找。
-         按钮仍带 .nav-item 类，高亮与点击逻辑跟主导航完全一致。 -->
-    <div class="quick-block">
-      <p class="quick-title">快捷操作</p>
-      <div class="nav quick-nav">
-        <button class="nav-item quick-btn" data-view="import"><span class="nav-icon ni-import"><svg viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m8 10.5 4 4 4-4"/><path d="M4 17v3h16v-3"/></svg></span>导入列表</button>
-        <button class="nav-item quick-btn" data-view="scan"><span class="nav-icon ni-folder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>扫描目录</button>
-      </div>
-    </div>
     <nav class="nav" id="mainNav">
       <button class="nav-item active" data-view="home"><span class="nav-icon ni-home"><svg viewBox="0 0 24 24"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/><path d="M9.5 21v-6h5v6"/></svg></span>总览</button>
       <button class="nav-item" data-view="continue"><span class="nav-icon ni-play"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M10 8.3 16.2 12 10 15.7z"/></svg></span>继续观看</button>
@@ -46,16 +36,31 @@
       <button class="nav-item" data-view="processes"><span class="nav-icon ni-process"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/><path d="M7 7h.01M7 17h.01"/><path d="M11 7h6M11 17h6"/></svg></span>后台进程</button>
     </nav>
     <div class="sidebar-foot">
-      <div class="daemon-state" title="后台记录默认随软件启动，可在「设置」里关闭"><span class="dot" id="daemonDot"></span><span id="daemonText">检测后台记录…</span></div>
-      <!-- 设置是低频入口，放在底栏常驻；仍是 .nav-item，点击逻辑与导航一致 -->
-      <button class="nav-item" data-view="settings"><span class="nav-icon ni-gear"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.3M12 19.2v2.3M4.5 4.5l1.6 1.6M17.9 17.9l1.6 1.6M2.5 12h2.3M19.2 12h2.3M4.5 19.5l1.6-1.6M17.9 6.1l1.6-1.6"/></svg></span>设置</button>
+      <div class="daemon-state" title="后台记录默认随软件启动，可在弹出菜单的「设置」里关闭"><span class="dot" id="daemonDot"></span><span id="daemonText">检测后台记录…</span></div>
       <div class="version" id="versionText">v0.1.0</div>
     </div>
   </aside>
 
   <main class="main">
     <header class="topbar">
-      <div class="topbar-title"><h2 id="viewTitle">总览</h2><p id="viewSubtitle">你的播放进度一目了然</p></div>
+      <div class="topbar-title">
+        <!-- PotPlayer 式标题旁下拉：导入 / 扫描 / 设置这类「偶尔用一次」的工具入口
+             收进这里，侧栏只留浏览页面。菜单项复用 .nav-item，点击/高亮逻辑不变。 -->
+        <div class="title-row">
+          <h2 id="viewTitle">总览</h2>
+          <button class="title-menu-btn" id="titleMenuBtn" data-action="toggle-title-menu"
+                  title="更多功能：导入列表 / 扫描目录 / 设置" aria-haspopup="menu" aria-expanded="false">
+            <svg viewBox="0 0 24 24"><path d="m7 10 5 5 5-5"/></svg>
+          </button>
+          <div class="title-menu" id="titleMenu" role="menu" hidden>
+            <button class="nav-item menu-item" data-view="import" role="menuitem"><span class="nav-icon ni-import"><svg viewBox="0 0 24 24"><path d="M12 3v11"/><path d="m8 10.5 4 4 4-4"/><path d="M4 17v3h16v-3"/></svg></span>导入列表</button>
+            <button class="nav-item menu-item" data-view="scan" role="menuitem"><span class="nav-icon ni-folder"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg></span>扫描目录</button>
+            <div class="menu-sep" role="separator"></div>
+            <button class="nav-item menu-item" data-view="settings" role="menuitem"><span class="nav-icon ni-gear"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v2.3M12 19.2v2.3M4.5 4.5l1.6 1.6M17.9 17.9l1.6 1.6M2.5 12h2.3M19.2 12h2.3M4.5 19.5l1.6-1.6M17.9 6.1l1.6-1.6"/></svg></span>设置</button>
+          </div>
+        </div>
+        <p id="viewSubtitle">你的播放进度一目了然</p>
+      </div>
       <div class="topbar-right">
         <!-- 常驻播放控制条：内嵌与独立窗口两种模式都能用。
              之前只在 #playerStage 里放控制条，独立窗口播放时用户完全看不到倍速/上下集。 -->
