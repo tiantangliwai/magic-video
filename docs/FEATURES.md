@@ -1301,3 +1301,53 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `app/api.py`：`_with_bluetooth()` 挂接四个播放方法 + `open_bluetooth_settings()` 接口；`bluetooth_speaker_name` 入设置白名单；
 - `web/app.js` / `web/index.html`：设置输入 + `handleBluetoothTip()` 提示条 + 两个 action 分支；
 - `requirements.txt` + `build_dist.py`：新增依赖与 `--collect-all pycaw/comtypes`（否则打包版探测降级为 error）。
+
+---
+
+## 36. 设置页改成 IDEA 式弹窗（2026-11-18）
+
+### 36-A 场景
+
+设置原来作为主内容区的一页，9 组字段一屏纵向铺开，要滚很久才能找到某一项。用户反馈「数据有些多有些乱」，
+希望像 IDEA 那样「左上角列分类，右边显示对应内容，整合成一个弹窗」。
+
+### 36-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 36-B1 | 侧栏点「设置」打开浮层弹窗（遮罩 + 对话框），不再切主视图；关闭后仍停在原来那页 |
+| 36-B2 | 弹窗左侧列 9 个分类（播放与记录 / 播放控制键位 / 中文名与刮削 / 全盘快搜 / 视频黑名单 / Obsidian 笔记 / 媒体库体检 / 备份与导出 / 数据与外观），右侧只显示当前分类的内容 |
+| 36-B3 | 切分类只切显隐，不重新取数；打开时一次性读全量设置，字段契约 `#set-xxx` + `[data-setting]` 保持不变 |
+| 36-B4 | Esc / 右上角 ✕ / 「取消」/ 点遮罩都能关闭并放弃未保存改动；「保存设置」照旧整批写库并刷新 |
+| 36-B5 | 所有 `goto settings` 的旧入口（剧集墙、媒体库等处的按钮）改成直接开弹窗，不再出现空白设置页 |
+
+### 36-C 实现位置
+
+- `web/index.html`：`.modal-root#settingsModal`（遮罩 + `.modal-dialog` + 左 `#settingsNav` + 右 `#settingsPane` + 底栏取消/保存）；
+- `web/app.js`：`openSettingsDialog()` / `closeSettingsDialog()` / `renderSettingsPanes()` / `switchSettingsTab()`；`switchView('settings')` 直接转开弹窗；
+- `web/style.css`：弹窗与左栏样式，删掉原来的 `.settings-actions` sticky 横条。
+
+---
+
+## 37. 侧栏左上角快捷区（2026-11-18）
+
+### 37-A 场景
+
+侧栏原来 14 个入口平铺，导入列表、扫描目录沉在中间偏下。用户提出「考虑一下什么东西可以放到左上角，
+例如导入列表之类的」。这两个都是「往库里加东西」的高频动作，适合常驻 logo 下方。
+
+### 37-B 验收标准
+
+| # | 验收标准 |
+|---|---|
+| 37-B1 | logo 下方是「快捷操作」小标题 + 两张等宽卡片（导入列表 / 扫描目录），点击行为与普通导航项完全一致（切视图、离开内嵌播放时还原播放器） |
+| 37-B2 | 主导航里不再重复出现这两个入口：同一视图只允许一个导航入口，`nav == VIEW_META == RENDERERS` 且仍是 14 项 |
+| 37-B3 | 快捷卡片复用 `.nav-item` 类，进入对应页面时高亮；深浅两套主题都有底色与描边，文字不裁切 |
+| 37-B4 | 「设置」属低频入口，从主导航下沉到底栏（守护状态下方），点击仍打开设置弹窗 |
+| 37-B5 | 默认 780 高窗口下所有入口可见、不裁切；窗口再矮时主导航自己滚动，快捷区与底栏（设置 / 版本号）常驻 |
+
+### 37-C 实现位置
+
+- `web/index.html`：`.quick-block`（`<p class="quick-title">` + `.nav.quick-nav` 两张 `.nav-item.quick-btn`）；`#mainNav` 只留 11 项；设置按钮移入 `.sidebar-foot`；
+- `web/style.css`：`.quick-*` 卡片样式、`#mainNav { flex: 1 1 auto; overflow-y: auto }`，导航项 padding 收到 6px 让 12 个入口在 780 高内放下；
+- `tests/test_watchlist.py::test_sidebar_quick_actions_hold_import_and_scan`：快捷区存在、主导航不重复、样式契约。

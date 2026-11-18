@@ -433,6 +433,23 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn(".ni-track", self.css)
         self.assertIn('html[data-theme="dark"] .ni-process', self.css)
 
+    def test_sidebar_quick_actions_hold_import_and_scan(self):
+        """导入列表 / 扫描目录 常驻侧栏顶部快捷区，主导航里不能再出现同一入口。"""
+        head = self.html.split('<nav class="nav" id="mainNav">', 1)[0]
+        self.assertIn('<div class="quick-block">', head)
+        quick = head.split('<div class="quick-block">', 1)[1]
+        self.assertIn('data-view="import"', quick)
+        self.assertIn('data-view="scan"', quick)
+        # 快捷按钮文本必须紧贴 </button>，跟主导航保持同一种结构（有测试/脚本依赖这个形状）
+        self.assertIn('>导入列表</button>', quick)
+        self.assertIn('>扫描目录</button>', quick)
+        main = self.html.split('<nav class="nav" id="mainNav">', 1)[1].split('</nav>', 1)[0]
+        self.assertNotIn('data-view="import"', main)
+        self.assertNotIn('data-view="scan"', main)
+        self.assertIn(".quick-nav .quick-btn {", self.css)
+        # 导航项变多后要能自己滚动，否则小屏会顶到底栏
+        self.assertIn("#mainNav { flex: 1 1 auto; min-height: 0; overflow-y: auto;", self.css)
+
     def test_nav_meta_renderers_stay_in_sync(self):
         nav = set(re.findall(r'class="nav-item[^"]*"\s+data-view="([^"]+)"', self.html))
         meta = set(re.findall(r"^\s*([a-z]+):\s*\[",
