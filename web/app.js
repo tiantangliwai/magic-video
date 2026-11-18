@@ -523,7 +523,7 @@ function progressItem(r, actions) {
       <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.file_id}">${follow ? '播放下一集' : '继续观看'}</button>
       <button class="btn btn-sm" data-action="play-start" data-id="${r.file_id}">从头播放</button>
       <button class="btn btn-sm" data-action="mark-watched" data-id="${r.file_id}">标记已看</button>
-      <button class="btn btn-sm" data-action="dismiss-continue" data-id="${r.file_id}"
+      <button class="btn btn-sm" data-action="dismiss-continue" data-id="${follow && r.from_file_id ? r.from_file_id : r.file_id}"
         title="从继续观看移除（软删除：进度与观看记录全部保留，再次播放会自动回来）">移除</button>
     </div>`}</div>
   </div>`;

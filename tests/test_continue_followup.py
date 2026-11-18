@@ -102,6 +102,44 @@ class ContinueFollowupTests(IsolatedDbTestCase):
         self._finish(second, "2026-11-17 20:00:00")
         self.assertEqual(self.api.get_continue_watching(), [])
 
+    def test_unnumbered_extra_is_not_offered_as_next(self):
+        """最后一集后面跟着无集号的 PV/NCOP/剧场版时，不能补成「第 0 集」。"""
+        last = self.media("Show - 02.mkv", title_guess="Show", season_no=2, episode_no=2)["id"]
+        self.media("Show - NCOP.mkv", title_guess="Show", season_no=2)  # 无集号
+        self._finish(last)
+        self.assertEqual(self.api.get_continue_watching(), [])
+        self.assertEqual(self.api.get_continue_row(12)["items"], [])
+
+    def test_completed_next_episode_is_not_offered(self):
+        """下一集本身已看完（移除更新的完成项后会回退到更早的完成集）不再提示。"""
+        first = self.media("Show - 01.mkv", title_guess="Show", season_no=1, episode_no=1)["id"]
+        second = self.media("Show - 02.mkv", title_guess="Show", season_no=1, episode_no=2)["id"]
+        self._finish(first, "2026-11-16 20:00:00")
+        self._finish(second, "2026-11-17 20:00:00")
+        # 第 2 集被移除后，循环回退到第 1 集；它的下一集第 2 集已看完，不能被补
+        db.execute("UPDATE watch_progress SET dismissed_at = ? WHERE file_id = ?", (db.now(), second))
+        self.assertEqual(self.api.get_continue_watching(), [])
+        self.assertEqual(self.api.get_continue_row(12)["items"], [])
+
+    def test_removing_followup_card_dismisses_source_completion(self):
+        """移除「接第 1 集 → 第 2 集」应软删第 1 集完成记录，而不是报找不到。
+
+        伪条目的 file_id 是下一集（还没播过、没有 watch_progress 行），
+        直接 dismiss 它必然失败；必须改用 from_file_id 指向的完成记录。
+        """
+        first = self.media("Show - 01.mkv", title_guess="Show", season_no=1, episode_no=1)["id"]
+        second = self.media("Show - 02.mkv", title_guess="Show", season_no=1, episode_no=2)["id"]
+        self._finish(first)
+        cont = self.api.get_continue_watching()
+        self.assertEqual(len(cont), 1)
+        self.assertEqual(cont[0]["file_id"], second)
+        self.assertEqual(cont[0]["from_file_id"], first)
+        # 旧写法（传下一集）确实会报错——这正是用户看到的现象
+        self.assertFalse(self.api.dismiss_continue_watching(second)["ok"])
+        # 修复后前端传 from_file_id，移除成功且卡片消失
+        self.assertTrue(self.api.dismiss_continue_watching(cont[0]["from_file_id"])["ok"])
+        self.assertEqual(self.api.get_continue_watching(), [])
+
 
 class FollowupFrontendTests(unittest.TestCase):
     def test_cards_render_next_episode_badge(self):
@@ -109,6 +147,11 @@ class FollowupFrontendTests(unittest.TestCase):
         self.assertIn("after_completed", js)
         self.assertIn("播放下一集", js)
         self.assertIn("接第", js)
+
+    def test_dismiss_uses_source_completion_for_followups(self):
+        """伪条目的移除按钮必须传 from_file_id（完成记录），否则会「找不到」。"""
+        js = (ROOT / "web" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("follow && r.from_file_id", js)
 
 
 if __name__ == "__main__":

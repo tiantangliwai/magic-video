@@ -439,7 +439,7 @@ class Api:
             return []
         tree = self.get_media_tree({"mode": "series"})
         locked = set(seen or ())
-        pairs: list[tuple[dict, dict, str]] = []
+        pairs: list[tuple[dict, dict, str, int | None, int]] = []
         for src in rows:
             title = str(src.get("display_title") or src.get("filename") or "").strip()
             if not title or title in locked:
@@ -448,13 +448,24 @@ class Api:
             hit = self._adjacent_in_tree(tree, int(src["file_id"]), "next")
             if not hit.get("ok"):
                 continue
+            ep = hit.get("episode")
+            if ep is None or int(ep) <= 0:
+                # 下一集是无集号的 PV / NCOP / 剧场版：不是可追看的「下一集」。
+                # 否则界面会显示成「接第 12 集 → 第 0 集」。
+                continue
             target = db.row(
-                "SELECT id, filename, path, title_guess, season_no, episode_no, deleted_at "
-                "FROM media_files WHERE id = ?", (hit["file_id"],),
+                "SELECT f.id, f.filename, f.path, f.title_guess, f.season_no, f.episode_no, "
+                "f.deleted_at, COALESCE(p.completed, 0) AS completed "
+                "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
+                "WHERE f.id = ?", (hit["file_id"],),
             )
             if not target or target["deleted_at"]:
                 continue
-            pairs.append((src, target, title))
+            if int(target["completed"] or 0) == 1:
+                # 下一集本身已看完（移除更新的完成项后会回退到更早的完成集）：
+                # 不能再提示「播放下一集」。
+                continue
+            pairs.append((src, target, title, hit.get("from_episode"), ep))
         if not pairs:
             return []
         entries = [
@@ -462,13 +473,15 @@ class Api:
                 "file_id": target["id"], "filename": target["filename"],
                 "path": target["path"], "title_guess": target["title_guess"],
                 "deleted_at": None, "display_title": title,
-                "season_no": target["season_no"], "episode_no": target["episode_no"],
+                "season_no": target["season_no"], "episode_no": episode,
                 "position_ms": 0, "duration_ms": 0, "percent": 0, "completed": 0,
                 "last_played_at": src["last_played_at"],
+                # from_file_id 才是催生这条伪条目的「已完成的那一集」；移除时必须
+                # 软删它（它有 watch_progress 行），而不是下一集（多半还没播过）。
                 "after_completed": True, "from_file_id": int(src["file_id"]),
-                "from_episode": src["episode_no"],
+                "from_episode": src_ep if src_ep is not None else src["episode_no"],
             }
-            for src, target, title in pairs
+            for src, target, title, src_ep, episode in pairs
         ]
         entries = blacklist.filter_rows(entries, keys=("display_title", "filename", "title_guess"))
         return entries[:size]
@@ -2371,11 +2384,18 @@ class Api:
             if index < 0 or index >= len(ids):
                 return {"ok": False, "error": "已经是第一集" if step < 0 else "已经是最后一集"}
             target = ordered[index]
+            src_index = index - step
+            src_item = ordered[src_index] if 0 <= src_index < len(ordered) else None
             return {
                 "ok": True, "file_id": ids[index],
                 "title": target.get("display_title") or target.get("title_guess") or target.get("filename"),
                 "direction": "next" if step > 0 else "prev",
                 "index": index + 1, "total": len(ids),
+                # 树里算出的季/集（可能与 DB 原始 null 不同）。取数侧据此判断
+                # 「下一集」是不是无集号的特典/PV/剧场版，避免显示成「第 0 集」。
+                "season": target.get("tree_season"), "episode": target.get("tree_episode"),
+                "from_season": src_item.get("tree_season") if src_item else None,
+                "from_episode": src_item.get("tree_episode") if src_item else None,
             }
         return {"ok": False, "error": "找不到该文件所属的剧集分组"}
 
