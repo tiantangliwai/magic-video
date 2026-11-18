@@ -30,6 +30,10 @@ _MAX_DELETE_FILES = 300
 # 只影响展示标签，不改 media_files 的任何字段；不引入新表、不需要迁移。
 _WORK_LABELS_KEY = "work_labels_json"
 
+# 打包版可执行文件名（小写）。守护进程识别要跨形态生效：源码版主窗口跑的是
+# python.exe，看不到 --daemon 的 exe 守护，会误报「未启动」。
+_PRODUCT_EXE_NAME = "magic video.exe"
+
 # 剧集墙「查看分集」的搜索词清洗：树分组偶尔把 [1.36G] 这类文件大小当成
 # 作品名，此时退回文件名方括号里的真实中文片名（例：[爱的躯壳].La.Belle...）。
 _CARD_CJK_RE = re.compile(r"[\u4e00-\u9fff]{2,}")
@@ -2464,7 +2468,13 @@ class Api:
         found = []
         try:
             own_exe = str(runtime.executable()).replace("\\", "/").lower()
-            frozen = runtime.is_frozen()
+            own_exe_name = own_exe.rsplit("/", 1)[-1]
+            # 打包版守护的可执行文件名固定是产品 exe，与「自己这份 exe 的完整路径」
+            # 无关：源码版主窗口 + 打包版守护混用时（先用 exe，后来又跑 run.py）路径
+            # 必然不同，只认自己的路径会漏报成「未启动」；用户点「启动」又被守护
+            # 互斥体挡回来，于是永远开不起来。守护写的是同一个数据目录，名字 +
+            # --daemon 对上即可。
+            packaged_names = {own_exe_name, _PRODUCT_EXE_NAME} - {"python.exe", "pythonw.exe"}
             for proc in psutil.process_iter(["cmdline"]):
                 try:
                     parts = proc.info.get("cmdline") or []
@@ -2479,8 +2489,8 @@ class Api:
                         for part in parts[1:]
                     )
                     source_mode = is_python and script_arg
-                    frozen_mode = frozen and "--daemon" in parts and first == own_exe
-                    if source_mode or frozen_mode:
+                    packaged_mode = exe_name in packaged_names and "--daemon" in parts
+                    if source_mode or packaged_mode:
                         found.append(proc)
                 except Exception:
                     continue

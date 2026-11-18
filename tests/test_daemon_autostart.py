@@ -243,6 +243,52 @@ class DaemonAutoStartApiTests(IsolatedDbTestCase):
             self.running_patcher.start()
         self.assertEqual(result, {"running": False})
 
+    def test_source_mode_sees_packaged_daemon(self):
+        """源码版主窗口 + 打包版守护混用时必须显示「运行中」。
+
+        真实场景：先用 D:\\tool\\Magic Video 跑过（留下 Magic Video.exe --daemon），
+        后来又用 run.py 启动。旧逻辑只认「自己的 exe 路径」，源码版是 python.exe，
+        永远看不到那个守护 → 界面报「未启动」；点「启动」拉起的 pythonw daemon.py
+        又被守护互斥体挡回，于是永远开不起来。
+        """
+        daemon = _proc(["D:/tool/Magic Video/Magic Video.exe", "--daemon"], 10860)
+        with mock.patch.object(runtime, "is_frozen", return_value=False), \
+             mock.patch.object(runtime, "executable",
+                               return_value="D:/project/magic video/.venv/Scripts/python.exe"), \
+             mock.patch("app.api.psutil.process_iter", return_value=[daemon]):
+            self.running_patcher.stop()
+            result = self.api.daemon_running()
+            self.running_patcher.start()
+        self.assertEqual(result, {"running": True, "pid": 10860})
+
+    def test_packaged_mode_sees_daemon_from_other_install_path(self):
+        """打包版也要认「另一份安装目录」的同名 exe 守护（共用同一数据目录）。"""
+        daemon = _proc(["D:/tool/Magic Video/Magic Video.exe", "--daemon"], 321)
+        with mock.patch.object(runtime, "is_frozen", return_value=True), \
+             mock.patch.object(runtime, "executable",
+                               return_value="C:/Program Files/Magic Video/Magic Video.exe"), \
+             mock.patch("app.api.psutil.process_iter", return_value=[daemon]):
+            self.running_patcher.stop()
+            result = self.api.daemon_running()
+            self.running_patcher.start()
+        self.assertEqual(result, {"running": True, "pid": 321})
+
+    def test_daemon_running_ignores_other_apps_daemon_flag(self):
+        """别的程序也叫 --daemon 不能被算成本程序守护。"""
+        others = [
+            _proc(["C:/Tool/SomeAgent/agent.exe", "--daemon"], 1),
+            _proc(["C:/Other/Magic Video Helper.exe", "--daemon"], 2),
+            _proc(["C:/Tool/Magic Video.exe"], 3),   # 主窗口，没有 --daemon
+        ]
+        with mock.patch.object(runtime, "is_frozen", return_value=False), \
+             mock.patch.object(runtime, "executable",
+                               return_value="D:/project/magic video/.venv/Scripts/python.exe"), \
+             mock.patch("app.api.psutil.process_iter", return_value=others):
+            self.running_patcher.stop()
+            result = self.api.daemon_running()
+            self.running_patcher.start()
+        self.assertEqual(result, {"running": False})
+
     def test_daemon_running_requires_python_executable(self):
         """别的解释器带 daemon.py 参数也不算守护。"""
         fake = _proc(["C:/Tool/SomeRunner.exe", "D:/project/daemon.py"], 9)
