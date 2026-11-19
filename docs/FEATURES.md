@@ -1566,3 +1566,37 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
 - `tests/test_media_browser.py`：新增 `test_manual_cover_on_folder_named_group_is_detected`
   （复现主场景，改动前返回 0）、`test_renamed_work_manual_cover_is_detected`（改名放大器场景）；
 - 增量 **545/545 全绿**（TDD：先复现失败，修复后转绿，原有 5 个封面测试保持通过）。
+
+---
+
+## 45. 短标题封面不再模糊错配（2026-11-19）
+
+### 45-A 场景
+用户反馈「K s1/s2 匹配到花宵道中的背景图，终、Q、破的背景图也都不对」。根因：
+封面模糊兜底 `resolve_cover_many` 用裸子串 `a in norm or norm in a`，1-2 字短标题
+几乎必然误命中：
+- `K s1/s2` 归一去季后是 `K`，而本机 subject「花宵道中 A Courtesan With Flowered
+  **Skin** AC3 日语中字」含字母 k → `k in '花宵道中…skin…'` 命中，套上花宵道中的图；
+- 「破」命中「天元突破」、「终」命中「终结的炽天使 / 终末的后宫」。
+抓取侧 `_fuzzy_match` 同样的裸子串也会把错图抓进缓存。这是**展示阶段误命中**，
+缓存里各作品自己的图可能是对的，只是被别的作品抢走。
+
+### 45-B 验收标准
+| # | 验收标准 |
+|---|---|
+| 45-B1 | K / Q / 终 / 破 等 1-2 字标题不再被花宵道中 / 天元突破 / 终结的炽天使等糊上封面 |
+| 45-B2 | 短标题若自己有精确同名封面，仍能命中（不是一刀切禁掉）|
+| 45-B3 | 对称保护：subject 侧是短标题时，也不被长候选反向命中 |
+| 45-B4 | 长标题的模糊兜底（含带季标题去季回落）行为不变 |
+| 45-B5 | 抓取侧 `_fuzzy_match` 与展示侧口径一致 |
+
+### 45-C 实现位置
+- `app/covers.py`：
+  - 新增 `_short_title()`：归一化去季后长度 ≤2 判为短标题；
+  - `_fuzzy_match()` 抓取侧：短标题只认精确相等 / 去季 base 相等，禁子串；
+  - `resolve_cover_many()` 展示侧兜底：fuzzy_entries 增加 subject 侧短标志，
+    裸子串包含只在「双方都不是短标题」时允许；精确相等 / base 相等始终允许。
+- `tests/test_covers.py` `ShortTitleFuzzyTests`：6 例（单字母 / 单汉字 / 精确命中 /
+  长标题模糊仍生效 / 抓取侧口径 / 对称保护）；TDD 先复现 K→花宵道中等失败再修。
+- 用真实库 subject 只读复现：修复后 K / 终 / Q / 破 命中为空，花宵道中封面不再被误用。
+- 增量 **140/140 全绿**。

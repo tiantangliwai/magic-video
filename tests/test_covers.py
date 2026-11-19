@@ -232,5 +232,72 @@ class CoverApiContractTests(IsolatedDbTestCase):
         self.assertIn("es_available", cap)
 
 
+class ShortTitleFuzzyTests(IsolatedDbTestCase):
+    """短标题封面不能被模糊兜底糊到别的作品（用户 2026-11-19 反馈）。
+
+    K s1/s2 拿到《花宵道中》的图（"Skin" 含字母 k）、「破」拿到《天元突破》、
+    「终」拿到《终结的炽天使》。根因是兜底用裸子串 ``a in norm or norm in a``，
+    1-2 字标题几乎必然误命中。修复后短标题只允许精确相等。
+    """
+
+    def setUp(self):
+        super().setUp()
+        covers.config.COVER_DIR.mkdir(parents=True, exist_ok=True)
+        # 造几张真实存在的封面文件（_cover_file_ok 要求 >512 字节）
+        self.entries = []
+        for title, fname in (
+            ("花宵道中 A Courtesan With Flowered Skin AC3 日语中字", "huaxiao.jpg"),
+            ("天元突破 Tengen Toppa Gurren Lagann", "tengen.jpg"),
+            ("终结的炽天使", "chisheng.jpg"),
+            ("葬送的芙莉莲", "frieren.jpg"),
+        ):
+            (covers.config.COVER_DIR / fname).write_bytes(b"x" * 1024)
+            self.entries.append((title, fname))
+
+    def test_single_letter_does_not_hit_substring(self):
+        out = covers.resolve_cover_many(
+            [("K", ["K"]), ("Q", ["Q"])], self.entries)
+        # K/Q 没有自己的封面，不能被花宵道中（含 k）等糊上去
+        self.assertNotIn("K", out)
+        self.assertNotIn("Q", out)
+
+    def test_single_cjk_does_not_hit_substring(self):
+        out = covers.resolve_cover_many(
+            [("终", ["终"]), ("破", ["破"])], self.entries)
+        # 「终」不能糊到「终结的炽天使」，「破」不能糊到「天元突破」
+        self.assertNotIn("终", out)
+        self.assertNotIn("破", out)
+
+    def test_exact_short_title_still_hits(self):
+        # 短标题自己的精确封面仍要命中（不是一刀切禁掉所有短标题）
+        entries = self.entries + [("K", "k-own.jpg")]
+        (covers.config.COVER_DIR / "k-own.jpg").write_bytes(b"x" * 1024)
+        out = covers.resolve_cover_many([("K", ["K"])], entries)
+        self.assertEqual(out.get("K"), "k-own.jpg")
+
+    def test_normal_title_fuzzy_still_works(self):
+        # 长标题的模糊兜底不能因修复而失效
+        out = covers.resolve_cover_many(
+            [("葬送的芙莉莲 第二季", ["葬送的芙莉莲 第二季"])], self.entries)
+        # 带季标题走 base 回落命中作品级封面
+        self.assertEqual(out.get("葬送的芙莉莲 第二季"), "frieren.jpg")
+
+    def test_fuzzy_match_rejects_short_substring(self):
+        # 抓取侧同样：短词子串不再认，长词包含仍认
+        self.assertFalse(covers._fuzzy_match("K", "花宵道中 A Courtesan With Flowered Skin"))
+        self.assertFalse(covers._fuzzy_match("破", "天元突破"))
+        self.assertTrue(covers._fuzzy_match("葬送的芙莉莲第二季", "葬送的芙莉莲"))
+
+    def test_short_subject_does_not_hit_long_candidate(self):
+        # 对称：subject 侧是短标题（如「终」）时，不能被长候选「终结的炽天使」反向命中
+        (covers.config.COVER_DIR / "short-zhong.jpg").write_bytes(b"x" * 1024)
+        out = covers.resolve_cover_many(
+            [("终结的炽天使 something", ["终结的炽天使 something"])],
+            [("终", "short-zhong.jpg"), ("葬送的芙莉莲", "frieren.jpg")])
+        # 长候选不该被短 subject「终」通过 norm in a 糊上去；
+        # 但它与「葬送的芙莉莲」也无关，应无命中
+        self.assertNotIn("终结的炽天使 something", out)
+
+
 if __name__ == "__main__":
     unittest.main()

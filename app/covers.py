@@ -211,10 +211,23 @@ def _strip_season(title: str) -> str:
     return re.sub(r"\s*(第[一二三四五六七八九十\d]{1,3}\s*[季期]|[Ss]\d{1,2})\s*$", "", str(title or "")).strip()
 
 
+def _short_title(a: str) -> bool:
+    """归一化后（去季）极短的标题：1-2 字禁止模糊子串，只能精确相等。
+
+    单字母 / 单汉字 / 两字标题做裸子串匹配几乎必然误命中：K 会命中「花宵道中
+    ...Flowered Skin...」里的 k，「破」命中「天元突破」，「终」命中「终结的炽
+    天使」。这类标题只有精确同名才算命中（用户 2026-11-19 反馈）。
+    """
+    return len(_norm_key(_strip_season(a))) <= 2
+
+
 def _fuzzy_match(candidate: str, want: str) -> bool:
     a, b = _norm_key(candidate), _norm_key(want)
     if not a or not b:
         return False
+    # 短标题只认精确相等，不让子串包含糊到别的作品
+    if _short_title(candidate) or _short_title(want):
+        return a == b or _norm_key(_strip_season(a)) == _norm_key(_strip_season(b))
     return a == b or b in a or a in b or _norm_key(_strip_season(a)) == _norm_key(_strip_season(b))
 
 
@@ -1158,16 +1171,29 @@ def resolve_cover_many(pairs: list[tuple[str, list[str]]],
             continue
         norm = _norm_key(rec_title)
         if norm:
-            fuzzy_entries.append((norm, _norm_key(_strip_season(rec_title)), filename))
+            # 记录 subject 侧是否短标题：短标题既不能被别人的子串命中，
+            # 也不能用 norm in a 去糊到别的长作品上（对称保护）。
+            fuzzy_entries.append((norm, _norm_key(_strip_season(rec_title)),
+                                  filename, len(_norm_key(_strip_season(rec_title))) <= 2))
     for key, texts in fuzzy_misses:
         for text in texts:
             a = _norm_key(text)
             if not a:
                 continue
             a_base = _norm_key(_strip_season(a))
-            match = next((fn for norm, norm_base, fn in fuzzy_entries
-                          if a == norm or a in norm or norm in a
-                          or (a_base and a_base == norm_base)), "")
+            a_short = _short_title(text)
+            # 裸子串包含只在「双方都不是短标题」时允许：否则 K 会命中
+            # 「花宵道中…Flowered Skin…」的 k、「破」命中「天元突破」、
+            # 「终」命中「终结的炽天使」（用户 2026-11-19 反馈）。
+            # 精确相等 (a==norm) 与去季 base 相等始终允许，不受影响。
+            match = ""
+            for norm, norm_base, fn, norm_short in fuzzy_entries:
+                if a == norm or (a_base and a_base == norm_base):
+                    match = fn
+                    break
+                if not a_short and not norm_short and (a in norm or norm in a):
+                    match = fn
+                    break
             if match:
                 out[key] = match
                 break
