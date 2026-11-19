@@ -344,6 +344,38 @@ class PosterEditModeFrontendTests(unittest.TestCase):
         self.assertNotIn('id="continueRow"', block)
 
 
+class CoverUriKeyTests(unittest.TestCase):
+    """封面 data URI map 的 key 必须与调用方查询用的标题完全一致（不 trim）。
+
+    需求原话（用户 2026-11-19）：「有两个外出的剧集…给其中一个设定封面，设定会成功
+    但是展示的时候还是没有封面」。根因：真实卡片标题「外出 … CHS 」末尾带空格，
+    coverUris 内部 trim 后当 key，调用方用原始标题查 map 落空——封面明明存好了却
+    显示占位图。修复：key 原样保留，trim 只用于判空。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = APP_JS.read_text(encoding="utf-8")
+
+    def test_cover_uris_keeps_original_title_as_key(self):
+        block = self.js.split("async function coverUris(titles) {", 1)[1].split(
+            "async function invalidateCoverCache", 1)[0]
+        # 构造 list 时 map 不再 trim（只 String 化），filter 用 t.trim() 判空
+        self.assertIn("map(t => String(t == null ? '' : t))", block)
+        self.assertIn("filter(t => t.trim())", block)
+        self.assertNotIn("map(t => String(t || '').trim())", block)
+        # 返回 map 的 key 就是 list 里的原样标题
+        self.assertIn("list.forEach(t => { if (coverUriCache.has(t)) out[t] = coverUriCache.get(t); })",
+                      block)
+
+    def test_refresh_helper_uses_original_title_key(self):
+        block = self.js.split("async function refreshPosterCoverCard(title) {", 1)[1].split(
+            "// ---------- 观影报告", 1)[0]
+        # 取图与写回都用同一个原始 title，不再二次 trim
+        self.assertIn("got[title]", block)
+        self.assertIn("posterState.covers[title]", block)
+
+
 class PosterCoverRefreshTests(unittest.TestCase):
     """设定封面后局部刷新单卡，不整墙重载（用户 2026-11-19 反馈「触发重复加载，很慢」）。
 
@@ -357,9 +389,12 @@ class PosterCoverRefreshTests(unittest.TestCase):
 
     def test_invalidate_cache_supports_single_title(self):
         block = self.js.split("function invalidateCoverCache(title) {", 1)[1].split("\n}", 1)[0]
-        self.assertIn("coverUriCache.delete", block)
+        self.assertIn("coverUriCache.delete(key)", block)
         self.assertIn("coverUriCache.clear", block)  # 无参仍全清，兼容旧调用
         self.assertIn("if (title)", block)
+        # key 必须与 coverUris 一致：原样标题（含首尾空格），不能再 trim
+        self.assertIn("String(title == null ? '' : title)", block)
+        self.assertIn("coverUriCache.delete(key.trim())", block)  # 兼容清理历史遗留
 
     def test_refresh_helper_fetches_only_one_cover(self):
         block = self.js.split("async function refreshPosterCoverCard(title) {", 1)[1].split(

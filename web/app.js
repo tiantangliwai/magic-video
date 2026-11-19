@@ -136,7 +136,11 @@ function setContent(html) { document.getElementById('content').innerHTML = html;
 // 批量取封面 data URI：只请求缓存里没有的标题，返回 {title: dataURI}。
 // 人工设定 / 恢复自动封面后调用 invalidateCoverCache() 让旧图不再命中。
 async function coverUris(titles) {
-  const list = [...new Set((titles || []).map(t => String(t || '').trim()).filter(Boolean))];
+  // 标题必须原样作为缓存 / 返回 key：调用方（剧集墙卡片 data-title、媒体库卡片标题、
+  // 看过列表 key）都用原始标题查 map。若这里 trim，末尾带空格的标题（如真实存在的
+  // 「外出 … CHS 」）trim 后 key 与调用方对不上，封面明明存好了却显示占位图。
+  // trim 只用来判断「是否纯空白」，不改变 key 本身。
+  const list = [...new Set((titles || []).map(t => String(t == null ? '' : t)).filter(t => t.trim()))];
   const need = list.filter(t => !coverUriCache.has(t));
   if (need.length) {
     try {
@@ -152,7 +156,12 @@ async function coverUris(titles) {
 // 精确失效一张封面缓存；不传 title 时全部清空（兼容旧调用）。
 // 设定 / 清除单张封面后只删这一张，其它封面的 data URI 全部保留，避免整墙重传。
 function invalidateCoverCache(title) {
-  if (title) { coverUriCache.delete(String(title).trim()); return; }
+  if (title) {
+    const key = String(title == null ? '' : title);
+    coverUriCache.delete(key);            // key 与 coverUris 一致：原样标题（含首尾空格）
+    coverUriCache.delete(key.trim());     // 兼容清理历史遗留的 trim key
+    return;
+  }
   coverUriCache.clear();
 }
 

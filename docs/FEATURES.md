@@ -1749,3 +1749,28 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
   - 封面弹窗「清除封面」的失效也收窄到当前 title。
 - `tests/test_poster_watched.py`：`PosterCoverRefreshTests` 5 例静态契约。
 - 门禁：`node --check` 通过；增量全绿。
+
+## 50. 封面标题末尾带空格导致设定后仍不显示（2026-11-19）
+
+### 50-A 场景
+用户反馈：「有两个外出的剧集但是我给其中一个设定封面的时候，设定会成功但是展示的时候还是没有封面」。
+
+### 50-B 根因
+- 真库两个「外出 April Snow」剧集，其中一张卡片标题末尾带一个空格：`外出 외출 April Snow … Korean&Mandarin CHS `。
+- 封面已经成功落盘（`subjects` 里 `source=manual`，`cover_local=858b94b6e608aeaeae63.jpg`），后端单张解析 `cover_data_uris([title])` 也能取到 data URI。
+- 但前端 `coverUris(titles)` 内部用 `String(t||'').trim()` 当缓存 / 返回 map 的 key；所有调用方都用**原始标题**查 map：剧集墙 `posterState.covers[c.title]`、媒体库 `coverMap[c.title]`、局部刷新 `got[title]`。
+- 末尾空格被 trim 掉后 key 对不上 → 取图落空 → 显示占位图。设定「成功」只是写盘成功，展示这层因 key 错配而失败。
+
+### 50-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 50-C1 | 标题末尾 / 开头带空格时，设定封面后卡片立即显示新图 |
+| 50-C2 | `coverUris` 返回 map 的 key 与传入标题逐字一致（传入什么 key 返回什么 key） |
+| 50-C3 | trim 只用于「是否纯空白」的判断，不改变 key |
+| 50-C4 | 剧集墙 / 媒体库 / 看过列表三条调用路径的取图行为不变 |
+
+### 50-D 实现位置
+- `web/app.js::coverUris`：`map(t => String(t == null ? '' : t))` 保留原样，`filter(t => t.trim())` 只判空；返回 map 的 key 即 list 原样标题。
+- `web/app.js::invalidateCoverCache(title)`：失效的 key 同样改为原样标题（原先 `.trim()` 删的是去空格 key，带空格标题的旧缓存根本没被清掉，`coverUris` 命中旧图直接返回——次生 bug）；额外删一次 trim key 兼容历史遗留。
+- `tests/test_poster_watched.py::CoverUriKeyTests` 2 例静态契约（key 不 trim / 局部刷新用原始 title）+ `PosterCoverRefreshTests.test_invalidate_cache_supports_single_title` 锁定失效 key 也原样。
+- 真库只读验证：修复前 `got[原始title]` 落空、修复后两张「外出」卡均按原始标题取到 data URI。
