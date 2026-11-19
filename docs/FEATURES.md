@@ -1686,3 +1686,34 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
 - `tests/test_poster_watched.py`：新增 `PosterEditModeFrontendTests`（4 例：默认值 / 切换按钮与 handler /
   编辑按钮受 `editMode` 守卫且返回模板只拼 `editButtons` / 继续观看相关标识全部从剧集墙代码段消失）。
 - 不涉及后端与数据库；增量全绿。
+
+## 48. 纯英文脏目录名「查看分集」不再空白（2026-11-19）
+
+### 48-A 场景
+用户反馈：「XKSub 5Hanayome」和「XKsub 5Hanayome CHS JAP CHS JAP」显示有 12 集，
+点「查看分集」后媒体库无数据。
+
+### 48-B 根因
+- 这些文件没有 `title_cn`，`series_tree` 的分组 label 落到发布目录名，混进
+  `XKSub` / `CHS JAP` 等发布组与语言标记。
+- `_card_search_keyword()` 找不到中文候选时，最后一级直接吐出整串脏 label 当搜索词；
+  但文件里实际存的是 `[XKSub] 5Hanayome 01` / `5Hanayome 01`，
+  `LIKE '%XKSub 5Hanayome%'` 六种字段全落空 → 0 条 → 空白。
+
+### 48-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 48-C1 | 纯英文脏 label 的卡片给出组内文件真实存在、可命中的搜索词（本例 `hanayome`）|
+| 48-C2 | 兜底词滤掉发布组 / 语言 / 压制参数（不会用 `XKSub` 这种命中一大片的词）|
+| 48-C3 | 提取不到可用词时退回原 label，不凭空造词；中文作品行为完全不变 |
+| 48-C4 | 端到端：卡片 `search_keyword` 传给 `get_media_tree` 能查到分集 |
+
+### 48-D 实现位置
+- `app/api.py`：新增 `_card_latin_fallback(group)`——遍历组内文件的
+  `title_guess/title_raw/filename`，抽英文词，滤 `_LATIN_SEARCH_NOISE`（发布组 / CHS/JAP /
+  分辨率 / 编码）与 `textmatch.looks_like_release`，按「覆盖文件数、词长」取最优，
+  且须在至少半数文件出现；`_card_search_keyword` 中文候选全失败后先用它再退回 label。
+- `tests/test_watchlist.py`：`WatchlistDbTests` 新增 4 例（两季兜底词与真实性 / 发布词组不被选中 /
+  噪音退回原 label / 端到端卡片关键词能查到分集）。
+- 真库只读验证：`XKSub 5Hanayome` 与 S2 两卡关键词均为 `hanayome`，LIKE 命中 25；
+  旧行为（整串 label）命中 0。增量全绿。

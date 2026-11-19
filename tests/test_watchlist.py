@@ -265,6 +265,80 @@ class WatchlistDbTests(IsolatedDbTestCase):
         self.assertTrue(wall["cards"])
         self.assertTrue(all("search_keyword" in c for c in wall["cards"]))
 
+    def test_english_release_dirty_label_yields_matchable_keyword(self):
+        """纯英文脏目录名（XKSub 5Hanayome）必须给出能命中文件的分集搜索词。
+
+        用户 2026-11-19 反馈：卡片显示 12 集，点「查看分集」后媒体库空白。
+        根因：label 整串带发布组 + 空格，文件里其实是 `[XKSub] 5Hanayome`，
+        LIKE 全落空。兜底词要从组内文件真实字段提取，并滤掉发布组 / 语言标记。
+        """
+        api = Api()
+        s1 = {
+            "label": "XKSub 5Hanayome",
+            "files": [
+                {"filename": f"[XKSub] 5Hanayome {i:02d} [BDRip 1080p].mkv",
+                 "title_guess": f"5Hanayome {i:02d}",
+                 "title_raw": f"[XKSub] 5Hanayome {i:02d} [BDRip 1080p]"}
+                for i in range(1, 13)
+            ],
+        }
+        s2 = {
+            "label": "XKsub 5Hanayome CHS JAP CHS JAP",
+            "children": [{"files": [
+                {"filename": f"[XKsub][5Hanayome_S2][{i:02d}][CHS_JAP][1080P].mp4",
+                 "title_guess": f"[XKsub][5Hanayome_S2][{i:02d}][CHS_JAP][1080P]",
+                 "title_raw": f"[XKsub][5Hanayome_S2][{i:02d}][CHS_JAP][1080P]"}
+                for i in range(1, 13)
+            ]}],
+        }
+        for group in (s1, s2):
+            kw = api._card_search_keyword(group)
+            self.assertEqual(kw, "hanayome", f"label={group['label']} 兜底词错误")
+            # 关键词必须是组内文件真实存在的子串，LIKE 才能命中
+            blob = " ".join(str(f.get(k) or "")
+                            for f in (group.get("files") or group["children"][0]["files"])
+                            for k in ("title_guess", "title_raw", "filename")).lower()
+            self.assertIn(kw, blob)
+
+    def test_release_group_token_never_used_as_keyword(self):
+        """兜底词不能选 XKSub 这种命中一大片无关作品的发布组名。"""
+        api = Api()
+        group = {"label": "XKSub 5Hanayome", "files": [
+            {"filename": "[XKSub] 5Hanayome 01 [BDRip].mkv",
+             "title_guess": "5Hanayome 01", "title_raw": "[XKSub] 5Hanayome 01 [BDRip]"},
+        ]}
+        self.assertNotEqual(api._card_latin_fallback(group), "xksub")
+        self.assertEqual(api._card_latin_fallback(group), "hanayome")
+
+    def test_latin_fallback_returns_empty_when_no_usable_token(self):
+        """全是噪音 / 空文件时退回原 label，不凭空造词。"""
+        api = Api()
+        self.assertEqual(api._card_latin_fallback({"label": "1.36G", "files": []}), "")
+        self.assertEqual(api._card_latin_fallback({"label": "1.36G", "files": [
+            {"title_guess": "1080p x264", "title_raw": "[CHS_JAP]"},
+        ]}), "")
+        self.assertEqual(api._card_search_keyword({"label": "1.36G"}), "1.36G")
+
+    def test_goto_keyword_from_poster_card_finds_episodes(self):
+        """端到端复现：剧集墙卡片的 search_keyword 必须能在媒体库查到分集。"""
+        # 双层目录：外层中文、内层是发布组标记的英文目录（真库同款结构）
+        leaf = self.tmp / "五等分" / "[XKsub][5Hanayome_S2][01-12][CHS_JAP][1080P]"
+        leaf.mkdir(parents=True, exist_ok=True)
+        for i in range(1, 13):
+            name = f"[XKsub][5Hanayome_S2][{i:02d}][CHS_JAP][1080P].mp4"
+            self.media(name, path=str(leaf / name), title_guess=name,
+                       title_raw=name[:-4])
+        client = Api()
+        cards = [c for c in client.get_poster_wall({})["cards"]
+                 if "Hanayome" in c["title"]]
+        self.assertTrue(cards)
+        for card in cards:
+            tree = client.get_media_tree({"keyword": card["search_keyword"]})
+            total = sum(g.get("file_count", 0) for g in tree["groups"])
+            self.assertGreater(total, 0,
+                               f"卡片 {card['title']!r} 的关键词 {card['search_keyword']!r} 查不到分集")
+
+
     def test_poster_wall_shows_clean_title_for_dirty_group(self):
         """脏分组卡片展示与跳转搜索词都要用推断出的中文片名。"""
         self.media("placeholder.avi")

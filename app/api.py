@@ -48,6 +48,18 @@ _CARD_NOISE_WORDS = (
     "下载", "预览", "未删减", "完整版", "先行", "特典",
 )
 
+# 纯英文作品「查看分集」兜底词的噪音过滤：发布组名、语言/字幕标记、压制参数。
+# 发布目录名常混进这些词（XKSub / CHS JAP / 1080p），拿整串 label 去 LIKE 一个都命中不了。
+_LATIN_SEARCH_NOISE = frozenset({
+    "xksub", "xk", "sub", "subs", "chs", "cht", "ch", "jap", "jpn", "jp",
+    "eng", "gb", "big5", "tv", "rip", "web", "bd", "cd1", "cd2", "waf",
+    "1080p", "720p", "2160p", "480p", "360p", "10bit", "8bit", "hevc", "avc",
+    "bdrip", "webrip", "webdl", "bluray", "hdrip", "dvdrip", "hdtv",
+    "flac", "aac", "aac2", "ac3", "eac3", "dts", "opus", "mp3", "mp4", "mkv", "avi",
+    "x264", "x265", "h264", "h265", "season", "episode", "movie", "part",
+})
+_LATIN_TOKEN_RE = re.compile(r"[A-Za-z][A-Za-z0-9]{2,}")
+
 # 封面 data URI 缓存：key 是缓存文件名，值为 (mtime_ns, size, data_uri)。
 # 切视图时同一批封面不必重复读盘 + base64 编码，这是「切到媒体库卡顿」的主因之一；
 # 文件被人工封面覆盖后 mtime 变化会自动失效，不需要手动清。
@@ -1682,12 +1694,54 @@ class Api:
         return out
 
     @staticmethod
+    def _card_latin_fallback(group: dict) -> str:
+        """纯英文脏分组名的「查看分集」兜底词。
+
+        目录名（label）常混进发布组 / 语言标记（XKSub、CHS JAP），拿整串去
+        LIKE 命中 0 条，用户点「查看分集」看到空白。这里从**组内文件自己的字段**
+        取一个真实存在、有区分度的英文词，且必须在组内多数文件里都出现，
+        保证跳转后能看到分集。发布组 / 压制参数词先滤掉，避免用 XKSub 这种
+        命中一大片无关作品。取不到就返回空串。
+        """
+        files: list[dict] = []
+
+        def walk(node: dict) -> None:
+            files.extend(node.get("files") or [])
+            for child in node.get("children") or []:
+                walk(child)
+
+        walk(group)
+        if not files:
+            return ""
+        count: dict[str, int] = {}
+        for f in files:
+            tokens: set[str] = set()
+            for key in ("title_guess", "title_raw", "filename"):
+                for raw in _LATIN_TOKEN_RE.findall(str(f.get(key) or "")):
+                    low = raw.lower()
+                    if (len(low) < 4 or low in _LATIN_SEARCH_NOISE
+                            or textmatch.looks_like_release(raw)):
+                        continue
+                    tokens.add(low)
+            for token in tokens:
+                count[token] = count.get(token, 0) + 1
+        if not count:
+            return ""
+        # 覆盖文件数优先，其次词更长更具体；至少要在一半以上文件里出现
+        best = max(count.items(), key=lambda kv: (kv[1], len(kv[0])))
+        return best[0] if best[1] >= max(1, len(files) // 2) else ""
+
+    @staticmethod
     def _card_search_keyword(group: dict) -> str:
         """「查看分集」带去媒体库的搜索词。
 
         树分组偶尔会把 ``1.36G`` 这类文件大小当成分组名，直接用卡片标题
         会把媒体库搜成一片空白。依次退回：组内已匹配的中文名 ->
         文件名括号里的中文片名 -> 原始分组名。
+
+        纯英文脏分组名（如 ``XKSub 5Hanayome``）没有中文候选，最后一级不能
+        直接吐出带发布组 / 空格的 label（文件里其实是 ``[XKSub] 5Hanayome``，
+        LIKE 全落空），要先试着从组内文件字段提取一个真实可命中的关键词。
         """
         label = str(group.get("label") or "").strip()
         variants = textmatch.query_variants(label, 1)
@@ -1698,7 +1752,8 @@ class Api:
                 cleaned = Api._card_clean_keyword(candidate)
                 if cleaned:
                     return cleaned
-        return first or label
+        # 全是无中文名 / 英文脏串：优先用文件里真实存在的关键词，再退回 label
+        return Api._card_latin_fallback(group) or first or label
 
     @staticmethod
     def _watched_only_cards(match_state: str = "", keyword: str = "") -> list[dict]:
