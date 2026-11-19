@@ -19,7 +19,7 @@ import psutil
 from . import (
     __version__, autostart, backup, blacklist, bluetooth, config, covers, db, embedded_player,
     everything, file_ops, importer, library_tree, listimport, metadata, obsidian,
-    potplayer, runtime, scanner, textmatch, theme_native, watchlist, websearch,
+    potplayer, runtime, scanner, snapshot, textmatch, theme_native, watchlist, websearch,
 )
 
 
@@ -2586,7 +2586,38 @@ class Api:
             },
             "covers": covers.status(),
             "cover_dir": str(config.COVER_DIR),
+            "snapshot": snapshot.status(),
         }
+
+    def snapshot_status(self) -> dict:
+        """「后台进程」页展示最近一次封面积累的节点与时间（只读）。"""
+        return snapshot.status()
+
+    def export_snapshot(self) -> dict:
+        """用户手动重新积累：写 Obsidian md + 图片，再打带时间戳的 tar.gz 包。
+
+        不在启动时跑、不做定时任务；失败返回 ok=False 让前端提示，不抛异常打断页面。
+        """
+        try:
+            return snapshot.export()
+        except Exception as exc:
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+    def open_snapshot_notes(self) -> dict:
+        """在资源管理器里打开积累目录（只打开目录，不碰用户笔记内容）。"""
+        try:
+            vault, notes_rel = snapshot.read_settings(None, None)
+            root = vault.resolve()
+            path = (root / notes_rel).resolve()
+            path.relative_to(root)               # 防越界：只允许打开 vault 内的目录
+            if not path.is_dir():
+                return {"ok": False, "error": "积累目录还不存在，先点一次「立即重新积累」"}
+            if not hasattr(os, "startfile"):
+                return {"ok": False, "error": "当前系统不支持打开资源管理器"}
+            os.startfile(str(path))              # 不是 shell 命令，无法被拼接注入
+            return {"ok": True, "path": str(path)}
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)}
 
     def get_directories(self) -> list[dict]:
         return scanner.list_directories()

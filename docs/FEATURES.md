@@ -1988,3 +1988,42 @@ obsidian 成为 md 文件，包括图片相关资源都积累一次，再额外�
 - `.gitignore`：排除快照包与积累的图片目录，md / manifest 正常入库。
 - 门禁：`compileall` + `node --check` 通过；`test_docs` 16/16；增量全绿。
 - 本次快照：`封面积累_2026-11-19_235511.tar.gz`（看过 133 部 / 未看 166 部 / 图片 295 张，125 MB）。
+
+## 56. 后台进程页增加「Obsidian 积累快照」卡片（2026-11-19）
+
+### 56-A 场景
+用户要求：「这个功能在后台进程中增加一个卡片，一段时间我可以自行重新积累对应数据」。
+
+上一版的积累只能跑命令行脚本，用户要重新积累得记命令。现在把入口放到每天都会看的
+「后台进程」页，和守护、封面缓存并列，想更新时点一次即可。
+
+### 56-B 设计
+- **手动、不定时**：卡片只展示状态（上次积累时间、看过 / 未看部数、图片数、包数、最近包名、
+  笔记目录），重导出必须点「立即重新积累」；页面轮询每 2 秒只读刷新状态，绝不自动跑导出。
+- **导出期间不阻塞别的卡片**：只禁用本卡片的按钮，守护启停 / 封面抓取照常可用；结果直接写回
+  `#procSnapResult`，同时弹出 toast。
+- **三个接口**：`process_status()` 的 `snapshot` 字段（只读）、`export_snapshot()`（转发导出并把
+  异常转成 `ok=False`）、`open_snapshot_notes()`（资源管理器打开积累目录，校验仍在 vault 内）。
+- **实现移到 `app/snapshot.py`**：原先的 `scripts/export_cover_snapshot.py` 变成薄命令行包装。
+  模块放进 `app/` 才能被 PyInstaller 静态分析到，安装包里的后台进程页也能用这个功能。
+- **真库仍全程只读**：只读 URI + `object.__new__(Api)` 绕过 `Api.__init__()` 的 `init_db()`。
+
+### 56-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 56-C1 | 后台进程页第三张卡片显示上次积累时间、数量、最近包与笔记目录 |
+| 56-C2 | 点「立即重新积累」能重新生成 md + 图片 + 时间戳包，结果就地可见 |
+| 56-C3 | 导出中只禁用本卡片按钮，其它卡片不受影响；失败有明确提示不抛异常 |
+| 56-C4 | 「打开积累目录」只打开 vault 内目录，越界 / 不存在都有提示 |
+| 56-C5 | 轮询只刷新状态，不会在不点按钮时自己导出 |
+| 56-C6 | 导出实现位于 `app/` 下，随安装包分发 |
+
+### 56-D 实现位置
+- `app/snapshot.py`：导出实现（从 `scripts/` 迁入）+ `status()`（只读汇总）。
+- `scripts/export_cover_snapshot.py`：仅保留 CLI 参数转发。
+- `app/api.py`：导入 `snapshot`；`process_status()` 加 `snapshot` 字段；新增
+  `export_snapshot()` / `open_snapshot_notes()`。
+- `web/app.js`：`renderProcesses()` 第三张卡；`renderSnapshotStatus()`；`loadProcessStatus()`
+  接收 `st.snapshot`；`handleAction` 新增 `snapshot-export` / `snapshot-open`。
+- `tests/test_snapshot_card.py`：7 例（API 转发 / 异常吞掉 / 越界拒绝 / 卡片与接线契约）。
+- 门禁：`compileall` + `node --check` + `test_docs` 通过；增量全绿。

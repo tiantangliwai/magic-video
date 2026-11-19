@@ -7,16 +7,9 @@ md 节点，再额外打一个带时间戳的 tar.gz 快照；md 后续可继续
 """
 from __future__ import annotations
 
-import importlib.util
 import unittest
-from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-SCRIPT = ROOT / "scripts" / "export_cover_snapshot.py"
-spec = importlib.util.spec_from_file_location("cover_snapshot_export", SCRIPT)
-exporter = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(exporter)
+from app import snapshot as exporter
 
 
 class SnapshotDataTests(unittest.TestCase):

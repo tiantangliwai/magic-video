@@ -2326,8 +2326,27 @@ async function renderWatchlist() {
 }
 
 // ---- 后台进程管理：守护启停 + 封面缓存进度（抓取入口不再放剧集墙） -------
+// 「Obsidian 积累快照」卡片：只读展示上次积累时间与包，不自动跑导出
+function renderSnapshotStatus(snap) {
+  const state = document.getElementById('procSnapState');
+  if (state) state.textContent = snap.generated_at ? `上次积累 ${snap.generated_at}` : '尚未积累';
+  const counts = document.getElementById('procSnapCounts');
+  if (counts) {
+    const c = snap.counts || {};
+    counts.textContent = Object.keys(c).length
+      ? `看过 ${num(c.watched_works)} 部 · 未看 ${num(c.unseen_works)} 部 · 图片 ${num(c.images)} 张 · 包 ${num(snap.total)} 个`
+      : '—';
+  }
+  const latest = document.getElementById('procSnapLatest');
+  if (latest) latest.textContent = snap.latest
+    ? `${snap.latest.name}（${(num(snap.latest.size) / 1048576).toFixed(1)} MB · ${snap.latest.saved_at}）` : '—';
+  const notes = document.getElementById('procSnapNotes');
+  if (notes) notes.textContent = snap.notes || '—';
+}
+
 function renderProcessStatus() {
-  const d = procState.daemon || {}, c = procState.covers || {};
+  const d = procState.daemon || {}, c = procState.covers || {}, snap = procState.snapshot || {};
+  renderSnapshotStatus(snap);
   const state = document.getElementById('procDaemonState');
   if (state) state.innerHTML = d.running
     ? `<span class="dot"></span> 运行中 · PID ${esc(d.pid || '')}`
@@ -2371,7 +2390,8 @@ function renderProcessStatus() {
 async function loadProcessStatus() {
   try {
     const st = await call('process_status');
-    procState = { daemon: st.daemon || {}, covers: st.covers || {}, cover_dir: st.cover_dir || '' };
+    procState = { daemon: st.daemon || {}, covers: st.covers || {},
+      cover_dir: st.cover_dir || '', snapshot: st.snapshot || {} };
     renderProcessStatus();
   } catch (e) { /* 状态刷新失败保留上一次显示，不打断界面 */ }
 }
@@ -2409,6 +2429,23 @@ async function renderProcesses() {
         </div>
         <p class="hint" style="margin-top:8px">失败原因（最近 8 条，含实际使用的搜索关键词）</p>
         <div class="proc-fail" id="procCoverFails"></div>
+      </div>
+      <div class="card"><div class="section-head"><h3>Obsidian 积累快照</h3>
+          <span class="badge">手动</span></div>
+        <div class="proc-line"><span class="label">上次积累</span><span class="value" id="procSnapState">检测中…</span></div>
+        <div class="proc-line"><span class="label">内容</span><span class="value" id="procSnapCounts">—</span></div>
+        <div class="proc-meta">
+          <div>最近快照：<span class="mono" id="procSnapLatest">—</span></div>
+          <div>笔记目录：<span class="mono" id="procSnapNotes">—</span></div>
+        </div>
+        <div class="btn-row" style="margin-top:10px">
+          <button class="btn btn-sm btn-primary" data-action="snapshot-export" id="procSnapExport">立即重新积累</button>
+          <button class="btn btn-sm" data-action="snapshot-open">打开积累目录</button>
+          <button class="btn btn-sm" data-action="goto" data-view="watched">去看过清单</button>
+        </div>
+        <div class="hint" id="procSnapResult" style="margin-top:8px"></div>
+        <p class="hint" style="margin-top:8px">点一次就重新导出「看过 / 未看过」两份清单 + 全部封面到 Obsidian，
+          并生成带时间戳的 tar.gz 快照。已写的批注会保留，<b>不是定时任务</b>；过一段时间想更新就再点一次。</p>
       </div>
     </div>
   </div>`);
@@ -3215,6 +3252,30 @@ async function handleAction(action, btn) {
       await call('cancel_cover_fetch');
       toast('已请求停止，当前这一张完成后即停');
       await loadProcessStatus();
+      return;
+    }
+    case 'snapshot-export': {
+      // 手动积累：一次可能要复制 295 张图并打 125 MB 包，期间只禁用这个按钮，
+      // 守护启停 / 封面抓取等其它卡片照常可用。
+      const exportBtn = document.getElementById('procSnapExport');
+      const result = document.getElementById('procSnapResult');
+      if (exportBtn) exportBtn.disabled = true;
+      if (result) result.textContent = '正在整理清单、复制图片并打包，请稍候…';
+      try {
+        const r = await call('export_snapshot');
+        if (result) result.textContent = r && r.ok
+          ? `完成：${r.generated_at} · 看过 ${num(r.watched)} 部 / 未看 ${num(r.unseen)} 部 · 图片 ${num(r.images)} 张 · ${r.package || ''}`
+          : `失败：${(r && r.error) || '未知错误'}`;
+        toast(r && r.ok ? '积累完成，笔记与快照包已更新' : ((r && r.error) || '积累失败'), !!(r && r.ok));
+        await loadProcessStatus();
+      } finally {
+        if (exportBtn) exportBtn.disabled = false;
+      }
+      return;
+    }
+    case 'snapshot-open': {
+      const r = await call('open_snapshot_notes');
+      if (!r || !r.ok) toast((r && r.error) || '打开积累目录失败', false);
       return;
     }
     case 'proc-daemon-start': {
