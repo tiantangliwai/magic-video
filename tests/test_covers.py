@@ -298,6 +298,18 @@ class ShortTitleFuzzyTests(IsolatedDbTestCase):
         # 但它与「葬送的芙莉莲」也无关，应无命中
         self.assertNotIn("终结的炽天使 something", out)
 
+    def test_trap_not_hijacked_by_short_trap_subject(self):
+        # 真实反馈（2026-11-19）：追剧列表「陷阱」与「捏造陷阱」图一样。
+        # 根因：捏造陷阱没自己的封面，兜底时裸子串 `陷阱 in 捏造陷阱` 命中短
+        # subject「陷阱」。修复后短 subject 禁止被长候选子串命中，两者应分开。
+        (covers.config.COVER_DIR / "trap.jpg").write_bytes(b"x" * 1024)
+        entries = [("陷阱", "trap.jpg"), ("葬送的芙莉莲", "frieren.jpg")]
+        out = covers.resolve_cover_many(
+            [("陷阱", ["陷阱"]), ("捏造陷阱", ["捏造陷阱"])], entries)
+        # 「陷阱」精确命中自己的图；「捏造陷阱」不该串到它
+        self.assertEqual(out.get("陷阱"), "trap.jpg")
+        self.assertNotIn("捏造陷阱", out)
+
 
 if __name__ == "__main__":
     unittest.main()
