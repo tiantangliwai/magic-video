@@ -139,5 +139,101 @@ class ThemeFrontendWiringTests(unittest.TestCase):
         self.assertTrue((ROOT / "app" / "theme_native.py").exists())
 
 
+class WebviewTitleBarHookTests(unittest.TestCase):
+    """pywebview 会按系统「应用模式」写标题栏，并在系统偏好变化时反复重设。
+
+    用户系统浅色应用模式 + 软件深色时，那次重设会把标题栏刷白。钩子必须让它的
+    判定跟随本软件主题，重设多少次都只会设回深色。
+    """
+
+    def setUp(self):
+        import sys
+        import types
+
+        self.sys = sys
+        fake = types.ModuleType("webview.platforms.winforms")
+
+        class BrowserForm:
+            def is_dark_theme(self):     # 模拟系统浅色应用模式（AppsUseLightTheme=1）
+                return False
+
+        class BrowserView:               # 与 pywebview 6.x 一致：BrowserForm 嵌在 BrowserView 里
+            pass
+
+        BrowserView.BrowserForm = BrowserForm
+        fake.BrowserView = BrowserView
+        self.fake = fake
+        self.p_mod = mock.patch.dict(sys.modules, {"webview.platforms.winforms": fake})
+        self.p_hooked = mock.patch.object(theme_native, "_HOOKED", False)
+        self.p_mod.start()
+        self.p_hooked.start()
+
+    def tearDown(self):
+        self.p_hooked.stop()
+        self.p_mod.stop()
+
+    def test_hook_overrides_system_light_app_mode(self):
+        theme_native.set_theme_state("dark")
+        self.assertTrue(theme_native.hook_webview_title_bar())
+        # 系统是浅色，但 pywebview 重设时必须按软件主题给深色
+        self.assertTrue(self.fake.BrowserView.BrowserForm().is_dark_theme())
+
+    def test_hook_follows_theme_toggle(self):
+        theme_native.set_theme_state("dark")
+        theme_native.hook_webview_title_bar()
+        form = self.fake.BrowserView.BrowserForm()
+        self.assertTrue(form.is_dark_theme())
+        theme_native.set_theme_state("light")
+        self.assertFalse(form.is_dark_theme())
+
+    def test_hook_supports_module_level_browser_form(self):
+        """兼容把 BrowserForm 放模块顶层的版本。"""
+        import types
+
+        class TopLevelForm:
+            def is_dark_theme(self):
+                return False
+
+        fake = types.ModuleType("webview.platforms.winforms")
+        fake.BrowserForm = TopLevelForm
+        with mock.patch.dict(self.sys.modules, {"webview.platforms.winforms": fake}), \
+                mock.patch.object(theme_native, "_HOOKED", False):
+            theme_native.set_theme_state("dark")
+            self.assertTrue(theme_native.hook_webview_title_bar())
+            self.assertTrue(TopLevelForm().is_dark_theme())
+
+    def test_apply_updates_state_for_hook(self):
+        """API 切主题走 apply()，钩子读到的状态必须跟着变，否则切浅色后又被改回深色。"""
+        with mock.patch.object(theme_native, "_dwm", mock.MagicMock()), \
+                mock.patch.object(embedded_player, "find_main_window", return_value=9):
+            theme_native.apply("dark")
+            self.assertTrue(theme_native.current_dark())
+            theme_native.apply("light")
+            self.assertFalse(theme_native.current_dark())
+
+    def test_hook_waits_when_platform_not_loaded(self):
+        """窗口还没建时平台模块未载入：不主动 import，只返回 False 待下次重试。"""
+        saved = self.sys.modules.pop("webview.platforms.winforms", None)
+        try:
+            self.assertFalse(theme_native.hook_webview_title_bar())
+        finally:
+            self.sys.modules["webview.platforms.winforms"] = saved
+
+    def test_hook_is_idempotent(self):
+        theme_native.set_theme_state("dark")
+        self.assertTrue(theme_native.hook_webview_title_bar())
+        self.assertTrue(theme_native.hook_webview_title_bar())
+
+
+class TitlebarHookWiringTests(unittest.TestCase):
+    """建窗流程必须①先置位主题 ②装钩子 ③显示后再同步一次。"""
+
+    def test_create_window_primes_theme_state(self):
+        src = (ROOT / "app" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("theme_native.set_theme_state", src)
+        self.assertIn("hook_webview_title_bar", src)
+        self.assertIn("events.shown", src)
+
+
 if __name__ == "__main__":
     unittest.main()

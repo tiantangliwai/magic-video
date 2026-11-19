@@ -1774,3 +1774,45 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
 - `web/app.js::invalidateCoverCache(title)`：失效的 key 同样改为原样标题（原先 `.trim()` 删的是去空格 key，带空格标题的旧缓存根本没被清掉，`coverUris` 命中旧图直接返回——次生 bug）；额外删一次 trim key 兼容历史遗留。
 - `tests/test_poster_watched.py::CoverUriKeyTests` 2 例静态契约（key 不 trim / 局部刷新用原始 title）+ `PosterCoverRefreshTests.test_invalidate_cache_supports_single_title` 锁定失效 key 也原样。
 - 真库只读验证：修复前 `got[原始title]` 落空、修复后两张「外出」卡均按原始标题取到 data URI。
+
+## 51. 深色模式下原生标题栏偶发变白（2026-11-19）
+
+### 51-A 场景
+用户反馈：「表头经常还是会变白为什么？我明明一直用的深色模式」——同一台机器上
+软件主题一直是深色，但原生标题栏过一阵就变回白色。
+
+### 51-B 根因
+- 本机 `AppsUseLightTheme = 1`（Windows「应用模式」是**浅色**，只有任务栏是深色），
+  软件主题是深色 → 两者不一致。
+- pywebview 自己在 `BrowserView.BrowserForm.__init__` 里调用
+  `update_title_bar_theme()`，按注册表 `AppsUseLightTheme` 写
+  `DWMWA_USE_IMMERSIVE_DARK_MODE`（系统浅色 → 写 0 = 白），并订阅
+  `SystemEvents.UserPreferenceChanged`，**任何**系统偏好变化（音频设备、显示设置、
+  蓝牙连接、壁纸……）都会再写一次 0。
+- 我们只在启动 `before_show` 和用户切主题时写深色，被它这一次次重设覆盖 →
+  表现就是「经常变白」，且不重启不会自己回来。
+- 本机是 Windows 10 19045，`DWMWA_CAPTION_COLOR(35)` 等颜色属性不支持，
+  无法靠固定标题栏颜色兜底，只能靠 `DWMWA_USE_IMMERSIVE_DARK_MODE`。
+
+### 51-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 51-C1 | 系统浅色应用模式 + 软件深色时，标题栏启动即为深色，且不闪白 |
+| 51-C2 | 任意系统偏好变化触发 pywebview 重设后，标题栏仍是深色 |
+| 51-C3 | 软件内切到浅色后，pywebview 重设也必须是浅色（不能反向锁死深色）|
+| 51-C4 | 平台模块未载入 / 结构变化 / DWM 不可用时静默降级，不阻断窗口 |
+| 51-C5 | 不新增定时器与常驻线程 |
+
+### 51-D 实现位置
+- `app/theme_native.py`：
+  - `set_theme_state()` / `current_dark()`：进程内记录**软件**主题（与系统无关）；
+  - `hook_webview_title_bar()`：把 `BrowserView.BrowserForm.is_dark_theme`
+    换成读 `current_dark()`（pywebview 6.x 是嵌套类，同时兼容模块顶层写法）；
+    只在平台模块已载入时打补丁，不主动 import；幂等；
+  - `apply()` 开头先 `set_theme_state()`，API 切主题后钩子立即跟随。
+- `app/main.py`：建窗前 `set_theme_state(settings.theme)`（让 `BrowserForm.__init__`
+  那一次就写深色）；`before_show` 里先装钩子再 `apply`；新增 `events.shown`
+  再同步一次（廉价保险，无定时器）。
+- `tests/test_theme_native.py`：`WebviewTitleBarHookTests` 5 例 + `TitlebarHookWiringTests` 1 例。
+- 真机验证：对真实 `webview.platforms.winforms.BrowserView.BrowserForm` 打补丁后，
+  `is_dark_theme()` 随软件主题返回（系统仍是浅色应用模式）。

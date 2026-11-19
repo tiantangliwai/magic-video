@@ -10,6 +10,14 @@
   主窗口 HWND 用 ``embedded_player.find_main_window()`` 按 PID + 标题枚举。
 - 任何一步失败都静默降级：主题切换、播放记录、界面都不受影响。
 - 没有定时器、没有常驻线程，只在「启动同步」和「用户切换主题」时调用一次。
+
+⚠️ pywebview 自己也会写标题栏：``BrowserForm.__init__`` 调用
+``update_title_bar_theme()`` 按注册表 ``AppsUseLightTheme``（Windows「应用模式」）
+设 ``DWMWA_USE_IMMERSIVE_DARK_MODE``，并订阅 ``SystemEvents.UserPreferenceChanged``
+在**任何**系统偏好变化（音频设备、显示设置、蓝牙连接……）时再设一次。
+用户系统是浅色应用模式 + 软件用深色时，这一次重设会把标题栏刷回白色——这就是
+「表头经常变白」。``hook_webview_title_bar()`` 把它的 ``is_dark_theme`` 换成读
+本软件主题，让它无论重设多少次都只会设回深色。
 """
 from __future__ import annotations
 
@@ -31,6 +39,11 @@ _DARK_CAPTION = 0x002B221E   # --surface  #1e222b
 _DARK_BORDER = 0x00473A33    # --border   #333a47
 _DARK_TEXT = 0x00F2EBE8     # --text     #e8ebf2
 _COLOR_ATTRS = (DWMWA_CAPTION_COLOR, DWMWA_BORDER_COLOR, DWMWA_TEXT_COLOR)
+
+# 当前软件主题（不是系统主题）。pywebview 的 is_dark_theme 钩子读它，
+# 保证「系统应用模式=浅色 + 软件=深色」时标题栏不会被系统偏好事件刷白。
+_DARK = False
+_HOOKED = False
 
 try:  # 非 Windows 平台也能安全导入，单测可直接跑纯逻辑分支
     _dwm = ctypes.windll.dwmapi
@@ -57,6 +70,59 @@ def _set(hwnd: int, attr: int, value: int) -> bool:
         return False
 
 
+def set_theme_state(theme: str | None) -> bool:
+    """记下本软件当前主题，供 pywebview 的标题栏钩子读取；返回是否深色。
+
+    在 ``create_window`` 建窗**之前**先调一次：pywebview 的 ``BrowserForm.__init__``
+    会立刻按系统主题写一次标题栏，早置位能避免那一帧走错。
+    """
+    global _DARK
+    _DARK = str(theme or "").strip().lower() == "dark"
+    return _DARK
+
+
+def current_dark() -> bool:
+    """本软件当前是否深色主题（与系统「应用模式」无关）。"""
+    return _DARK
+
+
+def hook_webview_title_bar() -> bool:
+    """让 pywebview 的标题栏主题判定跟随本软件，而不是 Windows 应用模式。
+
+    pywebview 用 ``is_dark_theme()`` 读注册表 ``AppsUseLightTheme``，并且只要
+    系统偏好有任何变化就会重设一次标题栏。系统为浅色、软件为深色时，这一次重设
+    会把标题栏刷成白色（用户感知「表头经常变白」）。这里把它换成读
+    ``current_dark()``，重设多少次都只会设回本软件的主题色。
+
+    只在 pywebview 平台模块已载入时打补丁（``before_show`` 时必然已载入），
+    不主动 import——避免在窗口创建前引入 WinForms 程序集。重复调用无副作用。
+    """
+    global _HOOKED
+    if _HOOKED:
+        return True
+    import sys
+    module = sys.modules.get("webview.platforms.winforms")
+    if module is None:
+        return False
+    # pywebview 6.x 把 BrowserForm 嵌套在 BrowserView 里（BrowserView.BrowserForm）；
+    # 旧版/未来版可能提到模块顶层，两种都兼容。
+    form = getattr(module, "BrowserForm", None)
+    if form is None:
+        form = getattr(getattr(module, "BrowserView", None), "BrowserForm", None)
+    if form is None:
+        return False
+
+    def is_dark_theme(self) -> bool:   # noqa: ANN001 - 替代 pywebview 的同名方法
+        return _DARK
+
+    try:
+        form.is_dark_theme = is_dark_theme
+    except Exception:
+        return False
+    _HOOKED = True
+    return True
+
+
 def _find_window(retries: int = 5, require_visible: bool = True) -> int:
     """pywebviewready 触发时窗口可能还没显示；单次调用内短重试，不建常驻线程。"""
     from . import embedded_player  # 延迟导入，避免模块初始化顺序耦合
@@ -75,7 +141,7 @@ def apply(theme: str, *, require_visible: bool = True, retries: int = 5) -> dict
     ``require_visible=False`` 供窗口 ``before_show`` 时调用（HWND 已建、尚未显示），
     这样标题栏在窗口第一次绘制前就是主题色，不会先闪一条白。
     """
-    dark = str(theme or "").strip().lower() == "dark"
+    dark = set_theme_state(theme)
     if sys.platform != "win32" or _dwm is None:
         return {"ok": False, "error": "当前系统不支持 DWM 标题栏主题"}
 

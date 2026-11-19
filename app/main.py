@@ -33,6 +33,9 @@ def sync_native_theme_before_show(settings: dict | None = None) -> None:
     try:
         raw = str((settings or {}).get("theme", config.DEFAULTS["theme"]) or "light").strip().lower()
         theme = raw if raw in ("light", "dark") else "light"
+        # pywebview 的 BrowserForm 按系统「应用模式」写标题栏，并在系统偏好变化时
+        # 反复重设；先接管它的判定，否则浅色系统 + 深色软件会被它刷成白条。
+        theme_native.hook_webview_title_bar()
         theme_native.apply(theme, require_visible=False, retries=2)
     except Exception:
         pass
@@ -47,6 +50,8 @@ def create_window(debug: bool = False) -> None:
     # Api() 内部已完成 init_db() + 内置词典装载，这里不再重复执行（启动提速）。
     api = Api()
     settings = db.all_settings()
+    # 先置位软件主题：pywebview 建窗时会立刻按它判定标题栏深浅，避免第一帧走系统主题。
+    theme_native.set_theme_state(settings.get("theme"))
 
     window = webview.create_window(
         "Magic Video",
@@ -64,6 +69,9 @@ def create_window(debug: bool = False) -> None:
     # 窗口第一次绘制前就把原生标题栏定成主题色（before_show 是同步事件，
     # 在 Form.Show() 之前执行）。页面里的 sync_native_theme 仍保留，作为二次兜底。
     window.events.before_show += lambda: sync_native_theme_before_show(settings)
+    # 窗口真正显示后再同步一次：pywebview 在 Shown 前后也可能触发系统偏好回调，
+    # 这一发是廉价保险（只写 4 个 DWM 属性，不建线程、不设定时器）。
+    window.events.shown += lambda: sync_native_theme_before_show(settings)
     # 后台记录默认自动启动（设置页可关）。放在窗口创建后、WebView 启动前，
     # 即使前端脚本加载失败也能生效；失败只降级，绝不阻断窗口。
     try:
