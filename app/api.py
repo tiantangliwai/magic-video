@@ -195,7 +195,8 @@ def _db_signature() -> tuple:
     return (str(config.DB_PATH), db.write_count()) + _data_fingerprint()
 
 
-def _covered_ids_from_rows(rows: list[dict]) -> set[int]:
+def _covered_ids_from_rows(rows: list[dict], labels: dict | None = None,
+                           directories: list[dict] | None = None) -> set[int]:
     """判断这批文件行里哪些「有封面」，返回有封面的 file id 集合。
 
     封面是作品级的，是否有图必须走 :func:`covers.resolve_cover_many`（本机缓存 +
@@ -203,29 +204,93 @@ def _covered_ids_from_rows(rows: list[dict]) -> set[int]:
     「有封面」筛出来的作品，卡片上一定真能看到图。SQL 表达不了这套判断，故在
     Python 侧解析后把 id 集合回填成 ``f.id IN(...)`` 条件。
 
-    先按标题去重再批量解析：同一部作品的多集标题相同，避免重复跑模糊兜底。
+    关键：封面是用户照着**剧集墙卡片标题**（即 series 分组 label）设的，分组
+    label 在无中文名时来自文件夹名、改名后来自 work_labels，未必出现在任何
+    文件行的 title_cn / title_guess / filename 里。所以除了文件行自身的标题，
+    还要构建一次 series 树，把每个分组的 label 与季卡片标题注入成组内文件的
+    候选标题（与 get_poster_wall 的 pending 候选同源），否则「无中文名但按
+    文件夹名设过封面」的作品会被误判成没封面（用户 2026-11-19 反馈）。
     """
     if not rows:
         return set()
     file_cands: dict[int, list[str]] = {}
     all_titles: set[str] = set()
+
+    def add(fid: int, value: str) -> None:
+        value = str(value or "").strip()
+        if not value:
+            return
+        cands = file_cands.setdefault(fid, [])
+        if value not in cands:
+            cands.append(value)
+            all_titles.add(value)
+
     for r in rows:
-        cands: list[str] = []
-        for key in ("display_title", "title_cn", "title_guess", "title_raw", "filename"):
-            value = str(r.get(key) or "").strip()
-            if value and value not in cands:
-                cands.append(value)
-                all_titles.add(value)
         try:
-            file_cands[int(r["id"])] = cands
+            fid = int(r["id"])
         except (TypeError, ValueError, KeyError):
             continue
+        for key in ("display_title", "title_cn", "title_guess", "title_raw", "filename"):
+            add(fid, r.get(key))
+
+    # 补上「分组 label」这一族候选：与剧集墙卡片设封面时用的 key 对齐。
+    # build_tree 需要 path / season_no / episode_no 等字段；缺失时退化为按标题
+    # 分组，仍不影响已有候选，只是拿不到文件夹名 label——那种情况本就没有可注入
+    # 的分组名，保持原有判断即可。
+    try:
+        tree = library_tree.build_tree(rows, "series", directories, labels)
+    except (KeyError, TypeError, ValueError):
+        tree = {"groups": []}
+    for group in tree.get("groups") or []:
+        glabel = str(group.get("label") or "").strip()
+        group_titles = [glabel]
+        # 季卡片标题「作品 · 第 N 季」也是设封面时可用的 key（按季单独设图）
+        for child in group.get("children") or []:
+            season_label = str(child.get("label") or "").strip()
+            if glabel and season_label:
+                group_titles.append(f"{glabel} · {season_label}")
+        member_ids = _series_member_ids_from_group(group)
+        for fid in member_ids:
+            for title in group_titles:
+                add(fid, title)
+
     if not all_titles:
         return set()
     resolved = covers.resolve_cover_many([(title, [title]) for title in all_titles])
     covered_titles = {title for title, name in resolved.items() if name}
     return {fid for fid, cands in file_cands.items()
             if any(c in covered_titles for c in cands)}
+
+
+def _series_member_ids_from_group(group: dict) -> list[int]:
+    """从一个已构建的 series group 收集组内全部 file id（含合并掉的多版本）。
+
+    与 Api._series_member_ids 的区别：那个按 gid 反查全库，这里直接从传入的
+    分组节点取，供封面筛选在「已按其它条件筛过的候选行」上就地分组使用。
+    """
+    ids: list[int] = []
+    seen: set[int] = set()
+
+    def walk(node: dict) -> None:
+        for item in node.get("files") or []:
+            fid = item.get("id")
+            if fid is not None:
+                fid = int(fid)
+                if fid not in seen:
+                    seen.add(fid)
+                    ids.append(fid)
+            for ver in item.get("versions") or []:
+                vid = ver.get("file_id")
+                if vid is not None:
+                    vid = int(vid)
+                    if vid not in seen:
+                        seen.add(vid)
+                        ids.append(vid)
+        for child in node.get("children") or []:
+            walk(child)
+
+    walk(group)
+    return ids
 
 
 def _cache_get(key: tuple):
@@ -1120,13 +1185,15 @@ class Api:
         # f.id IN / NOT IN。因此分页 total 与卡片显示的是同一套判断，不会错位。
         if match_state in ("with_cover", "no_cover"):
             candidates = db.rows(
-                "SELECT f.id, f.title_cn, f.title_guess, f.title_raw, f.filename, "
+                "SELECT f.id, f.dir_id, f.path, f.title_cn, f.title_guess, f.title_raw, "
+                "f.filename, f.season_no, f.episode_no, "
                 f"{_display_title_expr()} AS display_title "
                 "FROM media_files f LEFT JOIN watch_progress p ON p.file_id = f.id "
                 "WHERE " + " AND ".join(conditions),
                 tuple(params),
             )
-            covered = _covered_ids_from_rows(candidates)
+            covered = _covered_ids_from_rows(
+                candidates, Api._work_labels(), Api._directory_options())
             if covered:
                 marks = ",".join("?" for _ in covered)
                 op = "IN" if match_state == "with_cover" else "NOT IN"

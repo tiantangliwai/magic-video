@@ -1512,3 +1512,57 @@ es.exe 存在、Everything 主程序在跑、es 通道**搜 `mp4` 能返回真�
 - `tests/test_media_tree.py`：`test_rename_work_persists_and_can_be_reset`（改为验证新名入库 / reset 清空）、
   `test_renamed_custom_title_is_searchable`、`test_rename_writes_all_seasons_and_versions`；
 - 增量 **380/380 全绿**（改了 schema，增量工具自动扩展到相关模块，未额外加跑全量）。
+
+---
+
+## 43. 观看日历随窗口铺满（2026-11-19）
+
+### 43-A 场景
+用户反馈「观影报告的观看日历在拉长后只占了左边一部分」。根因：`.cal-grid` 上有
+`max-width: 520px`，窗口横向拉宽后网格仍被钉死在 520px，右侧大片留白。
+
+### 43-B 验收标准
+| # | 验收标准 |
+|---|---|
+| 43-B1 | 窗口拉宽后日历网格铺满卡片整行宽度，不再停在 520px |
+| 43-B2 | 格子宽度随网格列拉伸（7 等分），不再被 `aspect-ratio:1` 锁成小方块稀疏散开 |
+| 43-B3 | 高度固定不随宽度增长，宽屏下不会变成巨型方块 |
+| 43-B4 | 窄窗口下 `minmax(0,1fr)` 防溢出，表头 / 按钮行可折行 |
+
+### 43-C 实现位置
+- `web/style.css`：`.cal-grid` 去掉 `max-width:520px` 改 `width:100%`，
+  `repeat(7, minmax(0,1fr))`；`.cal-cell` 去掉 `aspect-ratio:1` 改 `min-height:66px`；
+  `.cal-month` 加 `flex-wrap:wrap`。无头浏览器实测：1400px 视口下网格宽 1306px、格子 182×66 铺满整行；
+- `tests/test_stats.py` `CalendarLayoutContractTests`：3 个静态契约守护上述声明防回归。
+
+---
+
+## 44. 手动封面在「有/没封面」筛选里不再漏判（2026-11-19）
+
+### 44-A 场景
+用户反馈「很多我手动设置封面的剧集，也会过滤为没封面」。根因：封面是用户照着
+**剧集墙卡片标题**（series 分组 label）设的，按该 label 存入 subjects；但媒体库
+「有封面 / 没封面」筛选的候选标题只有文件行自身的 `display_title/title_cn/
+title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文名、label 来自
+文件夹名（或跨语言文件名）时，分组 label 不在任何文件行字段里，卡片能显示封面、
+筛选却判成没封面。已有中文名的作品能命中，所以表现为「很多」而非「全部」。
+
+### 44-B 验收标准
+| # | 验收标准 |
+|---|---|
+| 44-B1 | 按文件夹名分组、无中文名的作品，手动设封面后「有封面」能筛到、「没封面」不含 |
+| 44-B2 | 改名后的作品，手动设的封面仍能被筛选命中 |
+| 44-B3 | 按季单独设的封面（季卡片标题「作品 · 第 N 季」）也能被筛选识别 |
+| 44-B4 | 多版本 / 多季组内全部文件 id 都纳入判断；候选查询失败时静默降级，不阻断浏览 |
+| 44-B5 | 判断口径与剧集墙卡片完全一致：卡片能看到图的，筛选就判「有封面」 |
+
+### 44-C 实现位置
+- `app/api.py`：
+  - `_covered_ids_from_rows()` 增补 `labels/directories` 参数，除文件行标题外再构建一次
+    series 分组，把每个 group 的 label 与季卡片标题注入成组内文件的额外候选标题；
+  - 新增 `_series_member_ids_from_group()` 就地收集分组全部 file id（含 `versions[].file_id`
+    的多版本），区别于按 gid 反查全库的 `_series_member_ids()`；
+  - `_media_filters()` 封面筛选的候选查询补 `path/season_no/episode_no/dir_id` 字段供 build_tree。
+- `tests/test_media_browser.py`：新增 `test_manual_cover_on_folder_named_group_is_detected`
+  （复现主场景，改动前返回 0）、`test_renamed_work_manual_cover_is_detected`（改名放大器场景）；
+- 增量 **545/545 全绿**（TDD：先复现失败，修复后转绿，原有 5 个封面测试保持通过）。

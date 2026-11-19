@@ -457,11 +457,15 @@ button[disabled] { opacity: .45; cursor: not-allowed; }
   border-radius: 4px 4px 0 0; transition: height .2s; }
 .stat-bar-label { font-size: 9px; color: var(--faint); }
 
-/* 观看日历：7 列格，颜色深浅表示当天时长 */
-.cal-month { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
-.cal-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 5px; max-width: 520px; }
+/* 观看日历：7 列格铺满卡片宽度，颜色深浅表示当天时长。
+   窗口拉宽后日历要跟着铺满，不再被旧的 520px 上限钉在左侧；
+   格子用固定高度、宽度随网格列拉伸（minmax(0,1fr) 七等分），
+   这样宽屏下整行铺满，而格子本身不会被 aspect-ratio 锁成小方块
+   或被撑成巨型方块。 */
+.cal-month { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; flex-wrap: wrap; }
+.cal-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 5px; width: 100%; }
 .cal-head { font-size: 11px; color: var(--muted); text-align: center; padding-bottom: 2px; }
-.cal-cell { position: relative; aspect-ratio: 1; border-radius: 7px; background: var(--surface-2);
+.cal-cell { position: relative; min-height: 66px; border-radius: 7px; background: var(--surface-2);
   border: 1px solid var(--border); display: flex; flex-direction: column; align-items: center;
   justify-content: center; font-size: 11px; color: var(--muted); }
 .cal-cell.is-empty { background: transparent; border-color: transparent; }

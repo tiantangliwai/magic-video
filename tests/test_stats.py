@@ -6,10 +6,13 @@ from __future__ import annotations
 
 import unittest
 from datetime import datetime, timedelta
+from pathlib import Path
 
 from app import db
 from app.api import Api
 from tests.base import IsolatedDbTestCase
+
+ROOT = Path(__file__).resolve().parent.parent
 
 
 def _day(offset: int) -> str:
@@ -273,6 +276,36 @@ class CalendarTests(IsolatedDbTestCase):
         data = self.api.get_watch_calendar("1999-01")
         self.assertEqual(data["days"], [])
         self.assertEqual(data["total_minutes"], 0.0)
+
+
+class CalendarLayoutContractTests(unittest.TestCase):
+    """观看日历布局契约：窗口拉宽后日历要铺满整行，不再只占左侧 520px。
+
+    用户 2026-11-19 反馈「观影报告的观看日历拉长后只占左边一部分」。
+    根因是 .cal-grid 的 max-width:520px 把网格钉死在左侧。纯 CSS 静态契约，
+    守护这几个关键声明，防止回归。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.css = (ROOT / "web" / "style.css").read_text(encoding="utf-8")
+
+    def test_grid_fills_full_width_without_old_cap(self):
+        # 网格改为 width:100% 铺满，旧的 520px 上限必须移除
+        self.assertIn(".cal-grid { display: grid;", self.css)
+        self.assertIn("width: 100%; }", self.css)
+        self.assertNotIn("max-width: 520px", self.css)
+
+    def test_grid_uses_minmax_track(self):
+        # minmax(0,1fr) 防止格子内容把列撑破，宽屏下七等分铺满
+        self.assertIn("grid-template-columns: repeat(7, minmax(0, 1fr))", self.css)
+
+    def test_cell_uses_fixed_height_and_no_aspect_ratio(self):
+        # 格子用固定最小高度、宽度随列拉伸；不能再有 aspect-ratio:1，
+        # 否则宽屏下格子被锁成小方块稀疏排开（探测实测 88×88 散在 1306px 里）
+        self.assertIn(".cal-cell { position: relative; min-height: 66px;", self.css)
+        grid_block = self.css.split(".cal-cell {", 1)[1].split("}", 1)[0]
+        self.assertNotIn("aspect-ratio", grid_block)
 
 
 if __name__ == "__main__":

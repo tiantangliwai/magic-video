@@ -260,6 +260,56 @@ class CoverFilterTests(IsolatedDbTestCase):
         wall2 = self.api.get_poster_wall({"match_state": "no_cover", "limit": 50})
         self.assertEqual([c["title"] for c in wall2["cards"]], ["NoCover"])
 
+    def test_manual_cover_on_folder_named_group_is_detected(self):
+        """手动封面按作品分组 label 存（剧集墙卡片标题）；当 label 来自文件夹名、
+        文件行无中文名时，筛选候选里没有这个 label，卡片能显示却会被判成没封面。
+        用户 2026-11-19 反馈「很多手动设封面的剧集被过滤为没封面」。"""
+        folder = self.tmp / "葬送的芙莉莲"
+        for ep in (1, 2):
+            name = f"[Subs]Frieren - {ep:02d}.mkv"
+            db.execute(
+                "INSERT INTO media_files(path, filename, title_raw, title_guess, status) "
+                "VALUES (?,?,?,?,?)",
+                (str(folder / name), name, f"[Subs]Frieren {ep:02d}", "Frieren", "scanned"),
+            )
+        # 分组 label 应来自文件夹名「葬送的芙莉莲」，而不是文件的英文 guess
+        tree = self.api.get_media_tree({"mode": "series"})
+        self.assertEqual([g["label"] for g in tree["groups"]], ["葬送的芙莉莲"])
+        label = tree["groups"][0]["label"]
+        # 用户就是照着剧集墙卡片标题设封面的
+        self.assertTrue(covers.set_manual_cover(label, JPEG)["ok"])
+        # 卡片能看到这张图
+        wall = self.api.get_poster_wall({})
+        self.assertTrue(wall["covers"].get(label))
+        # 筛选也必须认这张封面——这是本轮修复点，改动前会返回 0
+        page = self.api.get_media_files_page({"match_state": "with_cover", "page_size": 0})
+        self.assertEqual(page["total"], 2)
+        page2 = self.api.get_media_files_page({"match_state": "no_cover", "page_size": 0})
+        self.assertEqual(page2["total"], 0)
+
+    def test_renamed_work_manual_cover_is_detected(self):
+        """改名后封面仍按 group label 存，筛选候选里的 display_title 是新名；
+        两者不一致时同样要能命中（改名为放大器场景）。"""
+        dir_id = None
+        row_id = db.execute(
+            "INSERT INTO media_files(path, filename, title_raw, title_guess, title_cn, status) "
+            "VALUES (?,?,?,?,?,?)",
+            (str(self.tmp / "old - 01.mkv"), "old - 01.mkv", "old 01", "OldName",
+             "旧中文名", "scanned"),
+        )
+        tree = self.api.get_media_tree({"mode": "series"})
+        gid = tree["groups"][0]["id"]
+        old_label = tree["groups"][0]["label"]
+        self.assertEqual(old_label, "旧中文名")
+        self.assertTrue(covers.set_manual_cover(old_label, JPEG)["ok"])
+        self.assertTrue(self.api.rename_work(gid, "我改的新名")["ok"])
+        # 改了名后卡片标题变成新名，封面仍能显示
+        wall = self.api.get_poster_wall({})
+        self.assertTrue(wall["covers"].get("我改的新名"))
+        # 筛选也应命中这张手动封面
+        page = self.api.get_media_files_page({"match_state": "with_cover", "page_size": 0})
+        self.assertEqual(page["total"], 1)
+
     def test_cover_filter_combines_with_search(self):
         self._seed_two()
         covers.set_manual_cover("WithCover", JPEG)
