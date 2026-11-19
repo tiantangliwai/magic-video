@@ -1717,3 +1717,35 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
   噪音退回原 label / 端到端卡片关键词能查到分集）。
 - 真库只读验证：`XKSub 5Hanayome` 与 S2 两卡关键词均为 `hanayome`，LIKE 命中 25；
   旧行为（整串 label）命中 0。增量全绿。
+
+## 49. 设定封面后局部刷新，不再整墙重复加载（2026-11-19）
+
+### 49-A 场景
+用户反馈：「设定封面后就会触发重复加载，这样很慢影响我对其他编辑的改动」。
+
+### 49-B 根因
+旧链路（剧集墙 `case 'set-cover'`）：设定成功后 `invalidateCoverCache()` 清空**整个**
+前端封面 data URI 缓存，再 `loadPosterWall()` 整墙重载——
+1. `coverUris(titles)` 因缓存全清，把 200+ 张封面的 data URI 一次性重新请求、重传；
+2. 后端 `set_cover` 让 `_db_signature()` 失效，整墙卡片重新分组 / 算状态 / 解析封面；
+3. `renderPosterCards()` 重建整墙 DOM，正在进行的改名 / 评分 / 筛选被打断。
+
+### 49-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 49-C1 | 设定 / 清除封面后，只重取并替换**那一张**卡片的海报 |
+| 49-C2 | 其余封面的 data URI 缓存保留，不整墙重传 |
+| 49-C3 | 不触发 `loadPosterWall` / `get_poster_wall` / `get_work_meta`，不重建整墙 DOM |
+| 49-C4 | 顶部「已有封面 N 张」计数同步刷新 |
+| 49-C5 | 其它视图（看过列表 / 媒体库）刷新行为不变 |
+
+### 49-D 实现位置
+- `web/app.js`：
+  - `invalidateCoverCache(title)` 支持可选 title——传则只删这一张，不传仍全清（兼容旧调用）；
+  - 新增 `refreshPosterCoverCard(title)`：精确失效 → `coverUris([title])` 只取这一张 →
+    按卡片 `data-title` 定位 → 只替换该卡的 `.poster-art`（图 / 占位），并同步计数文本；
+  - `posterCardHtml` 普通卡加 `data-title="${esc(card.title)}"` 供定位；
+  - `case 'set-cover'` 的成功 / 清除两分支，剧集墙改调 `refreshPosterCoverCard(name)`；
+  - 封面弹窗「清除封面」的失效也收窄到当前 title。
+- `tests/test_poster_watched.py`：`PosterCoverRefreshTests` 5 例静态契约。
+- 门禁：`node --check` 通过；增量全绿。

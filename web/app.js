@@ -149,7 +149,12 @@ async function coverUris(titles) {
   return out;
 }
 
-function invalidateCoverCache() { coverUriCache.clear(); }
+// 精确失效一张封面缓存；不传 title 时全部清空（兼容旧调用）。
+// 设定 / 清除单张封面后只删这一张，其它封面的 data URI 全部保留，避免整墙重传。
+function invalidateCoverCache(title) {
+  if (title) { coverUriCache.delete(String(title).trim()); return; }
+  coverUriCache.clear();
+}
 
 function empty(text, sub) {
   return `<div class="empty"><div class="big">${esc(text)}</div><div>${esc(sub || '')}</div></div>`;
@@ -272,7 +277,7 @@ function coverDialog({ title }) {
       }
       if (e.target.closest('#coverClear')) {
         const r = await call('clear_cover', title).catch(() => ({ ok: false }));
-        if (r.ok) { invalidateCoverCache(); toast('已恢复自动封面，可重新抓取'); done({ clear: true }); }
+        if (r.ok) { invalidateCoverCache(title); toast('已恢复自动封面，可重新抓取'); done({ clear: true }); }
         else toast(r.error || '撤销失败', false);
       }
     });
@@ -1697,7 +1702,7 @@ function posterCardHtml(card, cover) {
           data-tags="${esc(meta.tags || '')}" title="给这部作品打分、加标签（纯本地保存）">评分</button>
         <button class="btn btn-sm" data-action="set-cover" data-name="${esc(card.title)}"
           title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>` : '';
-  return `<div class="poster-card">${art}${posterStateTag(card)}
+  return `<div class="poster-card" data-title="${esc(card.title)}">${art}${posterStateTag(card)}
     <div class="poster-body">
       <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
       <div class="poster-meta">${num(card.file_count)} 集</div>
@@ -1774,6 +1779,32 @@ async function loadPosterWall() {
   } finally {
     posterState.loading = false;
   }
+}
+
+// 设定 / 清除单张封面后只刷新这一张卡，不重载整墙。
+// 旧做法 invalidateCoverCache() 全清 + loadPosterWall() 会让 200+ 张封面的 data URI
+// 一次性重传、后端整墙签名重算、整墙 DOM 重建——既慢又打断正在进行的其它编辑。
+async function refreshPosterCoverCard(title) {
+  if (!title) return;
+  invalidateCoverCache(title);                  // 只失效这一张，其余封面缓存全部保留
+  let got = {};
+  try { got = await coverUris([title]); } catch (e) { /* 降级：保留原图 */ }
+  const cover = got[title] || '';
+  if (cover) posterState.covers[title] = cover;
+  else delete posterState.covers[title];
+  const grid = document.getElementById('posterGrid');
+  const card = grid && [...grid.querySelectorAll('.poster-card')]
+    .find(el => el.dataset.title === title);
+  if (card) {
+    const art = cover
+      ? `<img class="poster-art" src="${cover}" alt="${esc(title)}" loading="lazy">`
+      : `<div class="poster-art poster-placeholder"><span>${esc((title || '?').slice(0, 2))}</span></div>`;
+    const old = card.querySelector('.poster-art');
+    if (old) old.outerHTML = art;
+  }
+  const count = document.getElementById('posterCount');
+  if (count) count.textContent = count.textContent.replace(
+    /已有封面 \d+ 张/, `已有封面 ${Object.keys(posterState.covers).length} 张`);
 }
 
 // ---------- 观影报告（P2-1）+ 观看日历（P2-4） ----------
@@ -2596,16 +2627,16 @@ async function handleAction(action, btn) {
       if (!name) return;
       const picked = await coverDialog({ title: name });
       if (picked && picked.clear) {
-        if (currentView === 'posters') await loadPosterWall();
+        if (currentView === 'posters') await refreshPosterCoverCard(name);
         else if (currentView === 'watched') await renderWatched();
         return;
       }
       if (!picked) return;                       // 取消 / Esc
       const r = await call('set_cover', name, picked.data, picked.srcType);
       if (!r.ok) { toast(r.error || '设定封面失败', false); return; }
-      invalidateCoverCache();                    // 旧 data URI 不能让新封面被缓存挡住
       toast('封面已更新，之后自动抓取不会再覆盖它');
-      if (currentView === 'posters') await loadPosterWall();
+      // 剧集墙只刷新这一张卡：不整墙重载，其它编辑（改名/评分/筛选）不受打断。
+      if (currentView === 'posters') await refreshPosterCoverCard(name);
       else if (currentView === 'watched') await renderWatched();
       else await refresh();
       return;

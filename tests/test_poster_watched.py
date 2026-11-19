@@ -344,5 +344,56 @@ class PosterEditModeFrontendTests(unittest.TestCase):
         self.assertNotIn('id="continueRow"', block)
 
 
+class PosterCoverRefreshTests(unittest.TestCase):
+    """设定封面后局部刷新单卡，不整墙重载（用户 2026-11-19 反馈「触发重复加载，很慢」）。
+
+    旧做法 set-cover 成功后 invalidateCoverCache() 全清 + loadPosterWall() 整墙重载，
+    会把全部封面的 data URI 重传、后端签名重算、整墙 DOM 重建，打断其它编辑。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = APP_JS.read_text(encoding="utf-8")
+
+    def test_invalidate_cache_supports_single_title(self):
+        block = self.js.split("function invalidateCoverCache(title) {", 1)[1].split("\n}", 1)[0]
+        self.assertIn("coverUriCache.delete", block)
+        self.assertIn("coverUriCache.clear", block)  # 无参仍全清，兼容旧调用
+        self.assertIn("if (title)", block)
+
+    def test_refresh_helper_fetches_only_one_cover(self):
+        block = self.js.split("async function refreshPosterCoverCard(title) {", 1)[1].split(
+            "// ---------- 观影报告", 1)[0]
+        # 只重取这一张，不触发整墙接口
+        self.assertIn("coverUris([title])", block)
+        for heavy in ("loadPosterWall", "get_poster_wall", "get_work_meta"):
+            self.assertNotIn(heavy, block)
+        # 精确失效该张；按 data-title 定位卡片，只替换它自己的 .poster-art
+        self.assertIn("invalidateCoverCache(title)", block)
+        self.assertIn(".poster-card", block)
+        self.assertIn("dataset.title === title", block)
+        self.assertIn("querySelector('.poster-art')", block)
+
+    def test_set_cover_case_uses_local_refresh(self):
+        block = self.js.split("case 'set-cover': {", 1)[1].split("case 'tree-toggle':", 1)[0]
+        self.assertIn("await refreshPosterCoverCard(name)", block)
+        # 成功分支与清除分支都不再整墙重载
+        self.assertNotIn("loadPosterWall()", block)
+        # 成功分支不再全清封面缓存（精确失效下沉到 refresh helper）
+        self.assertNotIn("invalidateCoverCache();", block)
+
+    def test_card_carries_title_for_targeting(self):
+        func = self.js.split("function posterCardHtml(card, cover) {", 1)[1].split(
+            "function renderPosterCards()", 1)[0]
+        block = func.split('return `<div class="poster-card"', 1)[1].split(
+            "${art}${posterStateTag(card)}", 1)[0]
+        self.assertIn('data-title="${esc(card.title)}"', block)
+
+    def test_cover_dialog_clear_invalidates_only_one(self):
+        block = self.js.split("if (e.target.closest('#coverClear')) {", 1)[1].split("}", 2)[1]
+        self.assertIn("invalidateCoverCache(title)", block)
+        self.assertNotIn("invalidateCoverCache();", block)
+
+
 if __name__ == "__main__":
     unittest.main()
