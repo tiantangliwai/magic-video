@@ -16,3 +16,7 @@ build/
 config.local.json
 .DS_Store
 /.gitattributes
+
+# Obsidian 封面积累快照：md/manifest 入库，重资源只留本地（包里已有完整副本）
+/docs/封面积累_*.tar.gz
+/docs/知识积累/Magic Video/07 封面积累/封面图/

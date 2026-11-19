@@ -1945,3 +1945,46 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
 - 测试：`tests/test_poster_watched.py` 后端 2 例（整组 id / 设定封面生效 / 评分 key）+
   前端 2 例（合成卡按钮集合、改名带行 id）。
 - 门禁：`compileall` + `node --check` 通过；增量 **562/562** 全绿。
+
+## 55. Obsidian 封面积累节点：看过 / 未看过清单 + 带时间戳快照包（2026-11-19）
+
+### 55-A 场景
+用户要求：「我设置了很多剧集的封面，将数据全部备份一份……看过的列表、未看过的列表都写进
+obsidian 成为 md 文件，包括图片相关资源都积累一次，再额外打一个 tar.gz 的包加上时间戳
+作为今日积累的快照，md 文件什么的后续可以继续积累」。
+
+### 55-B 设计
+- **两个清单 + 一个索引**：`看过清单.md`（watched_list 按作品折叠，多季合并，带季数 /
+  集数范围 / 评分 / 标签 / 备注）、`未看过清单.md`（本地有文件但后端判定 `watch_state='none'`
+  的作品）、`00 积累索引.md`（每次导出追加一行节点，历史不删）。
+- **图片一并积累**：`D:/magicvideo/covers` 的 295 张 + 随包资产补齐，按文件名去重复制到
+  `封面图/`；md 用 `<img src="封面图/xxx.jpg" width="90">` 限宽显示。
+- **只写独立命名空间**：路径取 `settings.obsidian_vault` / `obsidian_folder`（本机配置为
+  `docs/知识积累` + `Magic Video`），本工具只写 `Magic Video/07 封面积累/`，绝不碰 00~06 号笔记；
+  非本工具托管的同名文件一律跳过。
+- **可继续积累**：每篇 md 带 `<!-- managed-by: Magic Video snapshot v1 -->`，只替换
+  `BEGIN AUTO / END AUTO` 之间的内容；索引的 `BEGIN SNAPSHOTS / END SNAPSHOTS` 逐次追加；
+  用户在区块外写的批注永久保留。邮件式原子写（`.mvtmp` → `os.replace`）。
+- **绝不写真库**：导出器用只读 URI 连 SQLite；剧集墙数据用 `object.__new__(Api)` 调用
+  纯查询方法，绕过 `Api.__init__()` 里的 `init_db()` / 词典初始化。
+- **快照包**：`docs/封面积累_<日期_时分秒>.tar.gz`，含 3 篇 md + `manifest.json` + 全部图片，
+  解压出来带一层时间戳目录；按用户选择**只留本地、不进 git**（md 与 manifest 入库）。
+
+### 55-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 55-C1 | Obsidian 里能看到看过 / 未看过两份清单与索引，每部作品的封面以图片形式嵌入 |
+| 55-C2 | 图片资源全部复制到 vault 的 `封面图/`，按文件名去重，不删已有文件 |
+| 55-C3 | tar.gz 文件名带日期时间，解开含 md / manifest / 全部图片 |
+| 55-C4 | 再次运行只替换 AUTO 区块并追加节点，手写批注与历史节点不丢 |
+| 55-C5 | 导出过程不修改真实数据库，遇到非托管同名笔记跳过 / 报错而不覆盖 |
+| 55-C6 | 快照包与图片目录不进 git，`--dry-run` 不写任何文件 |
+
+### 55-D 实现位置
+- `scripts/export_cover_snapshot.py`：只读取数 + 清单渲染 + 原子写 + 打包；`--dry-run` / `--vault` / `--folder`。
+- `tests/test_cover_snapshot.py`：9 例纯逻辑契约（分组合并、候选封面 / 评分 key、未看过滤、
+  md 图片链接、批注保留、节点追加、托管标记），不碰真库。
+- `docs/封面与观看清单.md`：docs 下的总索引（相对路径指向 vault 清单与图片）。
+- `.gitignore`：排除快照包与积累的图片目录，md / manifest 正常入库。
+- 门禁：`compileall` + `node --check` 通过；`test_docs` 16/16；增量全绿。
+- 本次快照：`封面积累_2026-11-19_235511.tar.gz`（看过 133 部 / 未看 166 部 / 图片 295 张，125 MB）。
