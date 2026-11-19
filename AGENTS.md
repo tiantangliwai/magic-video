@@ -113,6 +113,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 
 | 79 | **总览 / 继续观看的进度项要同时显示「作品名 + 单集名」**：作品名必须与剧集墙卡片同源（series 分组 label：改过文件夹名 / 手改 work_labels / 导入中文名都认），不能只显示从文件名推导的旧单集名（`display_title`）。后端新建 `_work_titles_from_tree()` 从剧集墙同一棵树提 `file_id -> 作品名`，`_attach_work_titles()` 给 `get_continue_watching` / `get_completed` 的进度项补 `work_title`（只读、不改 `display_title`、复用指纹缓存，正常播放进度写入不触发重算）；前端 `progressItem` 与已看完卡片在作品名与单集名不同时多渲染一行 `.work-name`（主色），两者相同则不重复 | 用户反馈（2026-11-20「Kaichou wa Maid-sama! 我改过剧集名称，总览和继续观看也把剧集名称展示出来」） |**Hy3 限时免费（用户 2026-11-15）**：后续任务优先把可并行的只读诊断 / 机械核对 / 文档一致性检查派给 Hy3 子代理，把免费额度用掉；主模型只做汇总复核与**串行落地改代码**（共用 `app.js` / `api.py`，单测与文档统一收口）。不必再排查模型清单、额度通道或重启 opencode。
 
+| 80 | **设置 / 扫描目录 / 导入列表是独立原生窗口（不是 HTML 覆盖层）**：能拖动、能拖出主窗口边界、与主窗口并行操作。新建 `app/panels.py` 预建三个 hidden 窗口（原生标题栏，标题纯中文**不含 `Magic Video`**以免 `find_main_window` / 单实例误伤），每窗口独立 `Api` 实例并 attach 自己（文件对话框父窗口正确）；点原生 X 只 hide 不销毁（closing 返回 False 拦截），`close_all()` 置 shut down 标志后真正 destroy，主窗口 closing/退出兜底联动。前端 `index.html?panel=settings|scan|import` 进入 panel 模式：只渲染一个视图、隐藏侧栏/顶栏/播放舞台、顶部轻量关闭条，主窗口 `switchView` 对这三者改为 `call('open_panel')` 开窗；panel 内 Esc / 关闭按钮走 `close_panel`。真机冒烟确认三窗口渲染成功（settings 写 #settingsPane、scan/import 写 #content） | 用户要求（2026-11-20「扫描目录和导入列表也做成弹框……可以移动且可以独立拉出边界，一边操作当前应用一边改设置」） |
 ---
 
 ## 2. 架构约束

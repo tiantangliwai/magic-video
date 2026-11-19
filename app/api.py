@@ -19,7 +19,7 @@ import psutil
 from . import (
     __version__, autostart, backup, blacklist, bluetooth, config, covers, db, embedded_player,
     everything, file_ops, importer, library_tree, listimport, metadata, obsidian,
-    potplayer, runtime, scanner, snapshot, textmatch, theme_native, watchlist, websearch,
+    panels, potplayer, runtime, scanner, snapshot, textmatch, theme_native, watchlist, websearch,
 )
 
 
@@ -472,6 +472,23 @@ class Api:
     def _theme() -> str:
         value = str(db.get_setting("theme", config.DEFAULTS["theme"])).strip().lower()
         return value if value in ("light", "dark") else "light"
+
+    # ---- 独立工具窗口（设置 / 扫描 / 导入）-----------------------------------
+    def open_panel(self, name: str) -> dict:
+        """打开/聚焦一个独立工具窗口。
+
+        面板是独立原生窗口（能拖出主窗口边界、与主窗口并行操作），不是 HTML 覆盖层。
+        主题走持久化的软件主题，保证首帧正确。
+        """
+        return panels.open_panel(str(name or "").strip(), self._theme())
+
+    def close_panel(self, name: str) -> dict:
+        """隐藏一个独立工具窗口（不销毁，重复打开保留状态）。"""
+        return panels.close_panel(str(name or "").strip())
+
+    def list_panels(self) -> dict:
+        """已打开的面板列表，供前端恢复/诊断（只读）。"""
+        return {"ok": True, "open": sorted(p for p in panels.PANEL_TITLES if panels.is_open(p))}
 
     def set_theme(self, theme: str) -> dict:
         """切换黑/白展示风格；只接受两个值，避免非法输入。"""

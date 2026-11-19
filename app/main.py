@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import webview
 
-from . import config, db, embedded_player, single_instance, theme_native
+from . import config, db, embedded_player, panels, single_instance, theme_native
 from .api import Api
 
 
@@ -72,6 +72,15 @@ def create_window(debug: bool = False) -> None:
     # 窗口真正显示后再同步一次：pywebview 在 Shown 前后也可能触发系统偏好回调，
     # 这一发是廉价保险（只写 4 个 DWM 属性，不建线程、不设定时器）。
     window.events.shown += lambda: sync_native_theme_before_show(settings)
+    # 独立工具窗口（设置 / 扫描 / 导入）在 start 前预建为 hidden：拖动、拉出边界、
+    # 与主窗口并行操作都由原生窗口提供，HTML 覆盖层做不到。点开只需 show()。
+    try:
+        panels.create_all(str(settings.get("theme") or "light"))
+    except Exception:
+        pass
+    # 主窗口关闭 = 退出软件：先销毁所有面板窗口，否则 pywebview 看到还有窗口存活
+    # 会一直阻塞在 start()，表现成「关不掉」。返回 None 不拦截主窗口自身关闭。
+    window.events.closing += lambda: panels.close_all()
     # 后台记录默认自动启动（设置页可关）。放在窗口创建后、WebView 启动前，
     # 即使前端脚本加载失败也能生效；失败只降级，绝不阻断窗口。
     try:
@@ -83,5 +92,10 @@ def create_window(debug: bool = False) -> None:
     try:
         webview.start(gui="edgechromium", debug=debug, private_mode=True)
     finally:
+        # 兜底：任何退出路径都把面板窗口清干净，绝不留孤儿窗口阻塞进程。
+        try:
+            panels.close_all()
+        except Exception:
+            pass
         # 主窗口关闭时把 PotPlayer 还原成独立窗口，绝不留下孤儿 WS_CHILD 窗口。
         embedded_player.cleanup()

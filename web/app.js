@@ -1,6 +1,12 @@
 'use strict';
 
-let currentView = 'home';
+// 独立工具窗口模式：index.html?panel=settings|scan|import 时，这个 WebView 只承载
+// 一个视图（设置 / 扫描目录 / 导入列表）。它是原生独立窗口，能拖出主窗口边界、
+// 与主窗口并行操作；主窗口里的同名入口改为开这个窗口，不再 setContent 整页替换。
+const _urlParams = new URLSearchParams(location.search);
+const panelMode = String(_urlParams.get('panel') || '').trim().toLowerCase();
+const PANEL_VIEWS = ['settings', 'scan', 'import'];
+let currentView = panelMode && PANEL_VIEWS.includes(panelMode) ? panelMode : 'home';
 let lastPreviewRows = [];
 let inited = false;
 let searchTimer = null;
@@ -1445,6 +1451,37 @@ function closeSettingsDialog() {
   if (root) root.hidden = true;
 }
 
+// ---- 独立工具窗口（panel 模式）---------------------------------------------
+// panel 窗口的界面：顶部一条工具条（标题 + 关闭），内容区只渲染它的那一个视图。
+// 侧栏、顶栏播放控制、播放舞台、设置浮层容器在 panel 模式下全部隐藏（见 style.css）。
+function closePanelWindow() {
+  if (!panelMode) return;
+  call('close_panel', panelMode).catch(() => {});
+  // 无 IPC 时用浏览器兜底：pywebview 的 window.close() 会被 closing 钩子拦成隐藏
+  try { window.close(); } catch (e) { /* 忽略 */ }
+}
+
+function setupPanelChrome() {
+  if (!panelMode) return;
+  document.body.classList.add('panel-mode');
+  document.title = (VIEW_META[panelMode] || [panelMode])[0];
+  // 顶栏标题同步成当前面板名（顶栏本身会被 CSS 隐藏，但 document.title 给原生标题栏兜底）
+  const vt = document.getElementById('viewTitle');
+  const vs = document.getElementById('viewSubtitle');
+  const meta = VIEW_META[panelMode] || [panelMode, ''];
+  if (vt) vt.textContent = meta[0];
+  if (vs) vs.textContent = meta[1] || '';
+  // 内容区前插一条轻量工具条：只有关闭按钮，原生标题栏负责拖动 / 最小化 / 缩放。
+  const content = document.getElementById('content');
+  if (content) {
+    const bar = document.createElement('div');
+    bar.className = 'panel-toolbar';
+    bar.innerHTML = `<span class="panel-toolbar-title">${esc(meta[0])}</span>
+      <button class="btn btn-sm" data-action="close-panel" title="关闭此窗口（Esc）">关闭 ✕</button>`;
+    content.parentNode.insertBefore(bar, content);
+  }
+}
+
 async function openSettingsDialog() {
   const root = document.getElementById('settingsModal');
   if (!root) return;
@@ -2487,7 +2524,9 @@ async function refresh() {
   const [title, subtitle] = VIEW_META[currentView];
   document.getElementById('viewTitle').textContent = title;
   document.getElementById('viewSubtitle').textContent = subtitle;
-  document.title = 'Magic Video · ' + title;
+  // 独立面板窗口的原生标题由建窗参数固定（纯中文、不含 "Magic Video"，避免
+  // find_main_window / 单实例误伤），HTML title 不要带主窗口名去覆盖它的语义。
+  if (!panelMode) document.title = 'Magic Video · ' + title;
   // 看过的列表让卡片吃满可用高度、表格内部滚动；其它视图保持整页滚动
   document.getElementById('content').classList.toggle('content-fill', currentView === 'watched');
   try {
@@ -2499,9 +2538,13 @@ async function refresh() {
 
 function switchView(view, opts = {}) {
   if (!VIEW_META[view]) return;
-  // 设置是浮层弹窗，不再是主内容区的一页：不切 currentView、不动导航高亮，
-  // 关掉弹窗仍停在原来的页面。所有 data-action="goto" data-view="settings" 也走这里。
-  if (view === 'settings') { openSettingsDialog(); return; }
+  // 设置 / 扫描目录 / 导入列表是独立原生窗口（能拖出边界、与主窗口并行操作）。
+  // 主窗口里点这些入口只负责开窗，不切 currentView、不动导航高亮、不打断播放。
+  // 所有 data-action="goto"/nav data-view 最终都汇聚到这里，统一处理。
+  if (PANEL_VIEWS.includes(view)) {
+    if (!panelMode) call('open_panel', view).catch(() => {});
+    return;
+  }
   const prev = currentView;
   // 「查看分集 / 媒体库搜索」带搜索词过来：把作品名带进媒体库并自动展开命中分组，
   // 否则跳过去面对几千个文件就忘了自己要点哪部。
@@ -2600,7 +2643,11 @@ async function handleAction(action, btn) {
       switchSettingsTab(btn.dataset.tab);
       return;
     case 'close-settings':
+      if (panelMode) { closePanelWindow(); return; }
       closeSettingsDialog();
+      return;
+    case 'close-panel':
+      closePanelWindow();
       return;
     case 'goto':
       if (playerStageActive) await stopEmbedded(true);
@@ -3004,11 +3051,17 @@ async function handleAction(action, btn) {
       // 所有开关（含 daemon_auto_start / autostart / embed_player）由 data-setting 统一收集
       document.querySelectorAll('[data-setting]').forEach(el => { data[el.dataset.setting] = el.dataset.value; });
       await call('save_settings', data);
-      await refreshEmbedState();
-      closeSettingsDialog();
-      // 保存后立刻按新设置重绘当前页：黑名单、标题偏好等改完马上能看到效果，
-      // 不用像旧版那样切一次页面才生效。
-      await refresh();
+      if (panelMode) {
+        // 独立设置窗口：浮层就是本窗口的全部内容，保存后重开（重新读回最新值），
+        // 绝不 closeSettingsDialog——那会把本窗口唯一的内容藏起来变成空白。
+        await openSettingsDialog();
+      } else {
+        await refreshEmbedState();
+        closeSettingsDialog();
+        // 保存后立刻按新设置重绘当前页：黑名单、标题偏好等改完马上能看到效果，
+        // 不用像旧版那样切一次页面才生效。
+        await refresh();
+      }
       toast('设置已保存');
       return;
     }
@@ -3645,6 +3698,23 @@ document.addEventListener('change', (ev) => {
 async function init() {
   if (inited) return;
   inited = true;
+  // 独立工具窗口：只渲染自己的视图，不碰守护 / 播放器 / 内嵌舞台（那是主窗口的职责）。
+  if (panelMode) {
+    setupPanelChrome();
+    try {
+      const info = await call('get_app_info');
+      applyTheme(info.theme);
+    } catch (e) { /* 忽略 */ }
+    try {
+      if (panelMode === 'settings') {
+        // 设置视图写的是 #settingsPane（浮层容器），panel 模式下让该浮层铺满窗口
+        await openSettingsDialog();
+      } else {
+        await refresh();
+      }
+    } catch (e) { /* 面板刷新失败不阻断窗口 */ }
+    return;
+  }
   try {
     const info = await call('get_app_info');
     document.getElementById('versionText').textContent = `v${info.version} · 数据仅存本机`;
@@ -3689,6 +3759,8 @@ window.addEventListener('resize', () => {
 // 设置弹窗：Esc 关闭。独立监听（不复用上面的 Enter 分支），任何输入框里按 Esc 都生效。
 document.addEventListener('keydown', (ev) => {
   if (ev.key !== 'Escape') return;
+  // 独立工具窗口：Esc 关闭自己的窗口（设置面板里 Esc 也先关窗口）
+  if (panelMode) { ev.preventDefault(); closePanelWindow(); return; }
   const root = document.getElementById('settingsModal');
   if (root && !root.hidden) { ev.preventDefault(); closeSettingsDialog(); }
   closeTitleMenu();

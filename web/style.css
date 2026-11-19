@@ -551,3 +551,27 @@ html[data-theme="dark"] .modal-warning { background: rgba(248, 113, 113, .12); }
 .proc-fail { margin-top: 8px; max-height: 150px; overflow: auto; font-size: 11px;
   background: var(--surface-2); border: 1px solid var(--border); border-radius: 7px; padding: 7px 9px; }
 .proc-fail div { padding: 2px 0; color: var(--muted); word-break: break-all; }
+
+/* ---- 独立工具窗口（设置 / 扫描 / 导入）------------------------------------- */
+/* panel 模式是独立原生窗口：只承载一个视图，侧栏 / 顶栏播放控制 / 播放舞台全部隐藏，
+   原生标题栏负责拖动与最小化，页面顶部只留一条轻量关闭工具条。 */
+body.panel-mode .sidebar,
+body.panel-mode .topbar,
+body.panel-mode .player-stage,
+body.panel-mode #btAlert { display: none !important; }
+body.panel-mode .app { display: block; height: 100vh; }
+body.panel-mode .main { height: 100vh; }
+body.panel-mode .content { height: calc(100vh - 46px); overflow-y: auto; padding: 14px 18px 22px; }
+body.panel-mode .content.content-fill { height: calc(100vh - 46px); }
+.panel-toolbar { height: 46px; display: flex; align-items: center; justify-content: space-between;
+  padding: 0 18px; border-bottom: 1px solid var(--border); background: var(--surface); }
+.panel-toolbar-title { font-size: 14px; font-weight: 600; color: var(--text); }
+/* 设置面板在独立窗口里铺满：用满尺寸对话框替代居中浮层，去掉遮罩 / 圆角 / 阴影。
+   这样 renderSettings 写的 #settingsPane 全宽展示， foot 的保存按钮仍在底部。 */
+body.panel-mode #settingsModal { position: absolute; inset: 46px 0 0 0; padding: 0;
+  align-items: stretch; justify-content: stretch; z-index: 1; }
+body.panel-mode #settingsModal .modal-backdrop { display: none; }
+body.panel-mode #settingsModal .modal-dialog { width: 100%; height: 100%; border: 0;
+  border-radius: 0; box-shadow: none; }
+/* 原生窗口自己的关闭按钮已经在工具条 / 系统标题栏，头部 ✕ 去掉避免重复 */
+body.panel-mode #settingsModal .modal-x { display: none; }

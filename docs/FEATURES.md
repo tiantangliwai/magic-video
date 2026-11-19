@@ -2065,3 +2065,53 @@ obsidian 成为 md 文件，包括图片相关资源都积累一次，再额外�
 - `web/style.css`：`.item .work-name` 主色强调样式。
 - `tests/test_progress_work_title.py`：8 例（树提取 / 端到端注入 / 保留已有值 / 前端契约）。
 - 门禁：`compileall` + `node --check` + `test_docs` 通过；增量 **570/570** 全绿。
+
+## 58. 设置 / 扫描目录 / 导入列表改为独立可移动窗口（2026-11-20）
+
+### 58-A 场景
+用户要求：「将扫描目录和导入列表也做成弹框，并且和设置的弹框都变成可以移动且可以独立拉出
+Magic Video 边界的弹框……我希望可以一边操作当前应用，一边可以修改设置等相关功能」。
+
+原来的实现：设置是主窗口内的 HTML 浮层，扫描 / 导入是 `setContent` 整页视图——都被 WebView
+边界裁剪，不能拖出主窗口，主窗口最小化就一起消失，无法并行操作。用户拍板：系统原生标题栏、
+三个窗口各自独立可同时打开、关主窗口全部一起关。
+
+### 58-B 设计
+- **独立原生窗口**（HTML 覆盖层做不到拉出边界 / 并行操作）：pywebview 6.2.1 多窗口，
+  启动时预建三个 `hidden=True` 窗口，点开只需 `show()`（winforms 对 hidden 窗口会先 Show 再 Hide，
+  `events.shown` 已置位，`show()/hide()` 的守卫不会卡住；比从 js_api 线程运行时建窗更稳）。
+- **原生标题栏**：拖动 / 最小化 / 缩放 / 关闭都是系统行为，最稳。
+- **标题纯中文**（设置 / 扫描目录 / 导入列表），**不含 "Magic Video"**：否则
+  `embedded_player.find_main_window`（标题包含匹配）会把它当主窗口刷主题、
+  `single_instance.activate_existing`（精确标题）会被重复启动置前。
+- **生命周期**：点原生 X → `closing` 返回 False 拦截、改成 `hide()`（窗口对象常驻，再开只是
+  `show()`，不重建 WebView、保留滚动位置）；退出时 `close_all()` 置 `_shutting_down` 放行销毁，
+  主窗口 `closing` 与 `webview.start()` 的 `finally` 双重兜底，绝不留孤儿窗口阻塞进程。
+- **每个窗口独立 Api 实例**并 attach 自己：`choose_directory` / `choose_import_file` 等文件对话框
+  的父窗口才正确。守护自启动仍只由主窗口 Api 负责，panel 不碰。
+- **主题 / 单实例**：首屏 URL 带 `?theme=`，界面第一帧就是正确主题；原生标题栏靠
+  `theme_native.hook_webview_title_bar` 的类级补丁跟随软件主题。
+
+### 58-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 58-C1 | 设置 / 扫描 / 导入三个入口打开独立原生窗口，可拖动、可拖出主窗口边界 |
+| 58-C2 | 三个窗口可同时打开，与主窗口并行操作，点开/聚焦互不干扰 |
+| 58-C3 | 点原生 X 只隐藏、再开保留状态；关主窗口三个一起关、软件正常退出 |
+| 58-C4 | 文件对话框父窗口正确（属于发起的面板窗口）|
+| 58-C5 | panel 窗口首帧主题正确，标题栏跟随软件深浅色 |
+| 58-C6 | 面板窗口内 Esc / 关闭按钮能关窗；设置保存后重开仍能看到内容不空白 |
+
+### 58-D 实现位置
+- `app/panels.py`（新）：窗口注册表 + `create_all` / `open_panel` / `close_panel` / `close_all`，
+  标题与尺寸元数据、closing 拦截。
+- `app/api.py`：新增 `open_panel` / `close_panel` / `list_panels` 桥接方法；顶层导入 panels。
+- `app/main.py`：建窗后 `panels.create_all` 预建；主窗口 `closing` 与 `finally` 联动 `close_all`。
+- `web/app.js`：`?panel=` 解析与 panel 模式；`switchView` 三视图走 `open_panel`；panel 精简 init
+  （跳过守护 / 播放器 / 内嵌）；关闭工具条、Esc、`close-panel`、`save-settings` 面板分支。
+- `web/style.css`：`body.panel-mode` 隐藏主窗口 chrome、铺满设置浮层、`.panel-toolbar`。
+- `tests/test_panels.py`：19 例（URL / 标题唯一 / 生命周期 / closing 拦截 / Api 桥接 / 前后端契约），
+  全程 mock `webview.create_window`，不启动真实 WebView。
+- 真机冒烟：三个 hidden 窗口在 edgechromium 下全部建成并渲染成功（settings 写 `#settingsPane`
+  14700 字符、scan 写 `#content` 8561、import 1775，panel-mode 与工具条均在）。
+- 门禁：`compileall` + `node --check` + `test_docs` 通过；增量 **623/623** 全绿。
