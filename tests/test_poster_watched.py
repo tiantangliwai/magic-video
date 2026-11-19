@@ -319,8 +319,8 @@ class PosterEditModeFrontendTests(unittest.TestCase):
         self.assertIn("renderPosterCards()", handler)
 
     def test_edit_buttons_are_gated_by_edit_mode(self):
-        block = self.js.split("const editButtons = posterState.editMode ?", 1)[1].split(
-            "return `<div class=\"poster-card\">", 1)[0]
+        block = self.js.split("const editButtons = editMode ?", 1)[1].split(
+            "return `<div class=\"poster-card\"", 1)[0]
         for action in ("rename-work", "rate-work", "set-cover"):
             self.assertIn(action, block)
         self.assertIn("${cleanup}", block)
@@ -418,7 +418,8 @@ class PosterCoverRefreshTests(unittest.TestCase):
         self.assertNotIn("invalidateCoverCache();", block)
 
     def test_card_carries_title_for_targeting(self):
-        func = self.js.split("function posterCardHtml(card, cover) {", 1)[1].split(
+        func = self.js.split(
+            "function posterCardHtml(card, cover, editMode = posterState.editMode) {", 1)[1].split(
             "function renderPosterCards()", 1)[0]
         block = func.split('return `<div class="poster-card"', 1)[1].split(
             "${art}${posterStateTag(card)}", 1)[0]

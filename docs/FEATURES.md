@@ -1816,3 +1816,39 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
 - `tests/test_theme_native.py`：`WebviewTitleBarHookTests` 5 例 + `TitlebarHookWiringTests` 1 例。
 - 真机验证：对真实 `webview.platforms.winforms.BrowserView.BrowserForm` 打补丁后，
   `is_dark_theme()` 随软件主题返回（系统仍是浅色应用模式）。
+
+## 52. 媒体库也支持「纯查看 / 编辑模式」（2026-11-19）
+
+### 52-A 场景
+用户问：「媒体库现在怎么切换成编辑模式啊？」——此前的模式切换只加在剧集墙，
+媒体库没有，编辑按钮（改名 / 删除文件 / 删除整部）一直裸露。用户拍板：
+**媒体库也加，默认纯查看**。
+
+### 52-B 设计
+- `fileListState.editMode` 默认 `false`（纯查看），与剧集墙的 `posterState.editMode`
+  **各自独立记忆**：在一个页面切模式不会把另一个页面也带过去。
+- 工具条（展示方式那一行）新增「纯查看 / 编辑模式」两个按钮，
+  `data-action="file-edit-mode"`，媒体库与扫描结果页共用同一套文件列表组件，因此两页都有。
+- 纯查看下保留：播放 / 从头播放 / 查看分集 / 展开折叠 / 筛选排序。
+  收进编辑模式：改名、删除文件（单集）、删除整部本地文件。
+- 切换只**重绘缓存**（`repaintFileList()`），不重新查库、不重拉封面；缓存不可用时才退回 `loadFileList()`。
+- 媒体库封面墙的「设定封面」同样走局部刷新：`refreshPosterCoverCard()` 现在同时更新
+  `#posterGrid` 与 `#fileListBox` 的卡片、`fileListCache` 的封面表与两处计数；
+  媒体库卡片墙设封面不再触发整页 `refresh()`。
+
+### 52-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 52-C1 | 进媒体库默认纯查看：卡片/树/平铺里都没有改名、删除按钮 |
+| 52-C2 | 点「编辑模式」后按钮出现，点「纯查看」后消失，无需刷新页面 |
+| 52-C3 | 切换即时生效，不发 `get_media_files_page` / `get_media_tree` / `get_poster_wall` 请求 |
+| 52-C4 | 剧集墙与媒体库的模式互不影响 |
+| 52-C5 | 媒体库封面墙「设定封面」只刷新那一张卡，不整页重载 |
+
+### 52-D 实现位置
+- `web/app.js`：`fileListState.editMode`；`fileListCard` 加按钮；`fileListRows` 的
+  `delete-local-file` 与 `treeNodeHtml` 的 `rename` / `cleanup` 加 `fileListState.editMode` 守卫；
+  `posterCardHtml(card, cover, editMode = posterState.editMode)` 支持调用方指定模式；
+  `loadFileList` 记录 `fileListCache`；新增 `repaintFileList()` / `syncFileEditModeButtons()`；
+  `handleAction` 新增 `file-edit-mode`；`set-cover` 的局部刷新覆盖媒体库卡片墙。
+- `tests/test_media_browser.py::LibraryEditModeFrontendTests` 6 例静态契约。

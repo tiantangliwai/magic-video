@@ -325,3 +325,49 @@ class CoverFilterFrontendTests(unittest.TestCase):
     def test_match_select_offers_cover_options(self):
         for token in ("option('with_cover', '有封面'", "option('no_cover', '没封面'"):
             self.assertIn(token, self.js)
+
+
+class LibraryEditModeFrontendTests(unittest.TestCase):
+    """媒体库「纯查看 / 编辑模式」：默认纯查看，切换只重绘不重查。
+
+    用户要求：媒体库也要有和剧集墙一样的模式切换，默认纯查看，避免误点
+    改名 / 删除文件；切模式不能重新查库、重拉封面（那会很慢）。
+    """
+
+    def setUp(self):
+        self.js = (ROOT / "web/app.js").read_text(encoding="utf-8")
+
+    def test_state_defaults_to_view_only(self):
+        block = self.js.split("const fileListState = {", 1)[1].split("};", 1)[0]
+        self.assertIn("editMode: false", block)
+
+    def test_toolbar_has_mode_buttons(self):
+        block = self.js.split("function fileListCard(", 1)[1].split("function fileListRows(", 1)[0]
+        self.assertIn('data-action="file-edit-mode"', block)
+        self.assertIn('data-edit="0"', block)
+        self.assertIn('data-edit="1"', block)
+
+    def test_delete_file_button_guarded_by_edit_mode(self):
+        block = self.js.split("function fileListRows(", 1)[1].split("function fileListPagerHtml", 1)[0]
+        self.assertIn('data-action="delete-local-file"', block)
+        # 模板里必须先判 editMode 才输出删除按钮
+        idx = block.index('data-action="delete-local-file"')
+        head = block[max(0, idx - 260):idx]
+        self.assertIn("fileListState.editMode", head)
+
+    def test_tree_rename_and_cleanup_guarded(self):
+        self.assertIn("const cleanup = fileListState.editMode &&", self.js)
+        self.assertIn("const rename = fileListState.editMode &&", self.js)
+
+    def test_cards_view_passes_library_edit_mode(self):
+        self.assertIn("posterCardHtml(c, (coverMap || {})[c.title], fileListState.editMode)", self.js)
+
+    def test_toggle_repaints_cache_instead_of_reloading(self):
+        block = self.js.split("function repaintFileList()", 1)[1].split(
+            "function syncFileEditModeButtons()", 1)[0]
+        self.assertNotIn("await call(", block)
+        self.assertIn("box.innerHTML", block)
+        # 缓存不可用时才允许退回重新载入
+        handler = self.js.split("case 'file-edit-mode': {", 1)[1].split("case '", 1)[0]
+        self.assertIn("repaintFileList()", handler)
+        self.assertIn("loadFileList()", handler)

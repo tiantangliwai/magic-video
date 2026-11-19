@@ -643,7 +643,14 @@ const fileListState = {
   keyword: '', page: 1, page_size: 200,
   directory_id: 0, match_state: '', sort: 'newest',
   view_mode: 'flat', mode_touched: false,
+  // 媒体库 / 扫描页共用：默认「纯查看」，改名 / 删除文件等编辑按钮收进「编辑模式」。
+  // 与剧集墙的 posterState.editMode 各自独立记忆。
+  editMode: false,
 };
+
+// 上一次成功载入的列表数据：切「纯查看 / 编辑模式」时从缓存重绘，
+// 不重新查库、不重拉封面（封面 data URI 已在载入时转换好）。
+let fileListCache = { mode: '', data: null };
 
 // 树状视图：只缓存当前分组结果 + 已展开节点，展开/折叠不重复查库
 const treeState = { data: null, open: new Set() };
@@ -710,6 +717,10 @@ function fileListCard(title, hint, directories) {
       <span class="hint" id="treeSummary">按剧集分组，展开季即可看到每一集</span>
       <button class="btn btn-sm" data-action="tree-expand-all">展开全部分组</button>
       <button class="btn btn-sm" data-action="tree-collapse-all">全部折叠</button>
+      <button class="btn btn-sm ${!s.editMode ? 'btn-primary' : ''}" data-action="file-edit-mode"
+        data-edit="0" title="只浏览与播放，不显示改名 / 删除文件等按钮">纯查看</button>
+      <button class="btn btn-sm ${s.editMode ? 'btn-primary' : ''}" data-action="file-edit-mode"
+        data-edit="1" title="显示改名 / 删除文件 / 删除整部本地文件">编辑模式</button>
     </div>
     <div class="btn-row" style="margin-bottom:10px">
       <button class="btn btn-sm" data-action="file-refresh">刷新列表</button>
@@ -747,7 +758,7 @@ function fileListRows(rows) {
         <div class="btn-row" style="justify-content:flex-end;margin-top:6px">
           <button class="btn btn-primary btn-sm" data-action="play" data-id="${r.id}">播放</button>
           <button class="btn btn-sm" data-action="play-start" data-id="${r.id}">从头播放</button>
-          ${num(r.completed) === 1 && !r.deleted_at
+          ${fileListState.editMode && num(r.completed) === 1 && !r.deleted_at
             ? `<button class="btn btn-sm btn-danger" data-action="delete-local-file" data-id="${r.id}"
                 title="把这一集的本地文件移入回收站，观看记录保留">删除文件</button>` : ''}
         </div></div>
@@ -778,12 +789,12 @@ function treeNodeHtml(node, depth) {
     ? `<button class="btn btn-sm" data-action="play" data-id="${num(node.next_file_id)}">${num(node.playing_count) ? '继续观看' : '播放下一集'}</button>`
     : '';
   // 整部剧全部看完后才出现人工清理入口；已移除的文件不算，避免重复点
-  const cleanup = node.kind === 'series' && node.all_done && num(node.removable_count) > 0
+  const cleanup = fileListState.editMode && node.kind === 'series' && node.all_done && num(node.removable_count) > 0
     ? `<button class="btn btn-sm btn-danger" data-action="delete-series-files"
         data-node="${esc(node.id)}" title="把这部作品的全部本地文件移入回收站，观看记录保留">删除整部本地文件</button>`
     : '';
   // 用户可编辑作品/分组名称：只改展示标签，不碰磁盘文件与播放记录
-  const rename = node.kind === 'series'
+  const rename = fileListState.editMode && node.kind === 'series'
     ? `<button class="btn btn-sm" data-action="rename-work" data-node="${esc(node.id)}"
         data-name="${esc(node.label)}" title="修改这部作品在软件里显示的名称">改名</button>`
     : '';
@@ -868,11 +879,12 @@ async function loadFileList() {
     // 之前是「等几百张 base64 全部转换完才首次渲染」，切到媒体库的卡顿主要来自这里。
     const paint = (coverMap) => {
       box.innerHTML = cards.length
-        ? `<div class="poster-grid">${cards.map(c => posterCardHtml(c, (coverMap || {})[c.title])).join('')}</div>`
+        ? `<div class="poster-grid">${cards.map(c => posterCardHtml(c, (coverMap || {})[c.title], fileListState.editMode)).join('')}</div>`
         : empty('还没有作品卡片', '先扫描目录；封面可在「后台进程」页抓取');
     };
     paint({});
     if (titles.length) paint(await coverUris(titles));
+    fileListCache = { mode, data };
     return;
   }
   if (count) count.textContent =
@@ -882,6 +894,7 @@ async function loadFileList() {
     if (pager) pager.innerHTML = fileListPagerHtml(data);
     if (summary) summary.textContent = '当前是平铺列表，可切换成封面墙 / 剧集展示 / 目录结构';
     box.innerHTML = fileListRows(data.rows || []);
+    fileListCache = { mode, data };
   } else {
     treeState.data = data;
     if (pager) pager.innerHTML = treePagerHtml(data);
@@ -890,7 +903,35 @@ async function loadFileList() {
       : '同一部作品归为一组；有季标记的按第 1 季 / 第 2 季展开，无季标记的直接挂在作品下';
     autoExpandHits(data);
     box.innerHTML = treeHtml(data);
+    fileListCache = { mode, data };
   }
+}
+
+// 切「纯查看 / 编辑模式」只重绘、不重新查库：数据与封面 data URI 都已在缓存里。
+// 缓存不可用（例如刚进页面还没载入完）时返回 false，由调用方退回 loadFileList()。
+function repaintFileList() {
+  const box = document.getElementById('fileListBox');
+  const c = fileListCache;
+  if (!box || !c.data || c.mode !== fileListState.view_mode) return false;
+  if (c.mode === 'cards') {
+    const cards = c.data.cards || [];
+    const covers = c.data.covers || {};
+    box.innerHTML = cards.length
+      ? `<div class="poster-grid">${cards.map(x => posterCardHtml(x, covers[x.title], fileListState.editMode)).join('')}</div>`
+      : empty('还没有作品卡片', '先扫描目录；封面可在「后台进程」页抓取');
+  } else if (c.mode === 'flat') {
+    box.innerHTML = fileListRows(c.data.rows || []);
+  } else {
+    treeState.data = c.data;
+    box.innerHTML = treeHtml(c.data);
+  }
+  return true;
+}
+
+function syncFileEditModeButtons() {
+  document.querySelectorAll('[data-action="file-edit-mode"]').forEach(b => {
+    b.classList.toggle('btn-primary', (b.dataset.edit === '1') === fileListState.editMode);
+  });
 }
 
 // 目录列表变动不频繁：短 TTL 复用，避免每次切媒体库 / 扫描页都等一次查询
@@ -909,7 +950,7 @@ async function renderLibrary() {
   const dirs = await getDirectoriesCached();
   setContent(fileListCard(
     '媒体库 · 按作品浏览',
-    '默认是「封面墙」：每部作品一张封面卡片、只显示一个作品名；可随时切换成剧集展示（作品 → 季 → 集）、目录结构或平铺列表。搜索、筛选与点击播放四种视图都可用。',
+    '默认是「封面墙」：每部作品一张封面卡片、只显示一个作品名；可随时切换成剧集展示（作品 → 季 → 集）、目录结构或平铺列表。搜索、筛选与点击播放四种视图都可用。默认<b>纯查看</b>，切到<b>编辑模式</b>才出现改名 / 删除文件 / 删除整部本地文件。',
     dirs,
   ));
   await loadFileList();
@@ -1671,7 +1712,9 @@ function posterStateTag(card) {
   }
 }
 
-function posterCardHtml(card, cover) {
+// editMode 由调用方传入：剧集墙读 posterState.editMode，媒体库读 fileListState.editMode，
+// 两个页面各自独立记忆，避免在媒体库切了模式把剧集墙也一起改掉。
+function posterCardHtml(card, cover, editMode = posterState.editMode) {
   const art = cover
     ? `<img class="poster-art" src="${cover}" alt="${esc(card.title)}" loading="lazy">`
     : `<div class="poster-art poster-placeholder"><span>${esc((card.title || '?').slice(0, 2))}</span></div>`;
@@ -1703,7 +1746,7 @@ function posterCardHtml(card, cover) {
   const stars = meta.rating ? `<span class="poster-tag" title="我的评分">★ ${num(meta.rating)}</span>` : '';
   const tagList = String(meta.tags || '').split(',').filter(Boolean).slice(0, 3)
     .map(t => `<span class="poster-tag">${esc(t)}</span>`).join('');
-  const editButtons = posterState.editMode ? `
+  const editButtons = editMode ? `
         <button class="btn btn-sm" data-action="rename-work" data-node="${esc(card.group_id)}"
           data-name="${esc(card.title)}" title="修改这部作品在软件里显示的名称">改名</button>${cleanup}
         <button class="btn btn-sm" data-action="rate-work" data-node="${esc(metaKey)}"
@@ -1801,19 +1844,29 @@ async function refreshPosterCoverCard(title) {
   const cover = got[title] || '';
   if (cover) posterState.covers[title] = cover;
   else delete posterState.covers[title];
-  const grid = document.getElementById('posterGrid');
-  const card = grid && [...grid.querySelectorAll('.poster-card')]
-    .find(el => el.dataset.title === title);
-  if (card) {
-    const art = cover
-      ? `<img class="poster-art" src="${cover}" alt="${esc(title)}" loading="lazy">`
-      : `<div class="poster-art poster-placeholder"><span>${esc((title || '?').slice(0, 2))}</span></div>`;
-    const old = card.querySelector('.poster-art');
+  // 媒体库封面墙（#fileListBox）共用同一套卡片 DOM 与同一张封面缓存，一起更新，
+  // 否则设定完素材回到媒体库又被打回占位图。
+  const libCovers = fileListCache.data && fileListCache.data.covers;
+  if (libCovers) {
+    if (cover) libCovers[title] = cover;
+    else delete libCovers[title];
+  }
+  const art = cover
+    ? `<img class="poster-art" src="${cover}" alt="${esc(title)}" loading="lazy">`
+    : `<div class="poster-art poster-placeholder"><span>${esc((title || '?').slice(0, 2))}</span></div>`;
+  for (const grid of [document.getElementById('posterGrid'), document.getElementById('fileListBox')]) {
+    if (!grid) continue;
+    const card = [...grid.querySelectorAll('.poster-card')]
+      .find(el => el.dataset.title === title);
+    const old = card && card.querySelector('.poster-art');
     if (old) old.outerHTML = art;
   }
   const count = document.getElementById('posterCount');
   if (count) count.textContent = count.textContent.replace(
     /已有封面 \d+ 张/, `已有封面 ${Object.keys(posterState.covers).length} 张`);
+  const libCount = document.getElementById('fileListCount');
+  if (libCount && libCovers) libCount.textContent = libCount.textContent.replace(
+    /已有封面 \d+ 张/, `已有封面 ${Object.keys(libCovers).length} 张`);
 }
 
 // ---------- 观影报告（P2-1）+ 观看日历（P2-4） ----------
@@ -2634,9 +2687,13 @@ async function handleAction(action, btn) {
     case 'set-cover': {
       const name = btn.dataset.name || '';
       if (!name) return;
+      // 剧集墙与媒体库封面墙共用同一套卡片 DOM：都走「只刷新这一张」的局部刷新，
+      // 不整墙重载、不重拉其余封面；其它视图（看过列表 / 平铺 / 剧集展示）保持原行为。
+      const onCardWall = currentView === 'posters'
+        || ((currentView === 'library' || currentView === 'scan') && fileListState.view_mode === 'cards');
       const picked = await coverDialog({ title: name });
       if (picked && picked.clear) {
-        if (currentView === 'posters') await refreshPosterCoverCard(name);
+        if (onCardWall) await refreshPosterCoverCard(name);
         else if (currentView === 'watched') await renderWatched();
         return;
       }
@@ -2644,8 +2701,8 @@ async function handleAction(action, btn) {
       const r = await call('set_cover', name, picked.data, picked.srcType);
       if (!r.ok) { toast(r.error || '设定封面失败', false); return; }
       toast('封面已更新，之后自动抓取不会再覆盖它');
-      // 剧集墙只刷新这一张卡：不整墙重载，其它编辑（改名/评分/筛选）不受打断。
-      if (currentView === 'posters') await refreshPosterCoverCard(name);
+      // 剧集墙 / 媒体库封面墙只刷新这一张卡：不整墙重载，其它编辑（改名/评分/筛选）不受打断。
+      if (onCardWall) await refreshPosterCoverCard(name);
       else if (currentView === 'watched') await renderWatched();
       else await refresh();
       return;
@@ -2666,6 +2723,13 @@ async function handleAction(action, btn) {
       return;
     }
     case 'tree-collapse-all': treeState.open.clear(); renderTree(); return;
+    case 'file-edit-mode': {
+      fileListState.editMode = btn.dataset.edit === '1';
+      syncFileEditModeButtons();
+      // 只重绘缓存：不重新查库、不重拉封面，切换是即时的
+      if (!repaintFileList()) await loadFileList();
+      return;
+    }
     case 'file-flat': {
       fileViewModeHandler('flat');
       const sel = document.getElementById('fileViewMode');
@@ -3026,6 +3090,10 @@ async function handleAction(action, btn) {
       if (!r.ok) { toast(r.error || '保存失败', false); return; }
       posterState.metas[key] = r;
       renderPosterCards();
+      // 媒体库封面墙用的是同一批卡片：重绘当前缓存，评分角标立刻出现（不发请求）
+      if ((currentView === 'library' || currentView === 'scan') && fileListState.view_mode === 'cards') {
+        repaintFileList();
+      }
       toast('已保存：' + (r.rating ? `${r.rating} 分` : '未打分')
         + (r.tags ? ` · ${r.tags}` : ''));
       return;
