@@ -130,6 +130,21 @@ class WatchlistDbTests(IsolatedDbTestCase):
         self.assertEqual((r["added"], r["total"], r["pending"]), (2, 2, 2))
         self.assertEqual([x["title"] for x in db_rows()], ["新的第一部", "新的第二部"])
 
+    def test_rename_watched_moves_cover_record(self):
+        """看过的列表改名后封面不能消失：subjects 记录跟着新标题走。"""
+        covers.config.COVER_DIR.mkdir(parents=True, exist_ok=True)
+        (covers.config.COVER_DIR / "renamed.jpg").write_bytes(b"x" * 1024)
+        covers.save_cover_record("旧番名", "http://example/x.jpg", "manual", "renamed.jpg")
+        db.execute("INSERT INTO watched_list(raw_text, title, source, status) "
+                   "VALUES (?, ?, 'manual', 'watched')", ("旧番名", "旧番名"))
+        rid = db.scalar("SELECT id FROM watched_list WHERE title = '旧番名'")
+        r = Api().update_watched(rid, "新番名", None)
+        self.assertTrue(r["ok"])
+        entries = covers.all_cover_entries()
+        self.assertEqual(
+            covers.resolve_cover_many([("新番名", ["新番名"])], entries).get("新番名"),
+            "renamed.jpg")
+
     def test_import_does_not_touch_playback_records(self):
         f = self.media("Show - 01.mkv", title_cn="展示作品")
         db.execute("INSERT INTO watch_progress(file_id, position_ms, completed) VALUES (?, 5000, 1)", (f["id"],))

@@ -1852,3 +1852,49 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
   `loadFileList` 记录 `fileListCache`；新增 `repaintFileList()` / `syncFileEditModeButtons()`；
   `handleAction` 新增 `file-edit-mode`；`set-cover` 的局部刷新覆盖媒体库卡片墙。
 - `tests/test_media_browser.py::LibraryEditModeFrontendTests` 6 例静态契约。
+
+## 53. 看过的列表补齐编辑按钮：改名 / 评分 / 设定封面（2026-11-19）
+
+### 53-A 场景
+用户反馈：「看过的列表为什么不能设定封面？除了查看分集，其他的按钮都应该有」。
+
+此前看过的列表两套视图的按钮是错位的：**表格行**只有 打开文件夹 / 改名 / 删除，
+**卡片墙**只有 打开文件夹 / 设定封面 / 查看条目——所以默认的表格视图里根本
+没有「设定封面」，切到卡片墙又找不到「改名」和「评分」。
+
+### 53-B 设计
+- **两套视图都提供**：打开文件夹（匹配到本地目录时才有）、改名、评分、设定封面；
+  表格另有「删除」、卡片墙另有「查看条目」。
+- **不放「查看分集」**：看过的作品很可能没有本地文件，跳过去只会是一片空白。
+- **评分 key 用 `watched::<作品名>`**：看过的列表没有媒体库分组 id，不能复用
+  `series::*` 的 work_key；同一部作品若本地有文件，两处评分各自独立（不会串味）。
+  卡片墙分组与表格行共用 `watchedRowKey()`，同一作品在两种视图里是同一个评分。
+- **卡片墙改名是作品级**：一张卡可能聚合多季多条记录，改名会整组一起改
+  （`data-action="rename-watched-group"`），否则这张卡会按新旧名字拆成两张。
+- **改名不弄丢封面**：`covers.rename_cover_record()` 把 subjects 记录改挂到新标题，
+  图片文件与 `cover_local` 不动——`resolve_cover` 按新名在 `exact` 索引里命中同一条。
+- **设定封面只刷新一张**：看过的列表纳入 `refreshPosterCoverCard()` 的局部刷新，
+  不再整页 `renderWatched()`（会重拉全列表 + 全部封面）。
+
+### 53-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 53-C1 | 表格视图每行都有改名 / 评分 / 设定封面（另有删除与按需的打开文件夹）|
+| 53-C2 | 卡片墙每张卡都有改名 / 评分 / 设定封面 / 查看条目 |
+| 53-C3 | 两套视图都不出现「查看分集」 |
+| 53-C4 | 同一作品在表格与卡片墙显示同一个评分（key 一致）|
+| 53-C5 | 卡片墙改名把组内多季记录一起改，不拆卡 |
+| 53-C6 | 改名后原封面仍能显示（subjects 记录跟着新标题走）|
+| 53-C7 | 设定封面 / 评分后只重绘当前视图，不整页重载 |
+
+### 53-D 实现位置
+- `web/app.js`：`watchedMetas` / `watchedMetaKey()` / `watchedRowKey()` / `metaTagsHtml()`；
+  `watchedCardsHtml` 加 `data-title` 与改名 / 评分按钮；`watchedRowHtml` 加评分 / 设定封面；
+  `renderWatched` 并行取 `get_work_meta`；`refreshPosterCoverCard` 覆盖 `#watchedCards` 与
+  `watchedCovers`；`handleAction` 新增 `rename-watched-group`，`rate-work` 加 watched 分支，
+  `set-cover` 把 watched 并入局部刷新。
+- `app/covers.py`：新增 `rename_cover_record(old, new)`（只改 subjects 标题，不动图片）。
+- `app/api.py`：`update_watched` 改名成功后调用封面记录迁移（失败不影响改名）。
+- 测试：`tests/test_poster_watched.py::WatchedCardActionsFrontendTests` 7 例前端契约；
+  `tests/test_covers.py::CoverRecordRenameTests` 2 例；`tests/test_watchlist.py` 1 例端到端。
+- 门禁：`compileall` + `node --check` 通过；增量 590/590 全绿。

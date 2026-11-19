@@ -431,5 +431,64 @@ class PosterCoverRefreshTests(unittest.TestCase):
         self.assertNotIn("invalidateCoverCache();", block)
 
 
+class WatchedCardActionsFrontendTests(unittest.TestCase):
+    """看过的列表：除「查看分集」外，剧集墙卡片上的编辑按钮都要有。
+
+    用户反馈：「看过的列表为什么不能设定封面？除了查看分集，其他的按钮都应该有」。
+    这些是纯前端契约：卡片墙 / 表格两张皮都必须提供改名、评分、设定封面，
+    并且评分与设定封面要能就地刷新（不整页重载、避免重演「设封面卡一下」）。
+    """
+
+    def setUp(self):
+        self.js = APP_JS.read_text(encoding="utf-8")
+
+    def _cards(self):
+        return self.js.split("function watchedCardsHtml(groups) {", 1)[1].split(
+            "// 只重写列表容器", 1)[0]
+
+    def _row(self):
+        return self.js.split("function watchedRowHtml(r) {", 1)[1].split(
+            "// 看过的列表里「一部作品」", 1)[0]
+
+    def test_card_wall_has_edit_buttons(self):
+        block = self._cards()
+        for action in ("rename-watched-group", "rate-work", "set-cover", "watched-view-mode"):
+            self.assertIn(f'data-action="{action}"', block)
+        # 「查看分集」不进来：看过的作品很可能没有本地文件，跳过去只会是空列表
+        self.assertNotIn('data-view="library"', block)
+
+    def test_card_wall_has_title_for_cover_refresh(self):
+        self.assertIn('<div class="poster-card" data-title="${esc(g.key)}">', self._cards())
+
+    def test_table_row_has_edit_buttons(self):
+        block = self._row()
+        for action in ("edit-watched", "rate-work", "set-cover", "delete-watched"):
+            self.assertIn(f'data-action="{action}"', block)
+
+    def test_rename_group_case_updates_every_row(self):
+        block = self.js.split("case 'rename-watched-group': {", 1)[1].split("case '", 1)[0]
+        self.assertIn("call('update_watched'", block)
+        self.assertIn("for (const id of ids)", block)
+        self.assertIn("await renderWatched()", block)
+
+    def test_rate_work_refreshes_watched_list(self):
+        block = self.js.split("case 'rate-work': {", 1)[1].split("case '", 1)[0]
+        self.assertIn("currentView === 'watched'", block)
+        self.assertIn("watchedMetas[key] = r", block)
+        self.assertIn("renderWatchedRows()", block)
+
+    def test_set_cover_uses_partial_refresh_for_watched(self):
+        block = self.js.split("case 'set-cover': {", 1)[1].split("case '", 1)[0]
+        self.assertIn("currentView === 'watched'", block)
+        # 设定 / 清除都只刷新这一张，不再整页 renderWatched()
+        self.assertNotIn("await renderWatched()", block)
+
+    def test_cover_refresh_covers_watched_grid(self):
+        block = self.js.split("async function refreshPosterCoverCard(title) {", 1)[1].split(
+            "// ---------- 观影报告", 1)[0]
+        self.assertIn("watchedCovers[title] = cover", block)
+        self.assertIn("getElementById('watchedCards')", block)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1055,6 +1055,13 @@ class Api:
         if new_cn and new_cn != new_title:
             metadata.remember(new_title, new_cn, source="user")
             learned = True
+        # 作品名变了：封面记录也跟着挪。这条列表的封面键就是 title 本身
+        # （不像剧集墙走 title_cn），不迁移的话改一次名封面就"消失"了。
+        if title is not None and new_title != str(row.get("title") or ""):
+            try:
+                covers.rename_cover_record(row.get("title"), new_title)
+            except Exception:                    # 封面迁移失败不能连累改名
+                pass
         display_new = new_cn or new_title
         display_old = str(row.get("title_cn") or row.get("title") or "").strip()
         media_updated = 0

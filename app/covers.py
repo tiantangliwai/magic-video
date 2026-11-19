@@ -691,6 +691,35 @@ def clear_manual_cover(title: str) -> dict:
         return {"ok": False, "error": str(exc)}
 
 
+def rename_cover_record(old_title: str, new_title: str) -> int:
+    """作品改名后，把 subjects 里挂在旧标题上的封面记录改挂到新标题。
+
+    只改展示名（``title_cn``），**封面文件与 ``cover_local`` 原样不动**：同一张图
+    继续可用（``resolve_cover`` 会按新名在 ``exact`` 索引里命中同一条记录）。
+    不迁移的话，「看过的列表」改名会把封面键一起改掉——卡片上那张图会凭空消失，
+    用户会当成改名把封面弄丢了。返回更新的行数。
+    """
+    old = str(old_title or "").strip()
+    new = str(new_title or "").strip()
+    if not old or not new or _norm_key(old) == _norm_key(new):
+        return 0
+    key = _norm_key(old)
+    # 先数一遍再更新：db.execute 返回的是 lastrowid/rowcount 混合值（UPDATE 后
+    # lastrowid 仍是上一次插入的 id），不能拿来当"改了几行"。用 db.execute 而
+    # 不是自开 session，是为了让它顺带 bump 写计数、让剧集墙缓存签名失效。
+    n = db.scalar(
+        "SELECT COUNT(*) FROM subjects WHERE lower(COALESCE(title_cn,'')) = ? "
+        "OR lower(COALESCE(title_orig,'')) = ?", (key, key))
+    if not n:
+        return 0
+    db.execute(
+        "UPDATE subjects SET title_cn = ?, updated_at = ? "
+        "WHERE lower(COALESCE(title_cn,'')) = ? OR lower(COALESCE(title_orig,'')) = ?",
+        (new, db.now(), key, key),
+    )
+    return int(n)
+
+
 def save_cover_record(title: str, url: str, source: str, filename: str) -> None:
     """写 subjects 表，供剧集卡片直接读；同一张图只保留一条记录。
 

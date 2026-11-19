@@ -36,7 +36,21 @@ let watchedEditField = 'title';     // 'title'（改名）| 'season_no'（双击
 let watchedGrouped = false;         // 表格视图默认平铺，不按作品折叠
 let watchedViewMode = 'table';      // 看过的列表：默认平铺表格，卡片墙仍可一键切换
 let watchedCovers = {};             // 作品名 -> 封面 data URI（只读缓存，不触发抓取任务）
+let watchedMetas = {};              // 'watched::<作品名>' -> { rating, tags }（作品级标注）
 let watchedFolders = {};            // watched_list.id -> 匹配到的本地目录（只用来决定按钮显隐）
+
+// 看过的列表没有媒体库分组 id，评分 key 用作品名加前缀，避免和剧集墙的
+// `series::*` 分组 key 撞车（同一部作品若本地有文件，两处评分各自独立）。
+function watchedMetaKey(key) { return `watched::${String(key == null ? '' : key)}`; }
+
+// 评分 / 标签角标：剧集墙与看过的列表共用同一套展示，避免两处样式漂移。
+function metaTagsHtml(meta) {
+  const stars = meta && meta.rating
+    ? `<span class="poster-tag" title="我的评分">★ ${num(meta.rating)}</span>` : '';
+  const tags = String((meta && meta.tags) || '').split(',').filter(Boolean).slice(0, 3)
+    .map(t => `<span class="poster-tag">${esc(t)}</span>`).join('');
+  return stars + tags;
+}
 const watchedOpen = new Set();     // 已展开的分组 key
 
 const VIEW_META = {
@@ -1025,16 +1039,29 @@ function watchedRowHtml(r) {
     <td><div class="watched-actions">
       ${watchedFolderButton(r.id)}
       <button class="btn btn-sm" data-action="edit-watched" data-id="${r.id}">改名</button>
+      <button class="btn btn-sm" data-action="rate-work"
+        data-node="${esc(watchedMetaKey(watchedRowKey(r)))}" data-name="${esc(watchedRowKey(r))}"
+        data-rating="${num((watchedMetas[watchedMetaKey(watchedRowKey(r))] || {}).rating)}"
+        data-tags="${esc((watchedMetas[watchedMetaKey(watchedRowKey(r))] || {}).tags || '')}"
+        title="给这部作品打分、加标签（纯本地保存）">评分</button>
+      <button class="btn btn-sm" data-action="set-cover" data-name="${esc(watchedRowKey(r))}"
+        title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>
       <button class="btn btn-sm btn-danger" data-action="delete-watched" data-id="${r.id}">删除</button>
     </div></td>
   </tr>`;
+}
+
+// 看过的列表里「一部作品」的标识：卡片墙分组与表格行的评分 key 必须用同一个，
+// 否则同一条记录在两种视图里会显示成两个不同的评分。
+function watchedRowKey(r) {
+  return String((r && (r.title || r.title_cn)) || '').trim() || '(未命名)';
 }
 
 // 卡片墙按「作品名」折叠：一部作品一张卡片，只展示一个名字，不补中文名列
 function groupWatchedRows(rows) {
   const map = new Map();
   rows.forEach(r => {
-    const key = String(r.title || r.title_cn || '').trim() || '(未命名)';
+    const key = watchedRowKey(r);
     if (!map.has(key)) map.set(key, { key, label: key, title: r.title,
       cn: String(r.title_cn || '').trim(), seasons: new Set(), rows: [] });
     const g = map.get(key);
@@ -1056,13 +1083,23 @@ function watchedCardsHtml(groups) {
     const seasons = g.seasons.size ? `<span class="poster-tag">${g.seasons.size} 季</span>` : '';
     // 一张卡可能对应多季/多条，取组内第一条能匹配到本地目录的记录
     const folderRow = g.rows.find(r => watchedFolders[Number(r.id)]) || g.rows[0];
-    return `<div class="poster-card">${art}
+    const metaKey = watchedMetaKey(g.key);
+    const meta = watchedMetas[metaKey] || {};
+    // 用户要求：除了「查看分集」，剧集墙卡片上的编辑按钮这里都要有。
+    // 「查看分集」不放进来看过的列表——它可能根本没有本地文件，跳过去只会是空列表。
+    return `<div class="poster-card" data-title="${esc(g.key)}">${art}
       <div class="poster-body">
         <div class="poster-title" title="${esc(g.key)}">${esc(g.key)}</div>
         <div class="poster-meta">${g.rows.length} 条记录</div>
-        <div class="poster-tags">${seasons}</div>
+        <div class="poster-tags">${seasons}${metaTagsHtml(meta)}</div>
         <div class="poster-actions">
           ${folderRow ? watchedFolderButton(folderRow.id) : ''}
+          <button class="btn btn-sm" data-action="rename-watched-group"
+            data-key="${esc(g.key)}" data-ids="${esc(g.rows.map(r => num(r.id)).join(','))}"
+            title="修改这部作品在软件里显示的名称；同一作品的各季记录一起改">改名</button>
+          <button class="btn btn-sm" data-action="rate-work" data-node="${esc(metaKey)}"
+            data-name="${esc(g.key)}" data-rating="${num(meta.rating)}"
+            data-tags="${esc(meta.tags || '')}" title="给这部作品打分、加标签（纯本地保存）">评分</button>
           <button class="btn btn-sm" data-action="set-cover" data-name="${esc(g.key)}"
             title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>
           <button class="btn btn-sm" data-action="watched-view-mode">查看条目</button>
@@ -1144,6 +1181,15 @@ async function renderWatched() {
     .map(v => String(v || '').trim()).filter(Boolean))];
   watchedCovers = {};
   if (titles.length) watchedCovers = await coverUris(titles);
+  // 作品标注（评分 / 标签）：与封面并行取，失败不影响列表本身
+  const metaKeys = groupWatchedRows(watchedRows).map(g => watchedMetaKey(g.key));
+  watchedMetas = {};
+  if (metaKeys.length) {
+    try {
+      const metaRes = await call('get_work_meta', metaKeys);
+      watchedMetas = (metaRes && metaRes.items) || {};
+    } catch (_) { /* 降级：不显示星标 */ }
+  }
   const cards = watchedViewMode === 'cards';
   setContent(`<div class="card watched-card"><div class="section-head"><h3>看过的列表</h3>
       <span class="badge blue" id="watchedCount">正在统计…</span></div>
@@ -1851,10 +1897,14 @@ async function refreshPosterCoverCard(title) {
     if (cover) libCovers[title] = cover;
     else delete libCovers[title];
   }
+  // 看过的列表卡片墙用的是另一份缓存（watchedCovers），同样只动这一张
+  if (cover) watchedCovers[title] = cover;
+  else delete watchedCovers[title];
   const art = cover
     ? `<img class="poster-art" src="${cover}" alt="${esc(title)}" loading="lazy">`
     : `<div class="poster-art poster-placeholder"><span>${esc((title || '?').slice(0, 2))}</span></div>`;
-  for (const grid of [document.getElementById('posterGrid'), document.getElementById('fileListBox')]) {
+  for (const grid of [document.getElementById('posterGrid'), document.getElementById('fileListBox'),
+    document.getElementById('watchedCards')]) {
     if (!grid) continue;
     const card = [...grid.querySelectorAll('.poster-card')]
       .find(el => el.dataset.title === title);
@@ -2684,26 +2734,55 @@ async function handleAction(action, btn) {
       else await refresh();
       return;
     }
+    case 'rename-watched-group': {
+      // 看过的列表卡片墙是「一部作品一张卡」：组内可能有多季 / 多条记录。
+      // 只改第一条会让这张卡拆成两张（新旧名字各一张），所以整组一起改。
+      const old = btn.dataset.key || '';
+      const ids = String(btn.dataset.ids || '').split(',')
+        .map(v => Number(v)).filter(v => Number.isFinite(v) && v > 0);
+      if (!ids.length) { toast('没有可改名的记录', false); return; }
+      const label = await promptDialog({
+        title: '修改作品名称',
+        message: ids.length > 1
+          ? `给「${old}」换个显示名；同一作品的 ${ids.length} 条记录会一起改。`
+          : `给「${old}」换个显示名。`,
+        value: old, confirmText: '保存名称',
+      });
+      if (label === null) return;                  // 取消 / Esc
+      const name = String(label).trim();
+      if (!name) { toast('作品名不能为空', false); return; }
+      if (name === old) return;
+      let ok = 0;
+      let err = '';
+      for (const id of ids) {
+        const r = await call('update_watched', id, name, null);
+        if (r && r.ok) ok += 1;
+        else err = (r && r.error) || '改名失败';
+      }
+      if (!ok) { toast(err || '改名失败', false); return; }
+      toast(ok > 1 ? `已改名 ${ok} 条记录` : '名称已更新');
+      await renderWatched();
+      return;
+    }
     case 'set-cover': {
       const name = btn.dataset.name || '';
       if (!name) return;
-      // 剧集墙与媒体库封面墙共用同一套卡片 DOM：都走「只刷新这一张」的局部刷新，
-      // 不整墙重载、不重拉其余封面；其它视图（看过列表 / 平铺 / 剧集展示）保持原行为。
-      const onCardWall = currentView === 'posters'
+      // 剧集墙 / 媒体库封面墙 / 看过的列表卡片墙共用同一套卡片 DOM：都走「只刷新这一张」
+      // 的局部刷新，不整墙重载、不重拉其余封面。看过的列表的表格视图没有封面图，
+      // 局部刷新只会更新缓存（切到卡片墙即是新图），比整页 renderWatched() 轻得多。
+      const onCardWall = currentView === 'posters' || currentView === 'watched'
         || ((currentView === 'library' || currentView === 'scan') && fileListState.view_mode === 'cards');
       const picked = await coverDialog({ title: name });
       if (picked && picked.clear) {
         if (onCardWall) await refreshPosterCoverCard(name);
-        else if (currentView === 'watched') await renderWatched();
         return;
       }
       if (!picked) return;                       // 取消 / Esc
       const r = await call('set_cover', name, picked.data, picked.srcType);
       if (!r.ok) { toast(r.error || '设定封面失败', false); return; }
       toast('封面已更新，之后自动抓取不会再覆盖它');
-      // 剧集墙 / 媒体库封面墙只刷新这一张卡：不整墙重载，其它编辑（改名/评分/筛选）不受打断。
+      // 只刷新这一张卡：其它编辑（改名/评分/筛选）不受打断。
       if (onCardWall) await refreshPosterCoverCard(name);
-      else if (currentView === 'watched') await renderWatched();
       else await refresh();
       return;
     }
@@ -3090,6 +3169,11 @@ async function handleAction(action, btn) {
       if (!r.ok) { toast(r.error || '保存失败', false); return; }
       posterState.metas[key] = r;
       renderPosterCards();
+      // 看过的列表：卡片墙与表格共用 watchedMetas，重绘列表即可出现星标（不发请求）
+      if (currentView === 'watched') {
+        watchedMetas[key] = r;
+        renderWatchedRows();
+      }
       // 媒体库封面墙用的是同一批卡片：重绘当前缓存，评分角标立刻出现（不发请求）
       if ((currentView === 'library' || currentView === 'scan') && fileListState.view_mode === 'cards') {
         repaintFileList();

@@ -311,5 +311,31 @@ class ShortTitleFuzzyTests(IsolatedDbTestCase):
         self.assertNotIn("捏造陷阱", out)
 
 
+class CoverRecordRenameTests(IsolatedDbTestCase):
+    """作品改名后封面记录要跟着走（2026-11-19 看过的列表加改名按钮）。"""
+
+    def setUp(self):
+        super().setUp()
+        covers.config.COVER_DIR.mkdir(parents=True, exist_ok=True)
+        (covers.config.COVER_DIR / "ren.jpg").write_bytes(b"x" * 1024)
+
+    def test_record_follows_new_title(self):
+        covers.save_cover_record("旧番名", "http://example/x.jpg", "manual", "ren.jpg")
+        self.assertEqual(covers.rename_cover_record("旧番名", "新番名"), 1)
+        entries = covers.all_cover_entries()
+        self.assertEqual(
+            covers.resolve_cover_many([("新番名", ["新番名"])], entries).get("新番名"),
+            "ren.jpg")
+        # 旧名不该再拿到这张图（否则同一张封面挂两个作品键）
+        self.assertNotIn(
+            "旧番名", covers.resolve_cover_many([("旧番名", ["旧番名"])], entries))
+
+    def test_same_or_empty_title_is_noop(self):
+        covers.save_cover_record("同名", "http://example/x.jpg", "manual", "ren.jpg")
+        self.assertEqual(covers.rename_cover_record("同名", "同名 "), 0)
+        self.assertEqual(covers.rename_cover_record("", "新名"), 0)
+        self.assertEqual(covers.rename_cover_record("同名", ""), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
