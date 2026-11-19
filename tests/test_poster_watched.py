@@ -291,5 +291,58 @@ class PosterMarkerFrontendTests(unittest.TestCase):
         self.assertIn("本地暂无文件", block)
 
 
+class PosterEditModeFrontendTests(unittest.TestCase):
+    """剧集墙「纯查看 / 编辑」切换 + 移除继续观看跳转的静态契约。
+
+    需求原话（用户 2026-11-19）：增加纯查看模式和编辑模式的切换；两种模式都不需要
+    「继续观看」直接跳转播放。默认纯查看，编辑按钮收进编辑模式。
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.js = APP_JS.read_text(encoding="utf-8")
+
+    def test_default_is_view_mode(self):
+        state = self.js.split("let posterState = {", 1)[1].split("};", 1)[0]
+        self.assertIn("editMode: false", state)
+        self.assertNotIn("continueRow", state)
+
+    def test_toggle_buttons_and_handler_exist(self):
+        block = self.js.split("async function renderPosters()", 1)[1].split(
+            "// 全盘快搜是左侧独立入口", 1)[0]
+        self.assertIn('data-action="poster-edit-mode" data-edit="0"', block)
+        self.assertIn('data-action="poster-edit-mode" data-edit="1"', block)
+        self.assertIn("纯查看", block)
+        self.assertIn("编辑模式", block)
+        handler = self.js.split("case 'poster-edit-mode':", 1)[1].split("case 'rate-work':", 1)[0]
+        self.assertIn("btn.dataset.edit === '1'", handler)
+        self.assertIn("renderPosterCards()", handler)
+
+    def test_edit_buttons_are_gated_by_edit_mode(self):
+        block = self.js.split("const editButtons = posterState.editMode ?", 1)[1].split(
+            "return `<div class=\"poster-card\">", 1)[0]
+        for action in ("rename-work", "rate-work", "set-cover"):
+            self.assertIn(action, block)
+        self.assertIn("${cleanup}", block)
+        # 清理按钮本身也带 delete-series-files，且只在 editMode 分支被拼进来
+        cleanup_block = self.js.split("const cleanup = card.all_done", 1)[1].split(
+            "const removedTag =", 1)[0]
+        self.assertIn("delete-series-files", cleanup_block)
+        # 四个按钮全在 editMode 分支里；返回模板只拼 editButtons，没有裸按钮
+        returned = self.js.split('<div class="poster-actions">${editButtons}', 1)[1].split(
+            "</div></div>`;", 1)[0]
+        for action in ("rename-work", "rate-work", "set-cover", "delete-series-files"):
+            self.assertNotIn(action, returned)
+        self.assertIn('data-action="goto"', returned)
+
+    def test_continue_row_fully_removed_from_poster_wall(self):
+        block = self.js.split("// ---------- 剧集墙：卡片式展示", 1)[1].split(
+            "// ---------- 观影报告", 1)[0]
+        self.assertNotIn("get_continue_row", block)
+        self.assertNotIn("renderContinueRow", block)
+        self.assertNotIn("continueRow", block)
+        self.assertNotIn('id="continueRow"', block)
+
+
 if __name__ == "__main__":
     unittest.main()

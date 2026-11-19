@@ -1613,8 +1613,11 @@ function renderDiagnose(data) {
 }
 
 // ---------- 剧集墙：卡片式展示（参考 SeedHub / AGE动漫 的作品墙） ----------
-let posterState = { keyword: '', cards: [], seasonCards: [], continueRow: [], metas: {},
-  mode: 'work', covers: {}, status: {}, loading: false, source: 'all', match_state: '' };
+// editMode=false 为默认「纯查看」：卡片不出现改名/评分/设定封面/清理按钮；
+// 切到「编辑模式」才显示这些动作。两种模式都不再放「继续观看」跳转行（总览页保留）。
+let posterState = { keyword: '', cards: [], seasonCards: [], metas: {},
+  mode: 'work', editMode: false, covers: {}, status: {}, loading: false,
+  source: 'all', match_state: '' };
 let esState = { keyword: '', rows: [], source: '', hint: '' };
 let procPollTimer = null;
 
@@ -1672,6 +1675,8 @@ function posterCardHtml(card, cover) {
   const progress = card.playing_count ? `<span class="poster-tag amber">在看 ${num(card.playing_count)}</span>` : '';
   // 用户要求：剧集墙不放「播放下一集」；「查看分集」必须带着搜索词跳过去，
   // 否则切到媒体库后满屏文件，忘了自己是从哪部作品点进来的。
+  // 纯查看模式（默认）只留「查看分集」这个只读入口；改名 / 清理 / 评分 / 设定封面
+  // 这些编辑动作统一收进「编辑模式」，避免浏览时误点，也让墙看起来更干净。
   const cleanup = card.all_done && num(card.removable_count) > 0
     ? `<button class="btn btn-sm btn-danger" data-action="delete-series-files"
         data-node="${esc(card.group_id)}" title="整部已看完：把本地文件移入回收站，观看记录保留">清理本地文件</button>`
@@ -1684,19 +1689,20 @@ function posterCardHtml(card, cover) {
   const stars = meta.rating ? `<span class="poster-tag" title="我的评分">★ ${num(meta.rating)}</span>` : '';
   const tagList = String(meta.tags || '').split(',').filter(Boolean).slice(0, 3)
     .map(t => `<span class="poster-tag">${esc(t)}</span>`).join('');
-  return `<div class="poster-card">${art}${posterStateTag(card)}
-    <div class="poster-body">
-      <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
-      <div class="poster-meta">${num(card.file_count)} 集</div>
-      <div class="poster-tags">${seasons}${progress}${removedTag}${stars}${tagList}</div>
-      <div class="poster-actions">
+  const editButtons = posterState.editMode ? `
         <button class="btn btn-sm" data-action="rename-work" data-node="${esc(card.group_id)}"
           data-name="${esc(card.title)}" title="修改这部作品在软件里显示的名称">改名</button>${cleanup}
         <button class="btn btn-sm" data-action="rate-work" data-node="${esc(metaKey)}"
           data-name="${esc(card.work_title || card.title)}" data-rating="${num(meta.rating)}"
           data-tags="${esc(meta.tags || '')}" title="给这部作品打分、加标签（纯本地保存）">评分</button>
         <button class="btn btn-sm" data-action="set-cover" data-name="${esc(card.title)}"
-          title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>
+          title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>` : '';
+  return `<div class="poster-card">${art}${posterStateTag(card)}
+    <div class="poster-body">
+      <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
+      <div class="poster-meta">${num(card.file_count)} 集</div>
+      <div class="poster-tags">${seasons}${progress}${removedTag}${stars}${tagList}</div>
+      <div class="poster-actions">${editButtons}
         <button class="btn btn-sm" data-action="goto" data-view="library"
           data-keyword="${esc(card.search_keyword || card.title)}">查看分集</button></div>
     </div></div>`;
@@ -1718,33 +1724,6 @@ function renderPosterCards() {
   box.innerHTML = cards.length
     ? cards.map(c => posterCardHtml(c, posterState.covers[c.title])).join('')
     : empty('还没有作品卡片', '先在「扫描目录」添加视频目录；抓取封面后会显示海报');
-}
-
-// 「继续观看」置顶行（P2-2）：同一作品只留最新一条，点海报直接续播
-function renderContinueRow() {
-  const box = document.getElementById('continueRow');
-  if (!box) return;
-  const items = posterState.continueRow || [];
-  if (!items.length) { box.innerHTML = ''; return; }
-  box.innerHTML = `<div class="section-head" style="margin-top:4px">
-      <h3 style="font-size:14px">继续观看</h3>
-      <span class="badge blue">${items.length} 部</span></div>
-    <div class="continue-row">${items.map(it => {
-      const follow = !!it.after_completed;
-      const ep = follow
-        ? `接第 ${num(it.from_episode)} 集 → 第 ${num(it.episode_no)} 集`
-        : (it.episode_no ? `第 ${num(it.episode_no)} 集` : esc(it.filename || ''));
-      const season = it.season_no ? `S${num(it.season_no)} · ` : '';
-      const pct = Math.max(0, Math.min(100, num(it.percent)));
-      return `<button class="continue-card" data-action="play" data-id="${num(it.file_id)}"
-          title="${follow ? '播放下一集' : '继续观看'} ${esc(it.work_title)} ${esc(ep)}">
-        <div class="continue-art">${esc((it.work_title || '?').slice(0, 2))}</div>
-        <div class="continue-body">
-          <div class="continue-title">${esc(it.work_title)}</div>
-          <div class="continue-meta">${season}${ep}${follow ? ' · 下一集' : ''}</div>
-          <div class="bar" style="margin-top:6px"><span style="width:${pct}%"></span></div>
-        </div></button>`;
-    }).join('')}</div>`;
 }
 
 function renderCoverStatus() {
@@ -1770,14 +1749,10 @@ async function loadPosterWall() {
   if (posterState.loading) return;
   posterState.loading = true;
   try {
-    const [data, cont] = await Promise.all([
-      call('get_poster_wall', { keyword: posterState.keyword,
-        source: posterState.source, match_state: posterState.match_state }),
-      call('get_continue_row', 12),
-    ]);
+    const data = await call('get_poster_wall', { keyword: posterState.keyword,
+      source: posterState.source, match_state: posterState.match_state });
     posterState.cards = data.cards || [];
     posterState.seasonCards = data.season_cards || [];
-    posterState.continueRow = (cont && cont.items) || [];
     posterState.covers = data.covers || {};
     posterState.status = data.cover_status || {};
     // 作品标注（评分/标签）一次取齐，卡片渲染时直接读，避免每张卡一次调用
@@ -1791,7 +1766,6 @@ async function loadPosterWall() {
     // 有缓存的封面用 data URI 补齐（后端一次性返回，避免 file:// 跨域）
     const titles = Object.keys(posterState.covers);
     if (titles.length) posterState.covers = await coverUris(titles);
-    renderContinueRow();
     renderPosterCards();
     renderCoverStatus();
   } catch (err) {
@@ -1919,8 +1893,8 @@ async function renderPosters() {
   setContent(`<div class="card"><div class="section-head"><h3>剧集墙</h3>
       <span class="badge blue" id="posterCount">正在统计…</span></div>
     <p class="hint">按作品展示海报、季数与分集入口。默认合并本地作品与「看过的列表」里还没下载的作品；
-      可用来源 / 状态筛选。点「查看分集」会带着作品名跳到媒体库，不用再手动输一次。
-      封面的后台抓取与进度已整合到左侧<b>「后台进程」</b>页。</p>
+      可用来源 / 状态筛选。<b>纯查看模式</b>只展示海报与「查看分集」，切到<b>编辑模式</b>才出现改名 / 评分 / 设定封面 / 清理按钮。
+      点「查看分集」会带着作品名跳到媒体库，不用再手动输一次。封面的后台抓取与进度在左侧<b>「后台进程」</b>页。</p>
     <div class="watched-toolbar">
       <input class="input" id="posterSearch" placeholder="搜索作品名…" value="${esc(posterState.keyword)}" autocomplete="off">
       <select class="input poster-filter" id="posterSource" title="只看本地有文件的作品，或只看看过列表里还没下载的作品">
@@ -1935,8 +1909,9 @@ async function renderPosters() {
       </select>
       <button class="btn btn-sm ${posterState.mode === 'work' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="work">按作品</button>
       <button class="btn btn-sm ${posterState.mode === 'season' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="season">按季</button>
+      <button class="btn btn-sm ${!posterState.editMode ? 'btn-primary' : ''}" data-action="poster-edit-mode" data-edit="0" title="只浏览海报与分集，不显示改名 / 设定封面等按钮">纯查看</button>
+      <button class="btn btn-sm ${posterState.editMode ? 'btn-primary' : ''}" data-action="poster-edit-mode" data-edit="1" title="显示改名 / 评分 / 设定封面 / 清理按钮">编辑模式</button>
     </div>
-    <div id="continueRow"></div>
     <div id="posterGrid" class="poster-grid">${empty('正在加载剧集墙', '读取媒体库分组…')}</div>
   </div>`);
   await loadPosterWall();
@@ -2987,6 +2962,14 @@ async function handleAction(action, btn) {
       posterState.mode = mode;
       document.querySelectorAll('[data-action="poster-mode"]').forEach(b => {
         b.classList.toggle('btn-primary', b.dataset.mode === mode);
+      });
+      renderPosterCards();
+      return;
+    }
+    case 'poster-edit-mode': {
+      posterState.editMode = btn.dataset.edit === '1';
+      document.querySelectorAll('[data-action="poster-edit-mode"]').forEach(b => {
+        b.classList.toggle('btn-primary', (b.dataset.edit === '1') === posterState.editMode);
       });
       renderPosterCards();
       return;
