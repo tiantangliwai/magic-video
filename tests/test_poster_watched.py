@@ -179,6 +179,49 @@ class PosterWatchedCardsTests(IsolatedDbTestCase):
         self.assertEqual(card["removable_count"], 0)
         self.assertTrue(card["group_id"].startswith("watched::"))
 
+    def test_watched_only_card_carries_row_ids_and_work_key(self):
+        """合成卡要给出「改名用的行 id 组」与「评分用的 work_key」。
+
+        用户 2026-11-19：本地没文件的卡片也要能改名 / 评分 / 设定封面。
+        同一作品可能有多季多条记录（S1 一行、S2 一行），改名必须整组一起改，
+        否则改完一张卡会裂成「新名字 + 旧名字」两张；评分 key 用卡片展示名，
+        与卡片自己的标题同源。
+        """
+        self._add_watched("多季作品")
+        self._add_watched("多季作品")
+        cards = self.client.get_poster_wall({"source": "watched"})["cards"]
+        card = next(c for c in cards if c["title"] == "多季作品")
+        self.assertTrue(card["readonly"])
+        self.assertGreaterEqual(len(card["watched_ids"]), 2)
+        self.assertEqual(card["work_key"], "watched::多季作品")
+
+    def test_watched_only_card_settings_cover_shows_on_wall(self):
+        """合成卡「设定封面」要真的生效：设完剧集墙就能取到这张图。
+
+        这类卡没有本地文件，封面只能从 subjects(source='manual') 来；
+        之前只读卡连按钮都没有，用户没法给它们换掉自动抓错的图。
+        """
+        import base64
+        self._add_watched("纯记录作品B")
+        self.assertEqual(self.client.get_poster_wall({"source": "watched"})["covers"], {})
+        uri = "data:image/jpeg;base64," + base64.b64encode(
+            b"\xff\xd8\xff" + b"x" * 1024).decode("ascii")
+        r = self.client.set_cover("纯记录作品B", uri, "datauri")
+        self.assertTrue(r["ok"], r)
+        wall = self.client.get_poster_wall({"source": "watched"})
+        self.assertIn("纯记录作品B", wall["covers"])
+        out = self.client.cover_data_uris(["纯记录作品B"])
+        self.assertTrue(out["纯记录作品B"].startswith("data:image/jpeg;base64,"))
+
+    def test_watched_only_card_rating_key_is_the_card_title(self):
+        """给合成卡打分后，用卡片展示名能立刻取回这条标注。"""
+        self._add_watched("纯记录作品C")
+        card = self.client.get_poster_wall({"source": "watched"})["cards"][0]
+        r = self.client.save_work_meta(card["work_key"], "8", "神作")
+        self.assertTrue(r.get("ok", True), r)
+        got = self.client.get_work_meta([card["work_key"]])
+        self.assertEqual(str(got["items"].get(card["work_key"], {}).get("rating")), "8")
+
     def test_match_state_matched_unmatched_on_watched_cards(self):
         self._add_watched("有中文名的番", "有中文名的番")
         # 无中文名：title_cn 留空，卡片标题回落到 title
@@ -282,13 +325,35 @@ class PosterMarkerFrontendTests(unittest.TestCase):
         self.assertIn("el.id === 'posterSource'", self.js)
         self.assertIn("el.id === 'posterMatch'", self.js)
 
-    def test_readonly_card_has_no_action_buttons(self):
+    def test_readonly_card_has_only_local_record_actions(self):
+        """本地没文件的合成卡：改名 / 评分 / 设定封面要能用，「查看分集 / 清理」不能。
+
+        用户 2026-11-19 反馈：「看过 · 本地暂无文件 这些还是不能改名、评分、设定封面」。
+        这三件事只依赖本地记录（watched_list + subjects + work_meta），与有没有下载无关，
+        所以必须在编辑模式下给出来；而「查看分集 / 清理本地文件」确实无对象，不能给。
+        """
         block = self.js.split("if (card.readonly) {", 1)[1].split("const seasons =", 1)[0]
         self.assertIn("is-readonly", block)
-        for action in ("rename-work", "delete-series-files", "set-cover",
-                       "rate-work", "data-action=\"goto\""):
-            self.assertNotIn(action, block)
         self.assertIn("本地暂无文件", block)
+        # 能用的三个动作：改名在本块内，评分 / 设定封面由共用的 metaButtons 提供
+        self.assertIn('data-action="rename-watched-group"', block)
+        self.assertIn("data-sync-cn", block)          # 合成卡展示名是 title_cn，要一起改
+        self.assertIn("${metaButtons}", block)
+        meta_block = self.js.split("const metaButtons = editMode ?", 1)[1].split(
+            "if (card.readonly) {", 1)[0]
+        self.assertIn('data-action="rate-work"', meta_block)
+        self.assertIn('data-action="set-cover"', meta_block)
+        # 不能用的两个动作
+        for action in ("rename-work", "delete-series-files", 'data-action="goto"'):
+            self.assertNotIn(action, block)
+        # 和别的卡片一样收在编辑模式里，纯查看模式不显示
+        self.assertIn("editMode && ids.length", block)
+
+    def test_readonly_card_rename_uses_watched_row_ids(self):
+        """改名要带上同作品的全部 watched_list 行 id，否则一张卡会裂成两张。"""
+        block = self.js.split("if (card.readonly) {", 1)[1].split("const seasons =", 1)[0]
+        self.assertIn("card.watched_ids", block)
+        self.assertIn("data-ids=", block)
 
 
 class PosterEditModeFrontendTests(unittest.TestCase):
@@ -321,14 +386,20 @@ class PosterEditModeFrontendTests(unittest.TestCase):
     def test_edit_buttons_are_gated_by_edit_mode(self):
         block = self.js.split("const editButtons = editMode ?", 1)[1].split(
             "return `<div class=\"poster-card\"", 1)[0]
-        for action in ("rename-work", "rate-work", "set-cover"):
-            self.assertIn(action, block)
+        self.assertIn("rename-work", block)
         self.assertIn("${cleanup}", block)
+        # 评分 / 设定封面抽成 metaButtons（本地卡与「本地暂无文件」卡共用一份），
+        # 它自己也在 editMode 三元里，纯查看模式同样不出现。
+        meta_block = self.js.split("const metaButtons = editMode ?", 1)[1].split(
+            "if (card.readonly) {", 1)[0]
+        for action in ("rate-work", "set-cover"):
+            self.assertIn(action, meta_block)
+        self.assertIn("${metaButtons}", block)
         # 清理按钮本身也带 delete-series-files，且只在 editMode 分支被拼进来
         cleanup_block = self.js.split("const cleanup = card.all_done", 1)[1].split(
             "const removedTag =", 1)[0]
         self.assertIn("delete-series-files", cleanup_block)
-        # 四个按钮全在 editMode 分支里；返回模板只拼 editButtons，没有裸按钮
+        # 编辑按钮全在 editMode 分支里；返回模板只拼 editButtons / metaButtons，没有裸按钮
         returned = self.js.split('<div class="poster-actions">${editButtons}', 1)[1].split(
             "</div></div>`;", 1)[0]
         for action in ("rename-work", "rate-work", "set-cover", "delete-series-files"):

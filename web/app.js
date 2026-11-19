@@ -1764,13 +1764,36 @@ function posterCardHtml(card, cover, editMode = posterState.editMode) {
   const art = cover
     ? `<img class="poster-art" src="${cover}" alt="${esc(card.title)}" loading="lazy">`
     : `<div class="poster-art poster-placeholder"><span>${esc((card.title || '?').slice(0, 2))}</span></div>`;
-  // 「看过的列表」里本地没文件的作品：只读卡片，只展示海报 + 名字 + 看过角标，
-  // 不给任何操作按钮（改名 / 清理 / 设封面 / 评分 / 查看分集 都需要本地文件或 group）。
+  // 作品标注（P2-4）：评分与标签都挂在作品上，季卡片共用同一个 key
+  const metaKey = card.work_key || card.group_id || card.title;
+  const meta = posterState.metas[metaKey] || {};
+  const stars = meta.rating ? `<span class="poster-tag" title="我的评分">★ ${num(meta.rating)}</span>` : '';
+  const tagList = String(meta.tags || '').split(',').filter(Boolean).slice(0, 3)
+    .map(t => `<span class="poster-tag">${esc(t)}</span>`).join('');
+  // 评分 / 设定封面只是本地记录，跟「有没有下载」无关：两种卡片都在编辑模式下给。
+  const metaButtons = editMode ? `
+        <button class="btn btn-sm" data-action="rate-work" data-node="${esc(metaKey)}"
+          data-name="${esc(card.work_title || card.title)}" data-rating="${num(meta.rating)}"
+          data-tags="${esc(meta.tags || '')}" title="给这部作品打分、加标签（纯本地保存）">评分</button>
+        <button class="btn btn-sm" data-action="set-cover" data-name="${esc(card.title)}"
+          title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>` : '';
+  // 「看过的列表」里本地没文件的作品：没有集可看、没有文件可清理，但**改名 / 评分 /
+  // 设定封面必须能用**（用户要求）。改名改的是 watched_list 的记录，走
+  // rename-watched-group（整组一起改，避免一张卡裂成两张），并且连中文名一起改，
+  // 因为合成卡的展示名就是 title_cn。
   if (card.readonly) {
-    return `<div class="poster-card is-readonly">${art}${posterStateTag(card)}
+    const ids = (card.watched_ids && card.watched_ids.length ? card.watched_ids : [card.id])
+      .map(v => num(v)).filter(v => v > 0);
+    const renameBtn = editMode && ids.length ? `
+        <button class="btn btn-sm" data-action="rename-watched-group" data-key="${esc(card.title)}"
+          data-ids="${esc(ids.join(','))}" data-sync-cn="1"
+          title="修改这部作品在软件里显示的名称；同一作品的多条记录一起改">改名</button>` : '';
+    return `<div class="poster-card is-readonly" data-title="${esc(card.title)}">${art}${posterStateTag(card)}
       <div class="poster-body">
         <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
         <div class="poster-meta">看过 · 本地暂无文件</div>
+        <div class="poster-tags">${stars}${tagList}</div>
+        <div class="poster-actions">${renameBtn}${metaButtons}</div>
       </div></div>`;
   }
   const seasons = card.season_count > 1 && posterState.mode !== 'season'
@@ -1786,20 +1809,9 @@ function posterCardHtml(card, cover, editMode = posterState.editMode) {
     : '';
   const removedTag = card.all_done && num(card.removable_count) === 0
     ? '<span class="poster-tag amber">本地文件已移除</span>' : '';
-  // 作品标注（P2-4）：评分与标签都挂在作品上，季卡片共用同一个 key
-  const metaKey = card.work_key || card.group_id || card.title;
-  const meta = posterState.metas[metaKey] || {};
-  const stars = meta.rating ? `<span class="poster-tag" title="我的评分">★ ${num(meta.rating)}</span>` : '';
-  const tagList = String(meta.tags || '').split(',').filter(Boolean).slice(0, 3)
-    .map(t => `<span class="poster-tag">${esc(t)}</span>`).join('');
   const editButtons = editMode ? `
         <button class="btn btn-sm" data-action="rename-work" data-node="${esc(card.group_id)}"
-          data-name="${esc(card.title)}" title="修改这部作品在软件里显示的名称">改名</button>${cleanup}
-        <button class="btn btn-sm" data-action="rate-work" data-node="${esc(metaKey)}"
-          data-name="${esc(card.work_title || card.title)}" data-rating="${num(meta.rating)}"
-          data-tags="${esc(meta.tags || '')}" title="给这部作品打分、加标签（纯本地保存）">评分</button>
-        <button class="btn btn-sm" data-action="set-cover" data-name="${esc(card.title)}"
-          title="自动抓错图时，粘贴/选择/填网址手动设定这张封面">设定封面</button>` : '';
+          data-name="${esc(card.title)}" title="修改这部作品在软件里显示的名称">改名</button>${cleanup}${metaButtons}` : '';
   return `<div class="poster-card" data-title="${esc(card.title)}">${art}${posterStateTag(card)}
     <div class="poster-body">
       <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
@@ -2754,14 +2766,19 @@ async function handleAction(action, btn) {
       if (name === old) return;
       let ok = 0;
       let err = '';
+      // 剧集墙「看过 · 本地暂无文件」的合成卡按 title_cn 展示，仅改 title 名字不会变；
+      // 这类卡片带 data-sync-cn="1"，中英文名一起改。
+      const syncCn = btn.dataset.syncCn === '1' ? name : null;
       for (const id of ids) {
-        const r = await call('update_watched', id, name, null);
+        const r = await call('update_watched', id, name, syncCn);
         if (r && r.ok) ok += 1;
         else err = (r && r.error) || '改名失败';
       }
       if (!ok) { toast(err || '改名失败', false); return; }
       toast(ok > 1 ? `已改名 ${ok} 条记录` : '名称已更新');
-      await renderWatched();
+      // 从哪来回哪去：剧集墙重载墙（合成卡的展示名由后端算），看过的列表只重绘列表。
+      if (currentView === 'posters') await loadPosterWall();
+      else await renderWatched();
       return;
     }
     case 'set-cover': {

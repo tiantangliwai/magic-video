@@ -1062,6 +1062,14 @@ class Api:
                 covers.rename_cover_record(row.get("title"), new_title)
             except Exception:                    # 封面迁移失败不能连累改名
                 pass
+        # 剧集墙里「看过 · 本地暂无文件」的合成卡是按 title_cn 展示的，用户在那里
+        # 改名会同时写 title 与 title_cn；中文名键下的封面也一起挪，否则图会丢。
+        old_cn = str(row.get("title_cn") or "").strip()
+        if new_cn and old_cn and new_cn != old_cn:
+            try:
+                covers.rename_cover_record(old_cn, new_cn)
+            except Exception:
+                pass
         display_new = new_cn or new_title
         display_old = str(row.get("title_cn") or row.get("title") or "").strip()
         media_updated = 0
@@ -1768,13 +1776,25 @@ class Api:
 
         剧集墙默认合并本地作品 + 看过列表，让「看过但还没下载」的作品也能看到海报。
         有本地文件的条目由树卡片负责（会标「看过」），这里只补**没有**本地卡片的，避免重复。
-        合成卡片 ``readonly=True``：无 file_count / next_file_id，前端只渲染海报与名字。
+        合成卡片 ``readonly=True``：没有集可看、没有文件可清理，但改名 / 评分 / 设定封面
+        都是纯本地记录操作，前端在编辑模式下照常给出这三个按钮（用户要求）。
         """
         rows = db.rows(
             "SELECT id, title, title_cn, season_no FROM watched_list ORDER BY title_cn, title"
         )
         rows = blacklist.filter_rows(rows, keys=("title", "title_cn", "raw_text"))
         kw = str(keyword or "").strip().lower()
+        # 同一部作品可能有多季 / 多条记录（一部番拆成 S1、S2 两行）。卡片按作品名折叠，
+        # 改名必须整组一起改，否则改完一张卡会裂成「新名字 + 旧名字」两张。
+        ids_by_key: dict[str, list[int]] = {}
+        for row in rows:
+            name = str(row.get("title_cn") or row.get("title") or "").strip()
+            if not name:
+                continue
+            bucket = ids_by_key.setdefault(re.sub(r"\s+", "", name).lower(), [])
+            rid = int(row.get("id") or 0)
+            if rid > 0 and rid not in bucket:
+                bucket.append(rid)
         cards: list[dict] = []
         seen: set[str] = set()
         for row in rows:
@@ -1807,13 +1827,17 @@ class Api:
                 "seasons": [],
                 "sub": "",
                 "group_id": f"watched::{int(row.get('id') or 0)}",
-                "work_key": f"watched::{int(row.get('id') or 0)}",
+                # 评分 / 标签按「作品」存，key 与卡片展示名同源；改名时整组一起改
+                "work_key": f"watched::{title}",
+                # 改名要改的是 watched_list 的这几行（可能是多季多条）
+                "watched_ids": ids_by_key.get(key) or [int(row.get("id") or 0)],
                 "all_done": False,
                 "watch_state": "listed",
                 "watched_listed": True,
                 "removable_count": 0,
-                "readonly": True,             # 前端据此只渲染海报 + 名字，无操作按钮
-                "_cover_titles": [title, str(row.get("title") or "").strip()],
+                "readonly": True,             # 前端据此隐藏「查看分集 / 清理本地文件」
+                "_cover_titles": [title, str(row.get("title") or "").strip(),
+                                  str(row.get("title_cn") or "").strip()],
             })
         return cards
 

@@ -1898,3 +1898,50 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
 - 测试：`tests/test_poster_watched.py::WatchedCardActionsFrontendTests` 7 例前端契约；
   `tests/test_covers.py::CoverRecordRenameTests` 2 例；`tests/test_watchlist.py` 1 例端到端。
 - 门禁：`compileall` + `node --check` 通过；增量 590/590 全绿。
+
+## 54. 剧集墙「本地暂无文件」的卡片也能改名 / 评分 / 设定封面（2026-11-19）
+
+### 54-A 场景
+用户反馈：「看过 · 本地暂无文件 这些还是不能改名、评分、设定封面」。
+
+剧集墙把「看过的列表」里本地没文件的条目补成了合成卡（`readonly=True`），
+上一版为了不误点，整张卡只渲染海报 + 名字 + 「看过」角标，**一个按钮都不给**。
+但这三件事其实都只依赖本地记录——改名改 `watched_list`、评分写 `work_meta`、
+设定封面写 `subjects(source='manual')`——跟有没有下载完全无关。
+
+### 54-B 设计
+- **合成卡与普通卡共用编辑按钮组**：评分 / 设定封面抽成 `metaButtons`，两种卡共用一份；
+  改名在合成卡上换成 `rename-watched-group`（改 `watched_list`，不是改媒体文件标题）。
+- **不给的两个按钮**：`查看分集`（没有文件，跳过去必定空白）与 `清理本地文件`
+  （`removable_count` 恒为 0）。这是「不能给」，不是「暂时没做」。
+- **改名整组一起改**：同一作品可能有多季 / 多条记录（真库 132 部作品里有 6 部是多行），
+  后端 `_watched_only_cards` 下发 `watched_ids`（同名的全部行 id），前端逐个
+  `update_watched`，否则改完一张卡会裂成「新名字 + 旧名字」两张。
+- **改名连中文名一起改**（`data-sync-cn="1"`）：合成卡的展示名是 `title_cn`，
+  只改 `title` 名字不会变。`update_watched` 改名时也把 `title_cn` 键下的封面记录
+  一起迁移（`rename_cover_record`），避免用户设过的封面在改名后"消失"。
+- **评分 key 用卡片展示名**：`work_key = watched::<卡片标题>`，卡片渲染读的就是它，
+  打完分立刻能看到星标，不需要整墙重载。
+- **仍然受编辑模式约束**：纯查看模式依旧只有海报与角标，编辑模式才出现这三个按钮。
+
+### 54-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 54-C1 | 编辑模式下「本地暂无文件」卡片有 改名 / 评分 / 设定封面 |
+| 54-C2 | 纯查看模式下这三颗按钮不出现 |
+| 54-C3 | 不出现「查看分集」「清理本地文件」 |
+| 54-C4 | 改名把同作品的多季多条记录一起改，卡片不裂开 |
+| 54-C5 | 改名后卡片显示新名字（中文名同步），原封面不丢 |
+| 54-C6 | 设定封面后剧集墙立刻显示新图（只刷新这一张）|
+| 54-C7 | 打分后卡片立刻出现 ★，与「看过的列表」互不干扰 |
+
+### 54-D 实现位置
+- `app/api.py`：`_watched_only_cards` 补 `watched_ids` 与 `work_key='watched::<标题>'`，
+  `_cover_titles` 同时带 `title` 与 `title_cn`；`update_watched` 改名时迁移 `title_cn`
+  键下的封面记录。
+- `web/app.js`：`posterCardHtml` 提取 `metaButtons`（评分 / 设定封面共用），
+  `readonly` 分支补改名按钮；`handleAction` 的 `rename-watched-group` 支持
+  `data-sync-cn` 并按当前视图分派刷新（剧集墙 `loadPosterWall` / 看过的列表 `renderWatched`）。
+- 测试：`tests/test_poster_watched.py` 后端 2 例（整组 id / 设定封面生效 / 评分 key）+
+  前端 2 例（合成卡按钮集合、改名带行 id）。
+- 门禁：`compileall` + `node --check` 通过；增量 **562/562** 全绿。
