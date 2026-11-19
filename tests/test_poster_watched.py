@@ -119,6 +119,103 @@ class PosterWatchStateTests(IsolatedDbTestCase):
         self.assertEqual(self._card(client, "后补进看过的列表")["watch_state"], "listed")
 
 
+class PosterWatchedCardsTests(IsolatedDbTestCase):
+    """剧集墙纳入「看过的列表」里本地无文件的作品 + 来源 / 状态过滤。"""
+
+    def setUp(self):
+        super().setUp()
+        self.client = api.Api()
+
+    def _add_watched(self, title, title_cn=None):
+        db.execute(
+            "INSERT INTO watched_list(title, title_cn, source, status) VALUES (?, ?, ?, ?)",
+            (title, title_cn if title_cn is not None else title, "manual", "watched"),
+        )
+
+    def _titles(self, opt):
+        return [c["title"] for c in self.client.get_poster_wall(opt)["cards"]]
+
+    def test_default_all_merges_local_and_watched_only(self):
+        # 本地一部 + 看过列表两部（其中一部本地已有，一部只有记录）
+        folder = self.tmp / "本地作品A"
+        folder.mkdir(exist_ok=True)
+        self.media("本地作品A 01.mkv", path=str(folder / "本地作品A 01.mkv"),
+                   title_guess="本地作品A")
+        self.media("本地作品A 02.mkv", path=str(folder / "本地作品A 02.mkv"),
+                   title_guess="本地作品A")
+        self._add_watched("本地作品A")            # Duplicate of local
+        self._add_watched("只有记录的番B")          # watched-only
+        titles = self._titles({})                   # 默认 source=all
+        self.assertIn("本地作品A", titles)
+        self.assertIn("只有记录的番B", titles)
+        # 本地已有的不重复补成只读卡
+        self.assertEqual(titles.count("本地作品A"), 1)
+
+    def test_source_local_excludes_watched_only(self):
+        self._add_watched("仅看过列表的作品")
+        self.assertNotIn("仅看过列表的作品", self._titles({"source": "local"}))
+        self.assertIn("仅看过列表的作品", self._titles({"source": "all"}))
+
+    def test_source_watched_returns_only_readonly_cards(self):
+        folder = self.tmp / "本地作品C"
+        folder.mkdir(exist_ok=True)
+        self.media("本地作品C 01.mkv", path=str(folder / "本地作品C 01.mkv"),
+                   title_guess="本地作品C")
+        self._add_watched("仅看过列表的作品")
+        wall = self.client.get_poster_wall({"source": "watched"})
+        self.assertEqual([c["title"] for c in wall["cards"]], ["仅看过列表的作品"])
+        card = wall["cards"][0]
+        self.assertTrue(card["readonly"])
+        self.assertEqual(card["file_count"], 0)
+        self.assertEqual(card["watch_state"], "listed")
+        # 合成卡的标题也纳入封面解析字典（有封面则出现，无封面则不在，均不报错）
+        self.assertIsInstance(wall["covers"], dict)
+
+    def test_watched_only_card_is_readonly_with_no_file_fields(self):
+        self._add_watched("纯记录作品")
+        card = self.client.get_poster_wall({"source": "watched"})["cards"][0]
+        self.assertTrue(card["readonly"])
+        self.assertIsNone(card["next_file_id"])
+        self.assertEqual(card["removable_count"], 0)
+        self.assertTrue(card["group_id"].startswith("watched::"))
+
+    def test_match_state_matched_unmatched_on_watched_cards(self):
+        self._add_watched("有中文名的番", "有中文名的番")
+        # 无中文名：title_cn 留空，卡片标题回落到 title
+        db.execute(
+            "INSERT INTO watched_list(title, title_cn, source, status) VALUES (?, ?, ?, ?)",
+            ("RAW-TITLE-ONLY", "", "manual", "watched"),
+        )
+        matched = self._titles({"source": "watched", "match_state": "matched"})
+        unmatched = self._titles({"source": "watched", "match_state": "unmatched"})
+        self.assertIn("有中文名的番", matched)
+        self.assertNotIn("RAW-TITLE-ONLY", matched)
+        self.assertIn("RAW-TITLE-ONLY", unmatched)
+        self.assertNotIn("有中文名的番", unmatched)
+
+    def test_keyword_filters_watched_cards(self):
+        self._add_watched("搜索关键词测试番")
+        self._add_watched("另一个番")
+        titles = self._titles({"source": "watched", "keyword": "关键词"})
+        self.assertEqual(titles, ["搜索关键词测试番"])
+
+    def test_progress_state_excludes_watched_only(self):
+        self._add_watched("没进度的番")
+        self.assertEqual(self._titles({"source": "all", "match_state": "progress"}), [])
+
+    def test_default_all_limit_is_high_enough_to_show_watched_cards(self):
+        # 真库约 228 本地组 + 130 看过条目 > 旧的 300 上限；默认 all 的 limit
+        # 必须放宽，否则合成卡排在本地卡后面会被整段截断，用户根本看不到。
+        for i in range(310):
+            folder = self.tmp / f"本地{i}"
+            folder.mkdir(exist_ok=True)
+            self.media(f"本地{i} 01.mkv", path=str(folder / f"本地{i} 01.mkv"),
+                       title_guess=f"本地{i}")
+        self._add_watched("压在最后的看过番")
+        wall = self.client.get_poster_wall({})   # 默认 all，不传 limit
+        self.assertIn("压在最后的看过番", [c["title"] for c in wall["cards"]])
+
+
 class WatchStateRuleTests(unittest.TestCase):
     def test_priority_order(self):
         self.assertEqual(api._watch_state(True, 5, 2, True), "done")
@@ -164,6 +261,34 @@ class PosterMarkerFrontendTests(unittest.TestCase):
     def test_tag_is_pinned_to_cover_corner(self):
         self.assertIn(".poster-card { position: relative", self.css)
         self.assertIn(".poster-state { position: absolute", self.css)
+
+    def test_source_and_match_filters_in_poster_toolbar(self):
+        block = self.js.split("async function renderPosters()", 1)[1].split(
+            "// 全盘快搜是左侧独立入口", 1)[0]
+        self.assertIn('id="posterSource"', block)
+        self.assertIn('id="posterMatch"', block)
+        for value in ("全部来源", "本地有文件", "看过列表"):
+            self.assertIn(value, block)
+        for value in ("已匹配中文", "未匹配中文", "有播放进度", "有封面", "没封面"):
+            self.assertIn(value, block)
+
+    def test_load_poster_wall_passes_source_and_match_state(self):
+        block = self.js.split("async function loadPosterWall()", 1)[1].split(
+            "posterState.cards = data.cards", 1)[0]
+        self.assertIn("source: posterState.source", block)
+        self.assertIn("match_state: posterState.match_state", block)
+
+    def test_filter_change_triggers_reload(self):
+        self.assertIn("el.id === 'posterSource'", self.js)
+        self.assertIn("el.id === 'posterMatch'", self.js)
+
+    def test_readonly_card_has_no_action_buttons(self):
+        block = self.js.split("if (card.readonly) {", 1)[1].split("const seasons =", 1)[0]
+        self.assertIn("is-readonly", block)
+        for action in ("rename-work", "delete-series-files", "set-cover",
+                       "rate-work", "data-action=\"goto\""):
+            self.assertNotIn(action, block)
+        self.assertIn("本地暂无文件", block)
 
 
 if __name__ == "__main__":

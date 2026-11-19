@@ -96,6 +96,7 @@ Magic Video 是**纯本地**的播放历史与断点续播工具：pywebview 原
 | 65 | **观看日历随窗口铺满**：观影报告的 `.cal-grid` 去掉 `max-width:520px` 改 `width:100%`、`repeat(7,minmax(0,1fr))`；`.cal-cell` 去掉 `aspect-ratio:1` 改固定 `min-height`，宽屏铺满整行、窄屏不溢出 | 用户反馈（2026-11-19「观看日历在拉长后只占了左边一部分」） |
 | 66 | **手动封面在「有/没封面」筛选里不漏判**：封面按剧集墙卡片标题（series 分组 label）存，筛选候选不能只看文件行标题。`_covered_ids_from_rows()` 增补 `labels/directories`，额外构建 series 分组、把 group label 与季卡片标题注入组内文件候选（新增 `_series_member_ids_from_group()` 收全多版本 id）；`_media_filters()` 候选查询补 `path/season_no/episode_no/dir_id`。判断口径与卡片一致：卡片能看到图的就判有封面 | 用户反馈（2026-11-19「很多我手动设置封面的剧集，也会过滤为没封面」） |
 | 67 | **短标题封面不模糊错配**：封面模糊兜底禁止对 1-2 字短标题做裸子串匹配（K→花宵道中因含 k、破→天元突破、终→终结的炽天使）。`covers._short_title()` 判长度≤2；`_fuzzy_match()`（抓取侧）与 `resolve_cover_many()` 兜底（展示侧，fuzzy_entries 加 subject 短标志对称保护）对短标题只认精确相等 / 去季 base 相等，禁子串；精确与 base 相等始终允许 | 用户反馈（2026-11-19「K s1/s2 匹配到花宵道中的背景图，终、Q、破的背景图也都不对」） |
+| 68 | **剧集墙纳入看过列表 + 来源/状态过滤**：剧集墙默认合并本地作品与 `watched_list` 里本地无文件的作品（合成只读卡：`readonly=True`、无 file_count/next_file_id，前端只渲染海报+名字+「看过」角标、无操作按钮）。`get_poster_wall` 新增 `source`（all/local/watched，默认 all）与复用 `match_state`（matched/unmatched/progress/with_cover/no_cover）；合成卡按标题与本地卡去重（本地已有只标看过不重复补），其封面过滤在解析后做；默认 limit 放宽到 600 防合成卡被本地卡挤掉。前端工具栏加来源下拉 `#posterSource` 与状态筛选 `#posterMatch`，切换重新拉数据 | 用户反馈（2026-11-19「剧集墙中也增加看过的列表里的内容，并增加过滤」），用户拍板：复用现有筛选栏 + 只读卡片 + 默认全部 |
 
 **任何"要不要加个定时任务 / 要不要改成 Web 服务 / 要不要上传到云"的改动，都必须先问用户。**
 **封面抓取与内嵌播放同样不是定时任务**：只在用户点按钮 / 点播放时执行一次。

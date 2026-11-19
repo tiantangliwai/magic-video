@@ -1614,7 +1614,7 @@ function renderDiagnose(data) {
 
 // ---------- 剧集墙：卡片式展示（参考 SeedHub / AGE动漫 的作品墙） ----------
 let posterState = { keyword: '', cards: [], seasonCards: [], continueRow: [], metas: {},
-  mode: 'work', covers: {}, status: {}, loading: false };
+  mode: 'work', covers: {}, status: {}, loading: false, source: 'all', match_state: '' };
 let esState = { keyword: '', rows: [], source: '', hint: '' };
 let procPollTimer = null;
 
@@ -1658,6 +1658,15 @@ function posterCardHtml(card, cover) {
   const art = cover
     ? `<img class="poster-art" src="${cover}" alt="${esc(card.title)}" loading="lazy">`
     : `<div class="poster-art poster-placeholder"><span>${esc((card.title || '?').slice(0, 2))}</span></div>`;
+  // 「看过的列表」里本地没文件的作品：只读卡片，只展示海报 + 名字 + 看过角标，
+  // 不给任何操作按钮（改名 / 清理 / 设封面 / 评分 / 查看分集 都需要本地文件或 group）。
+  if (card.readonly) {
+    return `<div class="poster-card is-readonly">${art}${posterStateTag(card)}
+      <div class="poster-body">
+        <div class="poster-title" title="${esc(card.title)}">${esc(card.title)}</div>
+        <div class="poster-meta">看过 · 本地暂无文件</div>
+      </div></div>`;
+  }
   const seasons = card.season_count > 1 && posterState.mode !== 'season'
     ? `<span class="poster-tag">${card.season_count} 季</span>` : '';
   const progress = card.playing_count ? `<span class="poster-tag amber">在看 ${num(card.playing_count)}</span>` : '';
@@ -1762,7 +1771,8 @@ async function loadPosterWall() {
   posterState.loading = true;
   try {
     const [data, cont] = await Promise.all([
-      call('get_poster_wall', { keyword: posterState.keyword }),
+      call('get_poster_wall', { keyword: posterState.keyword,
+        source: posterState.source, match_state: posterState.match_state }),
       call('get_continue_row', 12),
     ]);
     posterState.cards = data.cards || [];
@@ -1908,10 +1918,21 @@ async function renderStats() {
 async function renderPosters() {
   setContent(`<div class="card"><div class="section-head"><h3>剧集墙</h3>
       <span class="badge blue" id="posterCount">正在统计…</span></div>
-    <p class="hint">按作品展示海报、季数与分集入口。点「查看分集」会带着作品名跳到媒体库，
-      不用再手动输一次。封面的后台抓取与进度已整合到左侧<b>「后台进程」</b>页。</p>
+    <p class="hint">按作品展示海报、季数与分集入口。默认合并本地作品与「看过的列表」里还没下载的作品；
+      可用来源 / 状态筛选。点「查看分集」会带着作品名跳到媒体库，不用再手动输一次。
+      封面的后台抓取与进度已整合到左侧<b>「后台进程」</b>页。</p>
     <div class="watched-toolbar">
       <input class="input" id="posterSearch" placeholder="搜索作品名…" value="${esc(posterState.keyword)}" autocomplete="off">
+      <select class="input poster-filter" id="posterSource" title="只看本地有文件的作品，或只看看过列表里还没下载的作品">
+        ${option('all', '全部来源', posterState.source)}
+        ${option('local', '本地有文件', posterState.source)}
+        ${option('watched', '看过列表', posterState.source)}
+      </select>
+      <select class="input poster-filter" id="posterMatch" title="按中文名匹配与封面状态筛选">
+        ${option('', '全部状态', posterState.match_state)}${option('matched', '已匹配中文', posterState.match_state)}
+        ${option('unmatched', '未匹配中文', posterState.match_state)}${option('progress', '有播放进度', posterState.match_state)}
+        ${option('with_cover', '有封面', posterState.match_state)}${option('no_cover', '没封面', posterState.match_state)}
+      </select>
       <button class="btn btn-sm ${posterState.mode === 'work' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="work">按作品</button>
       <button class="btn btn-sm ${posterState.mode === 'season' ? 'btn-primary' : ''}" data-action="poster-mode" data-mode="season">按季</button>
     </div>
@@ -3346,10 +3367,15 @@ document.addEventListener('change', (ev) => {
     filePageSize: () => { fileListState.page_size = Number(el.value); },
     fileViewMode: () => fileViewModeHandler(el.value),
   };
-  if (!handlers[el.id]) return;
-  handlers[el.id]();
-  fileListState.page = 1;
-  loadFileList();
+  if (handlers[el.id]) {
+    handlers[el.id]();
+    fileListState.page = 1;
+    loadFileList();
+    return;
+  }
+  // 剧集墙来源 / 状态筛选：后端按 opt 过滤并缓存，需重新拉数据
+  if (el.id === 'posterSource') { posterState.source = el.value; loadPosterWall(); return; }
+  if (el.id === 'posterMatch') { posterState.match_state = el.value; loadPosterWall(); return; }
 });
 
 async function init() {

@@ -359,6 +359,7 @@ td[data-edit-watched]:hover { background: var(--primary-soft); }
 /* 看过的列表：快速搜索与行内改名 */
 .watched-toolbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .watched-toolbar .input { flex: 1 1 260px; width: auto; padding: 7px 10px; font-size: 12px; }
+.watched-toolbar select.poster-filter { flex: 0 0 auto; width: auto; min-width: 118px; }
 .watched-toolbar .hint { flex: none; }
 .watched-actions { display: flex; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .watched-edit td { background: var(--primary-soft); }

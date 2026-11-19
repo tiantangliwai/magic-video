@@ -1700,6 +1700,61 @@ class Api:
                     return cleaned
         return first or label
 
+    @staticmethod
+    def _watched_only_cards(match_state: str = "", keyword: str = "") -> list[dict]:
+        """把「看过的列表」里本地没有对应文件的条目做成只读卡片。
+
+        剧集墙默认合并本地作品 + 看过列表，让「看过但还没下载」的作品也能看到海报。
+        有本地文件的条目由树卡片负责（会标「看过」），这里只补**没有**本地卡片的，避免重复。
+        合成卡片 ``readonly=True``：无 file_count / next_file_id，前端只渲染海报与名字。
+        """
+        rows = db.rows(
+            "SELECT id, title, title_cn, season_no FROM watched_list ORDER BY title_cn, title"
+        )
+        rows = blacklist.filter_rows(rows, keys=("title", "title_cn", "raw_text"))
+        kw = str(keyword or "").strip().lower()
+        cards: list[dict] = []
+        seen: set[str] = set()
+        for row in rows:
+            title = str(row.get("title_cn") or row.get("title") or "").strip()
+            if not title:
+                continue
+            key = re.sub(r"\s+", "", title).lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            if kw and kw not in title.lower():
+                continue
+            # 状态筛选：无文件条目没有播放进度，matched/unmatched 按有无中文名，
+            # with_cover/no_cover 交给上层统一封面解析后再过滤（这里先都保留）。
+            if match_state == "progress":
+                continue                      # 本地无文件 -> 无播放进度
+            if match_state == "matched" and not str(row.get("title_cn") or "").strip():
+                continue
+            if match_state == "unmatched" and str(row.get("title_cn") or "").strip():
+                continue
+            cards.append({
+                "id": int(row.get("id") or 0),
+                "title": title,
+                "search_keyword": title,
+                "file_count": 0,
+                "watched_count": 0,
+                "playing_count": 0,
+                "next_file_id": None,
+                "season_count": 0,
+                "seasons": [],
+                "sub": "",
+                "group_id": f"watched::{int(row.get('id') or 0)}",
+                "work_key": f"watched::{int(row.get('id') or 0)}",
+                "all_done": False,
+                "watch_state": "listed",
+                "watched_listed": True,
+                "removable_count": 0,
+                "readonly": True,             # 前端据此只渲染海报 + 名字，无操作按钮
+                "_cover_titles": [title, str(row.get("title") or "").strip()],
+            })
+        return cards
+
     def get_poster_wall(self, options: dict | None = None) -> dict:
         """剧集墙：作品卡片（封面 + 季/集统计 + 续播集）。复用树分组，不另写一套搜索。
 
@@ -1712,6 +1767,11 @@ class Api:
         cached = _cache_get(cache_key)
         if cached is not None:
             return cached
+        source = str(opt.get("source") or "all").strip().lower()
+        if source not in ("all", "local", "watched"):
+            source = "all"
+        match_state = str(opt.get("match_state") or "").strip().lower()
+        keyword = str(opt.get("keyword") or "").strip().lower()
         where, params = self._media_filters(opt)
         rows = db.rows(
             "SELECT f.id, f.dir_id, f.path, f.filename, f.title_raw, f.title_guess, "
@@ -1790,22 +1850,43 @@ class Api:
                 "removable_count": int(group.get("removable_count") or 0),
                 "_cover_titles": cover_titles,
             })
-        keyword = str(opt.get("keyword") or "").strip().lower()
+        # 只看过列表时不需要本地卡；全部/本地时保留本地卡做树分组。
+        if source == "watched":
+            cards = []
+            season_cards = []
         if keyword:
             cards = [c for c in cards if keyword in c["title"].lower()]
             season_cards = [c for c in season_cards if keyword in c["title"].lower()]
-        try:
-            max_cards = max(1, min(int(opt.get("limit") or 300), 2000))
-        except (TypeError, ValueError):
-            max_cards = 300
-        total = len(cards)
-        cards = cards[:max_cards]
-        season_total = len(season_cards)
-        season_cards = season_cards[:max_cards]
+
+        # 合并「看过的列表」里本地没有文件的作品（合成只读卡片）。
+        # 去重口径：本地卡片（含其封面候选标题）已覆盖的作品不再补合成卡，
+        # 否则同一部作品会出现「本地卡 + 看过卡」两张。
+        watched_cards: list[dict] = []
+        if source in ("all", "watched"):
+            local_keys: set[str] = set()
+            for card in [*cards, *season_cards]:
+                for value in (card.get("title"), card.get("work_title"),
+                              *card.get("_cover_titles", [])):
+                    name = re.sub(r"\s+", "", str(value or "")).lower()
+                    if name and len(name) >= 2:
+                        local_keys.add(name)
+            for card in self._watched_only_cards(match_state, keyword):
+                title_key = re.sub(r"\s+", "", card["title"]).lower()
+                if any(title_key in key or key in title_key for key in local_keys):
+                    continue
+                # 合成卡的 _cover_titles 支持模糊匹配；标题去重已足够，
+                # 这里再过滤一次避免「花宵道中 / 花宵道中第二季」这类父子重复。
+                watched_cards.append(card)
+        cards = cards + watched_cards
+
         # 卡片标题（树分组 label）与抓取封面时用的标题可能不同：
         # 先用卡片标题，再退到该分组内文件的中文名 / 解析原名，命中就复用同一张封面。
         pending: list[tuple[str, list[str]]] = []
         for card in cards:
+            if card.get("readonly"):
+                # 合成卡：标题即封面候选，前端只渲染海报与名字
+                pending.append((card["title"], [card["title"], *card.pop("_cover_titles", [])]))
+                continue
             raw_label = card["title"]
             # 脏分组名（如 1.36G）展示也换成推断出的中文片名；封面仍先用
             # 原分组名匹配，避免已经缓存好的封面突然失效。
@@ -1821,6 +1902,25 @@ class Api:
             pending.append((card["title"],
                             [card["title"], card["work_title"], *card.pop("_cover_titles")]))
         resolved = covers.resolve_cover_many(pending, cover_entries)
+
+        # 合成卡的 with_cover / no_cover 过滤要在封面解析后做（本地卡已由 SQL 过滤）。
+        if match_state in ("with_cover", "no_cover") and watched_cards:
+            wanted = match_state == "with_cover"
+            cards = [c for c in cards
+                     if not c.get("readonly") or bool(resolved.get(c["title"])) == wanted]
+
+        try:
+            # 剧集墙默认合并本地作品 + 看过列表的合成卡，两者相加可能超过旧的 300
+            # （真库约 228 本地组 + 130 看过条目 = 358），默认放宽到 600 避免合成卡
+            # 被本地卡挤掉而看不到；仍受 opt.limit 约束。
+            default_limit = 600 if source in ("all", "watched") else 300
+            max_cards = max(1, min(int(opt.get("limit") or default_limit), 2000))
+        except (TypeError, ValueError):
+            max_cards = 300
+        total = len(cards)
+        cards = cards[:max_cards]
+        season_total = len(season_cards)
+        season_cards = season_cards[:max_cards]
         return _cache_put(cache_key, {
             "ok": True, "cards": cards, "total": total, "shown": len(cards),
             # 按季展开的卡片（P2-2）：前端「按季 / 按作品」切换用，默认展示 cards

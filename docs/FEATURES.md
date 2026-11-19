@@ -1615,3 +1615,43 @@ title_guess/title_raw/filename`，**不含分组 label**。当作品没有中文
 - 全面扫描追剧列表所有标题：剩余多作品共用图均为同一作品不同季的正当回落
   （零之使魔三季 / 更衣人偶两季 / 超电磁炮 / 魔禁剧场版），无跨作品串图。
 - 补 `test_trap_not_hijacked_by_short_trap_subject` 回归用例锁定该真实场景；增量 30/30 全绿。
+
+---
+
+## 46. 剧集墙纳入「看过的列表」+ 来源/状态过滤（2026-11-19）
+
+### 46-A 场景
+用户反馈「剧集墙中也增加看过的列表里的内容，并增加过滤」。此前剧集墙只显示
+`media_files` 里有本地文件的作品；`watched_list`（看过的列表）里大量作品本地还没下载，
+剧集墙看不到。用户拍板：① 过滤复用媒体库那套（已匹配/未匹配/有进度/有封面/没封面）
+并加来源维度；② 无文件的看过作品做成只读卡片；③ 默认「全部来源」。
+
+### 46-B 验收标准
+| # | 验收标准 |
+|---|---|
+| 46-B1 | 剧集墙默认合并「本地有文件作品」+「看过列表里本地无文件的作品」|
+| 46-B2 | 来源下拉：全部 / 本地有文件 / 看过列表；切换只显示对应来源 |
+| 46-B3 | 状态筛选下拉：全部状态 / 已匹配中文 / 未匹配中文 / 有播放进度 / 有封面 / 没封面，对本地卡与合成卡都生效 |
+| 46-B4 | 同一作品本地已有卡片的，只标「看过」，不重复补一张合成卡 |
+| 46-B5 | 合成卡只读：只显示海报 + 名字 + 「看过」角标，无改名/清理/设封面/评分/查看分集按钮 |
+| 46-B6 | 合成卡的 with_cover/no_cover 按真实封面解析结果过滤；关键词搜索覆盖合成卡 |
+| 46-B7 | 默认 limit 放宽，合成卡不被本地卡数量挤掉；缓存按 opt 隔离 |
+
+### 46-C 实现位置
+- `app/api.py`：
+  - `get_poster_wall()` 新增 `source`（all/local/watched，默认 all）与读取 `match_state`；
+    `source=watched` 时不构建本地树卡；本地卡 + 合成卡合并，按标题与本地卡去重；
+    合成卡的 with_cover/no_cover 在 `resolve_cover_many` 之后过滤；默认 limit 由 300 放宽到 600；
+  - 新增 `_watched_only_cards(match_state, keyword)`：从 `watched_list` 构建只读合成卡
+    （`readonly=True`、`group_id/work_key=watched::<id>`、file_count=0、watch_state=listed），
+    按有无中文名响应 matched/unmatched，排除 progress，去重后限量。
+- `web/app.js`：
+  - `posterState` 加 `source/match_state`；`renderPosters` 工具栏加 `#posterSource`（来源）
+    与 `#posterMatch`（状态筛选）两个下拉；change 处理器切换后重新 `loadPosterWall()`；
+  - `loadPosterWall` 传 `source/match_state` 给后端；
+  - `posterCardHtml` 对 `card.readonly` 只渲染海报 + 名字 + 角标，无任何操作按钮。
+- `web/style.css`：`select.poster-filter` 固定宽度不伸展。
+- `tests/test_poster_watched.py`：新增 `PosterWatchedCardsTests`（8 后端用例：默认合并 /
+  来源隔离 / 只读字段 / 状态过滤 / 关键词 / progress 排除 / 默认 limit 防截断）+ 前端契约 4 例。
+- 真库只读端到端：all=291 卡（171 本地 + 120 合成）、local=171、watched=131（全只读），
+  封面命中 normal；增量全绿。
