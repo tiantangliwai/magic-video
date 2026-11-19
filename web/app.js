@@ -530,6 +530,11 @@ function toggleStageZoom() {
 
 function progressItem(r, actions) {
   const name = r.display_title || r.title_guess || r.filename || '未知文件';
+  // 作品名（series 分组 label）与剧集墙同源：用户改过文件夹名 / 手改过作品名时，
+  // 单集名（display_title 从文件名推导）往往还是旧的。两行都显示，一眼对上是哪部剧。
+  const work = String(r.work_title || '').trim();
+  const workLine = work && work !== name
+    ? `<div class="work-name">${esc(work)}</div>` : '';
   const follow = !!r.after_completed;
   const ep = follow
     ? ` · 接第 ${num(r.from_episode)} 集 → 第 ${num(r.episode_no)} 集`
@@ -541,6 +546,7 @@ function progressItem(r, actions) {
   return `<div class="item">
     <div class="thumb">▶</div>
     <div class="body">
+      ${workLine}
       <div class="name">${esc(name)}${esc(ep)}${esc(season)}
         ${follow ? '<span class="badge amber">下一集</span>' : (done ? '<span class="badge green">已看完</span>' : '<span class="badge blue">在看</span>')}</div>
       <div class="meta">${esc(r.filename || '')}</div>
@@ -601,9 +607,14 @@ async function renderContinue() {
     <div class="card"><h3>已看完（可纠错 / 可清理本地文件）</h3>
     <p class="hint">标错或想重看时点「标记未看」即可恢复；观看历史不会被删除。已看完的单集可人工把本地文件移入回收站，
       <b>观看进度、历史记录与看过的列表全部保留</b>。整部剧全部看完后，「剧集墙」和「媒体库 → 剧集展示」里会出现整部清理入口。</p>
-    <div class="list">${done.length ? done.map(r => `<div class="item">
+    <div class="list">${done.length ? done.map(r => {
+      const single = r.display_title || r.filename;
+      const work = String(r.work_title || '').trim();
+      const workLine = work && work !== single
+        ? `<div class="work-name">${esc(work)}</div>` : '';
+      return `<div class="item">
       <div class="thumb">✓</div>
-      <div class="body"><div class="name">${esc(r.display_title || r.filename)}
+      <div class="body">${workLine}<div class="name">${esc(single)}
         ${r.episode_no ? esc(' · 第 ' + r.episode_no + ' 集') : ''}
         ${r.deleted_at ? '<span class="badge amber">本地文件已移除</span>' : ''}</div>
         <div class="meta">${esc(r.filename || '')} · 最近 ${esc(shortDate(r.last_played_at))}</div></div>
@@ -612,7 +623,7 @@ async function renderContinue() {
         <button class="btn btn-sm" data-action="reset-progress" data-id="${r.file_id}">重置进度</button>
         ${r.deleted_at ? '' : `<button class="btn btn-sm btn-danger" data-action="delete-local-file"
           data-id="${r.file_id}" title="把这一集的本地文件移入回收站">删除本地文件</button>`}
-      </div></div></div>`).join('') : empty('还没有已看完的条目', '进度达到设置页的阈值后会自动出现在这里')}</div></div>`);
+      </div></div></div>`;}).join('') : empty('还没有已看完的条目', '进度达到设置页的阈值后会自动出现在这里')}</div></div>`);
 }
 
 async function renderHistory() {

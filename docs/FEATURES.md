@@ -2027,3 +2027,41 @@ obsidian 成为 md 文件，包括图片相关资源都积累一次，再额外�
   接收 `st.snapshot`；`handleAction` 新增 `snapshot-export` / `snapshot-open`。
 - `tests/test_snapshot_card.py`：7 例（API 转发 / 异常吞掉 / 越界拒绝 / 卡片与接线契约）。
 - 门禁：`compileall` + `node --check` + `test_docs` 通过；增量全绿。
+
+## 57. 总览 / 继续观看的进度项同时显示作品名（2026-11-20）
+
+### 57-A 场景
+用户反馈：「继续观看中的 Kaichou wa Maid-sama! 这个我已经在剧集中修改过剧集的名称，
+在总览和继续观看中把剧集名称也展示出来，否则我每次看到还要额外再想一次」。
+
+真库核对：用户把文件夹改名为 `[SAIO-Raws] 会长是女仆大人Kaichou wa Maid-sama! [BD...]`，
+剧集墙从文件夹派生出 label `会长是女仆大人Kaichou wa Maid`；但总览 / 继续观看的进度项
+只显示从文件名推导的 `display_title`（`Kaichou wa Maid-sama! 03`），两处不一致。
+
+### 57-B 设计
+- **作品名与剧集墙同源**：新建 `_work_titles_from_tree()` 从 series 分组树提取
+  `file_id -> 作品名`（分组 label）。改过文件夹名、手改过作品名（work_labels）、导入了中文名
+  都认同一份；季节点下的文件也归到作品 label，不带「· 第 N 季」以免进度项过长。
+- **不碰单集名**：`_attach_work_titles()` 只补 `work_title` 字段，不改 `display_title`
+  （它承载「到底播到哪一集」的事实）。两行分别展示，用户一眼对上是哪部剧。
+- **性能**：建树走 `get_media_tree` 的指纹缓存（基于 `_data_fingerprint` + 写库次数），
+  守护每 3 秒写一次播放进度不会让作品名映射反复重算。
+- **两处都渲染**：`progressItem`（总览 + 继续观看）与「已看完」卡片，当作品名与单集名不同时
+  多渲染一行 `.work-name`（主色强调），相同时不重复。
+
+### 57-C 验收标准
+| # | 验收标准 |
+|---|---|
+| 57-C1 | 改过文件夹名的作品，在总览与继续 watching 都显示改过的作品名 |
+| 57-C2 | 单集名（display_title）原样保留，不被作品名覆盖 |
+| 57-C3 | 「已看完」卡片同样显示作品名 |
+| 57-C4 | 作品名与单集名相同时不重复渲染 |
+| 57-C5 | 播放进度写入不触发作品名映射重算（复用指纹缓存）|
+
+### 57-D 实现位置
+- `app/api.py`：`_work_titles_from_tree()` 纯函数；`Api._attach_work_titles()`；
+  `get_continue_watching` / `get_completed` 返回前补作品名。
+- `web/app.js`：`progressItem` 与「已看完」卡片渲染 `.work-name`。
+- `web/style.css`：`.item .work-name` 主色强调样式。
+- `tests/test_progress_work_title.py`：8 例（树提取 / 端到端注入 / 保留已有值 / 前端契约）。
+- 门禁：`compileall` + `node --check` + `test_docs` 通过；增量 **570/570** 全绿。

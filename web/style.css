@@ -283,6 +283,10 @@ textarea.input { min-height: 170px; resize: vertical; line-height: 1.8; font-fam
   display: flex; align-items: center; justify-content: center; color: var(--primary); font-size: 16px; }
 .item .body { flex: 1; min-width: 0; }
 .item .name { font-weight: 600; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+/* 进度项的作品名：与剧集墙同源，改过文件夹名/作品名后仍显示用户认得的名字，
+   单集名退到下一行。仅当作品名与单集名不同时才渲染（见 progressItem）。 */
+.item .work-name { color: var(--primary); font-size: 12px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-bottom: 2px; }
 .item .meta { color: var(--muted); font-size: 12px; margin-top: 4px; }
 .item .right { flex: none; text-align: right; color: var(--muted); font-size: 12px; }
 .bar { height: 5px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 9px; }

@@ -305,6 +305,28 @@ def _series_member_ids_from_group(group: dict) -> list[int]:
     return ids
 
 
+def _work_titles_from_tree(tree: dict) -> dict[int, str]:
+    """从 series 树提取 ``file_id -> 作品名``（分组 label）。
+
+    总览 / 继续观看的进度项要同时显示「作品名 + 单集名」。作品名必须和剧集墙
+    卡片标题同源——用户改过文件夹名、手改过作品名（work_labels）、或导入了中文名，
+    都要认同一份。所以直接复用 series 树的分组 label，不另写一套推导逻辑。
+    季节点下的文件也归到作品 label（不显示「作品 · 第 N 季」，避免进度项太长）。
+    """
+    mapping: dict[int, str] = {}
+    for group in tree.get("groups") or []:
+        label = str(group.get("label") or "").strip()
+        if not label:
+            continue
+        nodes = [group, *(group.get("children") or [])]
+        for node in nodes:
+            for item in node.get("files") or []:
+                fid = item.get("id")
+                if fid is not None:
+                    mapping.setdefault(int(fid), label)
+    return mapping
+
+
 def _cache_get(key: tuple):
     item = _MEDIA_CACHE.get(key)
     if item and (time.monotonic() - item[0]) < _MEDIA_CACHE_TTL:
@@ -499,6 +521,29 @@ class Api:
             )
         return status
 
+    def _attach_work_titles(self, rows: list[dict]) -> list[dict]:
+        """给进度项补 ``work_title``（作品名），与剧集墙卡片标题同源。
+
+        只补缺失的字段，不改单条 ``display_title``（单集名）——前端两行分别展示，
+        这样「改过作品名但文件名推导出的单集名还是旧的」时也能一眼对上是哪部剧。
+        建树本身走 ``get_media_tree`` 的指纹缓存，正常播放进度写入不会触发重算。
+        """
+        if not rows:
+            return rows
+        try:
+            tree = self.get_media_tree({"mode": "series"})
+            mapping = _work_titles_from_tree(tree)
+        except Exception:
+            return rows
+        for row in rows:
+            if row.get("work_title"):
+                continue
+            fid = row.get("file_id")
+            label = mapping.get(int(fid)) if fid is not None else None
+            if label:
+                row["work_title"] = label
+        return rows
+
     def get_continue_watching(self, limit: int = 50) -> list[dict]:
         size = max(1, int(limit or 50))
         rows = db.rows(
@@ -514,7 +559,7 @@ class Api:
         seen = {str(r.get("display_title") or r.get("filename") or "").strip() for r in rows}
         rows.extend(self._completed_followups(size, seen))
         rows.sort(key=lambda r: str(r.get("last_played_at") or ""), reverse=True)
-        return rows[:size]
+        return self._attach_work_titles(rows[:size])
 
     def get_completed(self, limit: int = 50) -> list[dict]:
         """已看完的条目，供「继续观看」页做纠错（标记未看 / 重看）。"""
@@ -526,7 +571,8 @@ class Api:
             "WHERE p.completed = 1 ORDER BY p.last_played_at DESC LIMIT ?",
             (int(limit),),
         )
-        return blacklist.filter_rows(rows, keys=("display_title", "filename", "title_guess"))
+        rows = blacklist.filter_rows(rows, keys=("display_title", "filename", "title_guess"))
+        return self._attach_work_titles(rows)
 
     def _completed_followups(self, limit: int, seen: set[str] | None = None) -> list[dict]:
         """已看完但有下一集：以「下一集」形态补进继续观看。
