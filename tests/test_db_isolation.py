@@ -148,6 +148,33 @@ class StaticContractTests(unittest.TestCase):
         self.assertEqual(violations, [],
                          "以下测试类碰数据库却没继承 IsolatedDbTestCase：\n" + "\n".join(violations))
 
+    def test_same_named_classes_agree_on_db_isolation(self):
+        """同名类若对「是否继承隔离基类」有分歧，会经 bases_by_class 静默覆盖而误判。
+
+        曾因 test_panels.py(不继承) 与 test_obsidian.py(继承) 都叫 ApiBridgeTests，
+        后加载者覆盖前者，导致继承隔离基类的类被误报为违规。全都继承或全都不继承
+        的同名类（如 ApiTests / FrontendContractTests）不会造成这类误判，予以放行。
+        """
+        classes = _load_classes()
+        grouped: dict[str, list[tuple[str, list[str]]]] = {}
+        for path, items in classes.items():
+            for name, bases, _ in items:
+                grouped.setdefault(name, []).append((path.name, bases))
+        bases_by_class = {n: b for _, items in classes.items() for n, b, _ in items}
+        conflicts = []
+        for name, entries in grouped.items():
+            if len(entries) < 2:
+                continue
+            flags = set()
+            for _, bases in entries:
+                probe = dict(bases_by_class)
+                probe[name] = bases          # 只替换本条目的直接基类，其余沿用完整映射
+                flags.add(_inherits_isolated(name, probe))
+            if len(flags) > 1:
+                conflicts.append(f"{name}: " + ", ".join(f"{f}->{b}" for f, b in entries))
+        self.assertEqual(conflicts, [],
+                         "同名类必须一致地继承 / 不继承隔离基类：\n" + "\n".join(conflicts))
+
     def test_two_known_offenders_now_inherit_isolated_base(self):
         classes = _load_classes()
         bases_by_class = {

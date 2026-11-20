@@ -562,3 +562,46 @@ AUTO 区块、批注区与 `[[wikilink]]` 互链。路线图解析出 17 条 P0�
 
 - **版本传播**：commit 与 tag `v0.1.8` 仅本地，未 `git push`、未建 GitHub Release（用户本轮只要求打包，未要求推送）。
 - 安装器真机 7 步、内嵌播放真实窗口行为、蓝牙音箱真实切换、外部站点改版风险 —— 同 12.4，仍需人工。
+
+## 15. v0.1.9 发版门禁（0.1.8 之后 33 次源码迭代集中发布）
+
+> 0.1.8 打包后源码又积累了 33 个提交，集中在「查看/编辑模式 · 独立可移动窗口 · 封面体验修复 · Obsidian 积累」四条主线，安装版（0.1.8）用户拿不到。逐项细节见 `docs/FEATURES.md` §47–§58、需求基线 AGENTS.md +69~+80。
+
+### 15.1 触发原因
+
+用户 2026-11-20 明确要求「功能全部完成后，打 0.1.9 的 tag，push 到 git」。同时命中全量白名单第 ① 条（明确要求 push）与第 ② 条（打 tag / 发版 / 打包），按发版清单升版本 → 补 CHANGELOG → 全量门禁 → 重出 ZIP + MSI → 打 tag → `git push origin master --tags`。用户选择「tag + 推送 + 打包，暂不建 Release」。
+
+### 15.2 门禁结果（真实执行）
+
+| 检查项 | 说明 |
+|---|---|
+| 全量用例 | `python run_tests.py` → **1122 / 1122 通过**，0 失败 / 0 错误 / 0 跳过，**133.09 秒**；快照写入 `D:/magicvideo/test_last.json` |
+| Python 语法 | `compileall -q app tests *.py` 全通过 |
+| JavaScript 语法 | `node --check web/app.js` 通过 |
+| 版本一致性 | `tests/test_docs.py` 16 例通过：`__version__` / README / AGENTS / CHANGELOG / OBSIDIAN / `app.js?v=` 全部为 `0.1.9` |
+| 全量首跑修复 | 首跑 1121 例中 1 例失败：`test_db_isolation` 静态扫描把 `test_obsidian.ApiBridgeTests`（继承隔离基类）误判为违规——根因是本版新增 `test_panels.ApiBridgeTests` 同名，按类名做 key 的基类字典被覆盖。将后者改名 `PanelApiBridgeTests`，并给扫描器补「同名类必须一致继承隔离基类」守护（11/11 通过）；重跑全量 1122/1122 全绿 |
+
+### 15.3 产物验收（0.1.9，真实执行）
+
+| 检查 | 方法 | 结果 |
+|---|---|---|
+| 构建链 | `.venv\Scripts\python.exe build_dist.py` | ZIP **27.2 MB** / MSI **26.6 MB**；WiX `candle -dProductVersion=0.1.9` |
+| exe 自检 | 构建脚本内 `Magic Video.exe --selftest` | `ok=True` / `version=0.1.9` / `frozen=True`；资源在 `_internal`、数据在临时目录 |
+| ZIP 内容 | `zipfile` 逐项核对 | **493 条目**；`Magic Video.exe`、`portable.txt`、`_internal/web/index.html` / `app.js`、`_internal/README.md` / `CHANGELOG.md` 齐全 |
+| 打包版前端 | 读 ZIP 内 `_internal/web/index.html` | 缓存串 `app.js?v=0.1.9` 存在 |
+| docs 范围 | 读 ZIP 内 `_internal/docs/` | **只含 6 篇交付文档**（FEATURES / IMPLEMENTATION_NOTES / OBSIDIAN / OPTIMIZATION / ROADMAP_0.1.6 / TESTING），无中文文件名条目 |
+| MSI 属性 | `installer/inspect_msi.py dist/MagicVideo-0.1.9-win64.msi` | `ProductVersion='0.1.9'`、`ProductName='Magic Video'`、`UpgradeCode='{8F3A1C2E-...}'` 与历史一致、`WIXUI_INSTALLDIR='APPFOLDER'`、`APPFOLDER <- PreviousInstallFolder`（升级读回旧路径） |
+| 安装器静态层 | `installer/verify_install_flow.py --static` | `[PASS]`：目录 Id 全大写 + `Secure` + `InstallPath` 写入/回读 + `MajorUpgrade` |
+| 打包链修复 | 首轮 MSI 失败 → 修复后重出 | 首轮 `light.exe` 报 `LGHT0311`（代码页 1252 无中文字符）：Obsidian 积累产物（中文文件名 + 250 MB）被 `--add-data docs` 整目录带进包。改 `build_dist.py` 用 `stage_docs()` 白名单只放 6 篇交付文档，重出后 ZIP 从 275.9 MB 回落 27.2 MB、MSI 通过 |
+
+### 15.4 版本传播
+
+- **本地提交**：发版文件（版本 / CHANGELOG / README / AGENTS / OBSIDIAN / TESTING / build_dist / 隔离扫描修复）一次提交。
+- **tag**：`v0.1.9` 打在该提交上；连同此前仅本地的 `v0.1.7` / `v0.1.8` 一并推送。
+- **远端**：`git push origin master` + `git push origin --tags`，origin = `git@github.com:tiantangliwai/magic-video.git`。
+- **GitHub Release**：用户本轮明确选择「暂不建 Release」，仅 push 分支与 tag。
+
+### 15.5 本版未覆盖
+
+- **GitHub Release**：用户本轮选择「暂不建 Release」，仅 push master 与全部 tag；Release 留待用户另行要求。
+- 安装器真机 7 步（`MANUAL_CHECKLIST`）、独立可移动窗口在已安装 MSI 下的多窗口行为、蓝牙音箱真实切换、外部站点改版风险 —— 仍需人工真机确认。

@@ -148,7 +148,7 @@ class PanelLifecycleTests(unittest.TestCase):
         self.assertIn("settings", panels._WINDOWS)
 
 
-class ApiBridgeTests(unittest.TestCase):
+class PanelApiBridgeTests(unittest.TestCase):
     def test_api_open_close_panel_delegate(self):
         from app.api import Api
         api = object.__new__(Api)

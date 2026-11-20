@@ -1,7 +1,7 @@
 # AGENTS.md · 给 AI Agent 的项目协作约定
 
 > 本文件是 **AI Agent 在本仓库工作时的第一优先级约定**。与直觉冲突时，以本文件为准。
-> 当前版本：**v0.1.8**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
+> 当前版本：**v0.1.9**（唯一真源 `app/__init__.py` → `__version__`，本文件与 README / CHANGELOG 必须同步）
 > 适用环境：Windows 10/11、Python 3.13、项目根目录 `D:\project\magic video`
 
 > 🚨 **测试铁律（用户 2026-11-15 二次纠正「怎么又开始全量跑单元测试了」，违反即算做错）**

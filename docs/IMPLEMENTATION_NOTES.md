@@ -596,3 +596,20 @@ API 挂接 + 设置白名单 + 前端契约，全程不碰真实 COM / 真实库
 
 Git Bash 下 `git commit` 用 `-m "..."` 或多次 `-m` 分段；PowerShell here-string 语法（`at` 加单引号）在 Bash 里会变成字面量、提交信息开头多出 `at` 符号。
 若已提交且未推送，用 `git tag -d` → `git commit --amend` → 重打 tag 修正。
+
+## 19. v0.1.9 发版打包（2026-11-20）
+
+### 19.1 触发与范围
+
+用户「功能全部完成后，打 0.1.9 的 tag，push 到 git」。33 个源码提交集中发布。用户拍板：范围 = tag + 推送 + 打包（暂不建 Release）；推送 = master + 全部本地 tag（v0.1.7 / v0.1.8 / v0.1.9）。
+
+### 19.2 打包链踩坑：LGHT0311（docs 整目录 add-data）
+
+- **现象**：首轮 `build_dist.py` 的 `light.exe` 报 `LGHT0311 : A string was provided with characters that are not available in the specified database code page '1252'`，8 处，全指向 `_internal/docs/` 下的中文名条目。同时 ZIP 从历史 ~27 MB 暴涨到 **275.9 MB**。
+- **根因**：本版新增的 Obsidian 积累产物（`docs/封面积累_*.tar.gz` 125 MB、`docs/知识积累/` 126 MB、`docs/封面与观看清单.md`）都是用户数据（`.gitignore` 已排除重资源），但 `build_dist.py` 的 `--add-data docs;docs` 把整个 docs 目录塞进包。中文文件名 WiX 1252 代码页编不了，体积也被撑爆。
+- **修复**：`build_dist.py` 新增 `BUNDLED_DOCS` 白名单（6 篇交付文档）与 `stage_docs()`——复制到 `build/doc-stage/` 暂存目录，`--add-data` 指向暂存目录而非整个 docs。不动用户数据目录，可反复重建。重出后 ZIP 27.2 MB / MSI 26.6 MB、`ok=True`、无中文条目、`app.js?v=0.1.9` 在包内。
+- **命令码**：`mv "build/pyi-dist/Magic Video" "build/pyi-dist/Magic Video.prev-0.1.8"` 避开 `COLLECT --clean` 的安全删除拦截（AGENTS 已记）；首轮坏产物再改名 `Magic Video.prev-baddocs` 后重出。
+
+### 19.3 全量首跑的隔离扫描误报
+
+首跑 1121 例 1 失败：`test_db_isolation` 静态扫描把 `test_obsidian.ApiBridgeTests`（继承 `ObsidianTestCase` → `IsolatedDbTestCase`）误判为未隔离。根因是本版新增 `test_panels.ApiBridgeTests` 同名，`bases_by_class` 按类名做 key 被后加载者（`unittest.TestCase`）覆盖。修复：后者改名 `PanelApiBridgeTests`；扫描器补 `test_same_named_classes_agree_on_db_isolation`——同名类对「是否继承隔离基类」必须一致（全都继承或全都不继承放行，一个继承一个不继承才报错）。重跑全量 1122/1122 全绿。

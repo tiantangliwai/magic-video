@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -34,6 +35,15 @@ PYI_DIST = BUILD / "pyi-dist"
 APP_NAME = "Magic Video"
 APP_EXE = "Magic Video.exe"
 WIX_PACKAGE_URL = "https://api.nuget.org/v3-flatcontainer/wix/3.14.1/wix.3.14.1.nupkg"
+
+# 随包分发的 docs 只含这些交付文档。Obsidian 积累产物（封面积累_*.tar.gz、
+# 知识积累/、封面与观看清单.md）是用户数据（.gitignore 已排除重资源），既不入库
+# 也不进安装包：整目录 add-data 会让中文文件名触发 WiX 的 1252 代码页报错
+# （LGHT0311），且把 27 MB 的包撑到 250 MB+。
+BUNDLED_DOCS = (
+    "FEATURES.md", "IMPLEMENTATION_NOTES.md", "OBSIDIAN.md",
+    "OPTIMIZATION.md", "ROADMAP_0.1.6.md", "TESTING.md",
+)
 
 
 def log(message: str) -> None:
@@ -81,8 +91,28 @@ def make_icon() -> Path:
     return icon
 
 
+def stage_docs() -> Path:
+    """把交付文档复制到一个干净的暂存目录，供 PyInstaller --add-data 使用。
+
+    直接 add-data 整个 docs/ 会把 Obsidian 积累的用户数据（含中文文件名与大体积
+    快照包）带进安装包，既撑爆体积又让 WiX 的 1252 代码页报 LGHT0311。这里只挑
+    BUNDLED_DOCS 白名单里的交付文档，暂存目录由 build_dist 自己管理、可反复重建。
+    """
+    stage = BUILD / "doc-stage"
+    if stage.exists():
+        shutil.rmtree(stage)
+    stage.mkdir(parents=True, exist_ok=True)
+    for name in BUNDLED_DOCS:
+        src = ROOT / "docs" / name
+        if not src.is_file():
+            raise SystemExit(f"缺少随包交付文档：{src}")
+        shutil.copy2(src, stage / name)
+    return stage
+
+
 def build_exe() -> Path:
     icon = make_icon()
+    doc_stage = stage_docs()
     sep = os.pathsep  # Windows 上为 ";"
     cmd = [
         str(VENV_PY), "-m", "PyInstaller",
@@ -95,7 +125,7 @@ def build_exe() -> Path:
         "--add-data", f"{ROOT / 'web'}{sep}web",
         "--add-data", f"{ROOT / 'assets'}{sep}assets",
         "--add-data", f"{ROOT / 'app' / 'data'}{sep}app/data",
-        "--add-data", f"{ROOT / 'docs'}{sep}docs",
+        "--add-data", f"{doc_stage}{sep}docs",
         "--add-data", f"{ROOT / 'CHANGELOG.md'}{sep}.",
         "--add-data", f"{ROOT / 'README.md'}{sep}.",
         "--collect-all", "webview",
